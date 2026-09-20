@@ -89,6 +89,7 @@ describe("AssistantMessageComponent", () => {
 		const rendered = stripAnsi(component.render(80).join("\n"));
 
 		expect(rendered.match(/Thinking\.\.\./g)).toHaveLength(1);
+		expect(rendered).toContain("▸  Thinking...");
 		expect(rendered).toContain("answer");
 	});
 
@@ -105,10 +106,11 @@ describe("AssistantMessageComponent", () => {
 		const lines = component.render(width);
 		const firstThinkingRow = lines.findIndex((line) => stripAnsi(line).includes("first reasoning"));
 		expect(firstThinkingRow).toBeGreaterThanOrEqual(0);
+		expect(stripAnsi(lines[firstThinkingRow] ?? "")).toContain("▾  first reasoning");
 		const event: TuiMouseEvent = {
 			type: "click",
 			button: "left",
-			x: 1,
+			x: 0,
 			y: firstThinkingRow,
 			screenX: 1,
 			screenY: firstThinkingRow,
@@ -123,8 +125,12 @@ describe("AssistantMessageComponent", () => {
 
 		const collapsed = stripAnsi(component.render(width).join("\n"));
 		expect(collapsed).not.toContain("first reasoning");
-		expect(collapsed).toContain("Thinking...");
+		expect(collapsed).toContain("▸  Thinking...");
 		expect(collapsed).toContain("second reasoning");
+
+		expect(component.handleMouse({ ...event, x: 4 })?.handled).toBe(true);
+		const expandedAgain = stripAnsi(component.render(width).join("\n"));
+		expect(expandedAgain).toContain("▾  first reasoning");
 	});
 
 	test("uses configured output padding for text and thinking", () => {
@@ -143,12 +149,12 @@ describe("AssistantMessageComponent", () => {
 		const lines = component.render(80).map((line) => stripAnsi(line));
 
 		expect(lines.some((line) => line.includes(" hello"))).toBe(true);
-		expect(lines.some((line) => line.includes(" reasoning"))).toBe(true);
+		expect(lines.some((line) => line.startsWith("▾  reasoning"))).toBe(true);
 
 		component.setOutputPad(0);
 		const updatedLines = component.render(80).map((line) => stripAnsi(line));
 		expect(updatedLines.some((line) => line.startsWith("hello"))).toBe(true);
-		expect(updatedLines.some((line) => line.startsWith("reasoning"))).toBe(true);
+		expect(updatedLines.some((line) => line.startsWith("▾ reasoning"))).toBe(true);
 	});
 
 	test("chains Markdown transformers in registration order", () => {

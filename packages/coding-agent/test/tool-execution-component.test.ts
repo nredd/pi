@@ -99,6 +99,63 @@ describe("ToolExecutionComponent parity", () => {
 		expect(component.render(120)).toEqual([]);
 	});
 
+	test("toggles self-rendered tools from the gutter and content", () => {
+		const toolDefinition: ToolDefinition = {
+			...createBaseToolDefinition(),
+			renderShell: "self",
+			renderCall: () => new Text("self call", 0, 0),
+			renderResult: (_result, options) => new Text(options.expanded ? "expanded self" : "collapsed self", 0, 0),
+		};
+		const component = new ToolExecutionComponent(
+			"custom_tool",
+			"tool-self-render-disclosure",
+			{},
+			{},
+			toolDefinition,
+			createFakeTui(),
+			process.cwd(),
+		);
+		component.updateResult(
+			{
+				content: [{ type: "text", text: "done" }],
+				details: {},
+				isError: false,
+			},
+			false,
+		);
+
+		const width = 120;
+		const collapsed = component.render(width).map((line) => stripAnsi(line));
+		const callRow = collapsed.findIndex((line) => line.includes("self call"));
+		expect(callRow).toBeGreaterThan(0);
+		expect(collapsed[callRow]).toMatch(/^▸ /);
+		expect(collapsed.join("\n")).toContain("collapsed self");
+		const event: TuiMouseEvent = {
+			type: "click",
+			button: "left",
+			x: 0,
+			y: callRow,
+			screenX: 0,
+			screenY: callRow,
+			width,
+			height: collapsed.length,
+			shift: false,
+			alt: false,
+			ctrl: false,
+			clickCount: 1,
+		};
+
+		expect(component.handleMouse(event)?.handled).toBe(true);
+		const expanded = component.render(width).map((line) => stripAnsi(line));
+		expect(expanded[callRow]).toMatch(/^▾ /);
+		expect(expanded.join("\n")).toContain("expanded self");
+
+		expect(component.handleMouse({ ...event, x: 4, screenX: 4 })?.handled).toBe(true);
+		const collapsedAgain = component.render(width).map((line) => stripAnsi(line));
+		expect(collapsedAgain[callRow]).toMatch(/^▸ /);
+		expect(collapsedAgain.join("\n")).toContain("collapsed self");
+	});
+
 	test("uses built-in rendering for built-in overrides without custom renderers", () => {
 		const overrideDefinition: ToolDefinition = {
 			...createBaseToolDefinition("edit"),
@@ -186,8 +243,8 @@ describe("ToolExecutionComponent parity", () => {
 
 		const rendered = stripAnsi(component.render(200).join("\n"));
 		expect(rendered.match(/Full output:/g)?.length ?? 0).toBe(1);
-		expect(rendered).toMatch(/line-4000[^\n]*\n[^\S\n]*\n \[Full output:/);
-		expect(rendered).not.toMatch(/line-4000[^\n]*\n[^\S\n]*\n[^\S\n]*\n \[Full output:/);
+		expect(rendered).toMatch(/line-4000[^\n]*\n[^\S\n]*\n[^\S\n]*\[Full output:/);
+		expect(rendered).not.toMatch(/line-4000[^\n]*\n[^\S\n]*\n[^\S\n]*\n[^\S\n]*\[Full output:/);
 		expect(rendered).toContain("Truncated: showing 2000 of 4000 lines");
 		expect(rendered).not.toContain("[Showing lines 2001-4000 of 4000. Full output:");
 	});
@@ -430,6 +487,46 @@ describe("ToolExecutionComponent parity", () => {
 		expect(rendered).toContain(theme.fg("toolOutput", error));
 	});
 
+	test("reserves the disclosure gutter but omits its marker until the result is complete", () => {
+		const component = new ToolExecutionComponent(
+			"read",
+			"tool-streaming-disclosure",
+			{ path: "notes.txt" },
+			{},
+			createReadToolDefinition(process.cwd()),
+			createFakeTui(),
+			process.cwd(),
+		);
+
+		const pending = component.render(120).map((line) => stripAnsi(line));
+		const pendingRow = pending.find((line) => line.includes("notes.txt"));
+		expect(pendingRow).toBeDefined();
+		expect(pendingRow).toMatch(/^ {2}/);
+		expect(pendingRow).not.toMatch(/[▸▾]/);
+
+		component.updateResult(
+			{ content: [{ type: "text", text: "partial" }], details: undefined, isError: false },
+			true,
+		);
+		const streamingRow = component
+			.render(120)
+			.map((line) => stripAnsi(line))
+			.find((line) => line.includes("notes.txt"));
+		expect(streamingRow).toMatch(/^ {2}/);
+		expect(streamingRow).not.toMatch(/[▸▾]/);
+
+		component.updateResult(
+			{ content: [{ type: "text", text: "complete" }], details: undefined, isError: false },
+			false,
+		);
+		const completedRow = component
+			.render(120)
+			.map((line) => stripAnsi(line))
+			.find((line) => line.includes("notes.txt"));
+		expect(completedRow).toMatch(/^▸ /);
+		expect(completedRow?.indexOf("read")).toBe(pendingRow?.indexOf("read"));
+	});
+
 	test("expands a collapsed tool result when clicked", () => {
 		const component = new ToolExecutionComponent(
 			"read",
@@ -448,10 +545,11 @@ describe("ToolExecutionComponent parity", () => {
 		const lines = component.render(width);
 		const resultRow = lines.findIndex((line) => stripAnsi(line).includes("notes.txt"));
 		expect(resultRow).toBeGreaterThanOrEqual(0);
+		expect(stripAnsi(lines[resultRow] ?? "")).toMatch(/^▸ /);
 		const event: TuiMouseEvent = {
 			type: "click",
 			button: "left",
-			x: 2,
+			x: 0,
 			y: resultRow,
 			screenX: 2,
 			screenY: resultRow,
@@ -463,7 +561,14 @@ describe("ToolExecutionComponent parity", () => {
 			clickCount: 1,
 		};
 		expect(component.handleMouse(event)?.handled).toBe(true);
-		expect(stripAnsi(component.render(width).join("\n"))).toContain("hidden content");
+		const expanded = component.render(width).map((line) => stripAnsi(line));
+		expect(expanded[resultRow]).toMatch(/^▾ /);
+		expect(expanded.join("\n")).toContain("hidden content");
+
+		expect(component.handleMouse({ ...event, x: 4 })?.handled).toBe(true);
+		const collapsedAgain = component.render(width).map((line) => stripAnsi(line));
+		expect(collapsedAgain[resultRow]).toMatch(/^▸ /);
+		expect(collapsedAgain.join("\n")).not.toContain("hidden content");
 	});
 
 	test("collapses ordinary read results until expanded", () => {

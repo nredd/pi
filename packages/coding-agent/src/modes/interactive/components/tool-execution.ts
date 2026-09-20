@@ -3,6 +3,7 @@ import {
 	Box,
 	type Component,
 	Container,
+	dispatchMouseEvent,
 	getCapabilities,
 	Image,
 	MouseRegion,
@@ -35,6 +36,7 @@ export interface ToolRenderers {
 import { getTextOutput as getRenderedTextOutput } from "../../../core/tools/render-utils.ts";
 import { convertToPng } from "../../../utils/image-convert.ts";
 import { theme } from "../theme/theme.ts";
+import { DisclosureGutter } from "./disclosure-gutter.ts";
 import { keyHint } from "./keybinding-hints.ts";
 
 const FALLBACK_PREVIEW_LINES = 10;
@@ -49,6 +51,7 @@ export class ToolExecutionComponent extends Container {
 	private contentText: Text;
 	private contentTextRegion: MouseRegion;
 	private selfRenderContainer: Container;
+	private shellGutter: DisclosureGutter;
 	private selfRenderHeight = 0;
 	private callRendererComponent?: Component;
 	private resultRendererComponent?: Component;
@@ -107,11 +110,17 @@ export class ToolExecutionComponent extends Container {
 		this.contentTextRegion = this.createResultRegion(this.contentText);
 		this.selfRenderContainer = new Container();
 
-		if (this.hasRendererDefinition()) {
-			this.addChild(this.getRenderShell() === "self" ? this.selfRenderContainer : this.contentBox);
-		} else {
-			this.addChild(this.contentTextRegion);
-		}
+		const shell = this.hasRendererDefinition()
+			? this.getRenderShell() === "self"
+				? this.selfRenderContainer
+				: this.contentBox
+			: this.contentTextRegion;
+		this.shellGutter = new DisclosureGutter(
+			shell,
+			() => (this.result && !this.isPartial ? this.expanded : undefined),
+			() => this.setExpanded(!this.expanded),
+		);
+		this.addChild(this.shellGutter);
 
 		this.updateDisplay();
 	}
@@ -267,7 +276,7 @@ export class ToolExecutionComponent extends Container {
 		}
 
 		if (this.hasRendererDefinition() && this.getRenderShell() === "self") {
-			const contentLines = this.selfRenderContainer.render(width);
+			const contentLines = this.shellGutter.render(width);
 			this.selfRenderHeight = contentLines.length;
 			if (contentLines.length === 0 && this.imageComponents.length === 0) {
 				return [];
@@ -297,11 +306,12 @@ export class ToolExecutionComponent extends Container {
 	override handleMouse(event: TuiMouseEvent): ReturnType<Container["handleMouse"]> {
 		if (!this.hasRendererDefinition() || this.getRenderShell() !== "self") return super.handleMouse(event);
 		if (event.y <= 0 || event.y > this.selfRenderHeight) return undefined;
-		return this.selfRenderContainer.handleMouse({
+		const localEvent = {
 			...event,
 			y: event.y - 1,
 			height: this.selfRenderHeight,
-		});
+		};
+		return dispatchMouseEvent(this.shellGutter, localEvent);
 	}
 
 	private updateDisplay(): void {

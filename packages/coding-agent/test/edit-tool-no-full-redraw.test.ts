@@ -121,11 +121,12 @@ describe("edit tool TUI rendering", () => {
 
 		const callOnlyRender = await waitForRenderedText(
 			() => component.render(80).join("\n"),
-			"line 50 changed",
+			"+10 -10",
 			() => tui.requestRender(true),
 		);
 		expect(callOnlyRender).toContain("edit");
-		expect(callOnlyRender).toContain("line 950 changed");
+		// Collapsed rows show a change-count summary, not the raw diff body.
+		expect(callOnlyRender).not.toContain("line 950 changed");
 
 		const redrawsBeforeResult = tui.fullRedraws;
 		const clearsBeforeResult = terminal.fullClearCount;
@@ -144,8 +145,8 @@ describe("edit tool TUI rendering", () => {
 		expect(terminal.fullClearCount).toBe(clearsBeforeResult);
 
 		const settledRender = component.render(80).join("\n");
-		expect(settledRender).toContain("line 50 changed");
-		expect(settledRender).toContain("line 950 changed");
+		expect(settledRender).toContain("+10 -10");
+		expect(settledRender).not.toContain("line 950 changed");
 		expect(settledRender).not.toContain("Successfully replaced");
 	});
 
@@ -194,8 +195,9 @@ describe("edit tool TUI rendering", () => {
 		await waitForRender();
 
 		const rendered = component.render(80).join("\n");
-		expect(rendered).toContain("line 50 changed");
-		expect(rendered).toContain("line 150 changed");
+		expect(rendered).toContain("+2 -2");
+		expect(rendered).not.toContain("line 50 changed");
+		expect(rendered).not.toContain("line 150 changed");
 	});
 
 	it("shows a preflight error without rendering a diff when the edits do not apply", async () => {

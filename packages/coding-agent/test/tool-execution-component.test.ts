@@ -529,10 +529,27 @@ describe("ToolExecutionComponent parity", () => {
 			createFakeTui(),
 			process.cwd(),
 		);
+		component.setExpanded(true);
 		const rendered = stripAnsi(component.render(120).join("\n"));
 		expect(rendered).toContain("one");
 		expect(rendered).toContain("two");
 		expect(rendered).not.toContain("two\n\n");
+	});
+
+	test("collapsed write preview shows a line-count summary instead of file content", () => {
+		const component = new ToolExecutionComponent(
+			"write",
+			"tool-7b",
+			{ path: "README.md", content: "one\ntwo\n" },
+			{},
+			createWriteToolDefinition(process.cwd()),
+			createFakeTui(),
+			process.cwd(),
+		);
+		const rendered = stripAnsi(component.render(120).join("\n"));
+		expect(rendered).not.toContain("one");
+		expect(rendered).not.toContain("two");
+		expect(rendered).toContain("2 lines");
 	});
 
 	test("trims trailing blank display lines from read results", () => {

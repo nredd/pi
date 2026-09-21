@@ -1,4 +1,4 @@
-import { type Component, dispatchMouseEvent, stripTerminalSequences, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import { type Component, MouseRegion, stripTerminalSequences, type TuiMouseEvent } from "@earendil-works/pi-tui";
 
 const GUTTER_WIDTH = 2;
 
@@ -8,19 +8,19 @@ const GUTTER_WIDTH = 2;
  * tool rows aligned with their completed form.
  */
 export class DisclosureGutter implements Component {
-	private child: Component;
+	private childRegion: MouseRegion;
 	private getExpanded: () => boolean | undefined;
 	private onToggle?: () => void;
 
 	constructor(child: Component, getExpanded: () => boolean | undefined, onToggle?: () => void) {
-		this.child = child;
+		this.childRegion = new MouseRegion(child, () => undefined);
 		this.getExpanded = getExpanded;
 		this.onToggle = onToggle;
 	}
 
 	render(width: number): string[] {
-		if (width <= GUTTER_WIDTH) return this.child.render(width);
-		const lines = this.child.render(width - GUTTER_WIDTH);
+		if (width <= GUTTER_WIDTH) return this.childRegion.render(width);
+		const lines = this.childRegion.render(width - GUTTER_WIDTH);
 		const expanded = this.getExpanded();
 		const firstContentLine = lines.findIndex((line) => stripTerminalSequences(line).trim().length > 0);
 		const markerLine = Math.max(0, firstContentLine);
@@ -41,9 +41,8 @@ export class DisclosureGutter implements Component {
 			this.onToggle();
 			return { handled: true };
 		}
-		if (!this.child.handleMouse) return undefined;
-		if (event.width <= GUTTER_WIDTH) return dispatchMouseEvent(this.child, event);
-		return dispatchMouseEvent(this.child, {
+		if (event.width <= GUTTER_WIDTH) return this.childRegion.handleMouse(event);
+		return this.childRegion.handleMouse({
 			...event,
 			x: Math.max(0, event.x - GUTTER_WIDTH),
 			width: event.width - GUTTER_WIDTH,
@@ -51,6 +50,6 @@ export class DisclosureGutter implements Component {
 	}
 
 	invalidate(): void {
-		this.child.invalidate();
+		this.childRegion.invalidate();
 	}
 }

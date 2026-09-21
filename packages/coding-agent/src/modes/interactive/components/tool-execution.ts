@@ -3,7 +3,6 @@ import {
 	Box,
 	type Component,
 	Container,
-	dispatchMouseEvent,
 	getCapabilities,
 	Image,
 	MouseRegion,
@@ -52,6 +51,7 @@ export class ToolExecutionComponent extends Container {
 	private contentTextRegion: MouseRegion;
 	private selfRenderContainer: Container;
 	private shellGutter: DisclosureGutter;
+	private shellContainer: Container;
 	private selfRenderHeight = 0;
 	private callRendererComponent?: Component;
 	private resultRendererComponent?: Component;
@@ -120,7 +120,9 @@ export class ToolExecutionComponent extends Container {
 			() => (this.result && !this.isPartial ? this.expanded : undefined),
 			() => this.setExpanded(!this.expanded),
 		);
-		this.addChild(this.shellGutter);
+		this.shellContainer = new Container();
+		this.shellContainer.addChild(this.shellGutter);
+		this.addChild(this.shellContainer);
 
 		this.updateDisplay();
 	}
@@ -276,7 +278,7 @@ export class ToolExecutionComponent extends Container {
 		}
 
 		if (this.hasRendererDefinition() && this.getRenderShell() === "self") {
-			const contentLines = this.shellGutter.render(width);
+			const contentLines = this.shellContainer.render(width);
 			this.selfRenderHeight = contentLines.length;
 			if (contentLines.length === 0 && this.imageComponents.length === 0) {
 				return [];
@@ -311,7 +313,7 @@ export class ToolExecutionComponent extends Container {
 			y: event.y - 1,
 			height: this.selfRenderHeight,
 		};
-		return dispatchMouseEvent(this.shellGutter, localEvent);
+		return this.shellContainer.handleMouse(localEvent);
 	}
 
 	private updateDisplay(): void {

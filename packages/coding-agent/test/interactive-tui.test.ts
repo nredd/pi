@@ -1,9 +1,11 @@
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import type { Component, Terminal, TUI } from "@earendil-works/pi-tui";
 import { Container, getKeybindings, isViewportTUI, ScrollView, setKeybindings, Text } from "@earendil-works/pi-tui";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { VirtualTerminal } from "../../tui/test/virtual-terminal.ts";
 import { KeybindingsManager } from "../src/core/keybindings.ts";
 import type { FullscreenExitOutput, TuiMode } from "../src/core/settings-manager.ts";
+import { AssistantMessageComponent } from "../src/modes/interactive/components/assistant-message.ts";
 import {
 	createInteractiveTui,
 	createInteractiveTuiReference,
@@ -68,6 +70,49 @@ describe("createInteractiveTui", () => {
 		await altTerminal.waitForRender();
 		expect(altTerminal.writes.some((write) => write.includes("\x1b[?1049h"))).toBe(true);
 		altTui.stop();
+	});
+
+	it("expands a collapsed Thought disclosure after a generic SGR release", async () => {
+		initTheme("dark");
+		const terminal = new RecordingTerminal(80, 8);
+		const message: AssistantMessage = {
+			role: "assistant",
+			content: [{ type: "thinking", thinking: "private reasoning" }],
+			api: "openai-responses",
+			provider: "openai",
+			model: "gpt-4o-mini",
+			usage: {
+				input: 0,
+				output: 0,
+				cacheRead: 0,
+				cacheWrite: 0,
+				totalTokens: 0,
+				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+			},
+			stopReason: "stop",
+			timestamp: Date.now(),
+		};
+		const ui = createInteractiveTui({
+			tuiMode: "fullscreen",
+			showHardwareCursor: false,
+			logDirectory: "/tmp",
+			terminal,
+		});
+		ui.setLayoutRoot(new AssistantMessageComponent(message, true));
+		ui.start();
+		try {
+			await terminal.waitForRender();
+			const thoughtRow = terminal.getViewport().findIndex((line) => line.includes("Thinking..."));
+			expect(thoughtRow).toBeGreaterThanOrEqual(0);
+
+			// SSH and tmux may coalesce press and generic-release SGR reports into one input chunk.
+			terminal.sendInput(`\x1b[<0;1;${thoughtRow + 1}M\x1b[<3;1;${thoughtRow + 1}m`);
+			await terminal.waitForRender();
+
+			expect(terminal.getViewport().join("\n")).toContain("private reasoning");
+		} finally {
+			ui.stop();
+		}
 	});
 
 	it("shows the configured jump-to-bottom shortcut while scrolled up", async () => {

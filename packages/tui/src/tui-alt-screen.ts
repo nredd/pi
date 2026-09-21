@@ -680,6 +680,12 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		}
 		if (data === FOCUS_IN) return { consume: true };
 
+		const mouseEvents = this.parseSgrMouseEvents(data);
+		if (mouseEvents?.every((event) => (event.button & 64) === 0)) {
+			for (const mouseEvent of mouseEvents) this.handleMouseEvent(mouseEvent);
+			return { consume: true };
+		}
+
 		const wheelEvent = this.parseWheelEvent(data);
 		if (wheelEvent) {
 			const event = this.createMouseEvent("wheel", wheelEvent.button, wheelEvent.x, wheelEvent.y, {
@@ -988,15 +994,26 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		this.requestRender();
 	}
 
+	private parseSgrMouseEvents(data: string): SgrMouseEvent[] | undefined {
+		const matcher = /\x1b\[<(\d+);(\d+);(\d+)([Mm])/g;
+		const events: SgrMouseEvent[] = [];
+		let end = 0;
+		for (const match of data.matchAll(matcher)) {
+			if (match.index !== end) return undefined;
+			events.push({
+				button: Number.parseInt(match[1], 10),
+				x: Number.parseInt(match[2], 10) - 1,
+				y: Number.parseInt(match[3], 10) - 1,
+				release: match[4] === "m",
+			});
+			end += match[0].length;
+		}
+		return events.length > 0 && end === data.length ? events : undefined;
+	}
+
 	private parseSgrMouseEvent(data: string): SgrMouseEvent | undefined {
-		const match = /^\x1b\[<(\d+);(\d+);(\d+)([Mm])$/.exec(data);
-		if (!match) return undefined;
-		return {
-			button: Number.parseInt(match[1], 10),
-			x: Number.parseInt(match[2], 10) - 1,
-			y: Number.parseInt(match[3], 10) - 1,
-			release: match[4] === "m",
-		};
+		const events = this.parseSgrMouseEvents(data);
+		return events?.length === 1 ? events[0] : undefined;
 	}
 
 	private handleRightClickPaste(event: SgrMouseEvent): boolean {

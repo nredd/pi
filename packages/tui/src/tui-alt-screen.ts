@@ -226,6 +226,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 	private mouseCapture?: TuiMouseDispatchTarget;
 	private mousePressTarget?: TuiMouseDispatchTarget;
 	private mousePressPoint?: { x: number; y: number };
+	private mousePressButton?: number;
 	private mousePressMoved = false;
 	private lastComponentClick?: {
 		timestamp: number;
@@ -650,6 +651,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		this.mouseCapture = undefined;
 		this.mousePressTarget = undefined;
 		this.mousePressPoint = undefined;
+		this.mousePressButton = undefined;
 		this.mousePressMoved = false;
 	}
 
@@ -883,6 +885,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 					: "drag"
 				: "press";
 		const event = this.createMouseEvent(type, raw.button, raw.x, raw.y);
+		if (type === "press") this.mousePressButton = raw.button;
 
 		if (this.mouseCapture || this.mousePressTarget) {
 			const target = this.mouseCapture ?? this.mousePressTarget!;
@@ -895,7 +898,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 			if (targetResult) render = this.applyMouseDispatchResult(event, targetResult);
 			if (raw.release) {
 				if (!this.mousePressMoved && this.mousePressPoint?.x === raw.x && this.mousePressPoint.y === raw.y) {
-					const clickEvent = this.createMouseEvent("click", raw.button, raw.x, raw.y, {
+					const clickEvent = this.createMouseEvent("click", this.mousePressButton ?? raw.button, raw.x, raw.y, {
 						clickCount: this.getComponentClickCount(target, raw.x, raw.y),
 					});
 					const clickResult = this.dispatchMouseToTarget(clickEvent, target);
@@ -933,7 +936,8 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		}
 
 		if (this.handleRightClickPaste(raw)) return;
-		this.handleSelectionMouseEvent(raw);
+		this.handleSelectionMouseEvent(raw, this.mousePressButton ?? raw.button);
+		if (raw.release) this.mousePressButton = undefined;
 	}
 
 	private parseWheelEvent(data: string): WheelEvent | undefined {
@@ -1298,7 +1302,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		this.selectionDragPointer = undefined;
 	}
 
-	private handleSelectionMouseEvent(event: SgrMouseEvent): void {
+	private handleSelectionMouseEvent(event: SgrMouseEvent, pressButton: number): void {
 		const button = event.button & 3;
 		if (button !== 0 && !(event.release && button === 3)) return;
 		const anchorScrollView = this.selectionAnchor?.scrollView;
@@ -1328,7 +1332,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 				return;
 			}
 			if (isClick) {
-				const clickEvent = this.createMouseEvent("click", event.button, event.x, event.y, {
+				const clickEvent = this.createMouseEvent("click", pressButton, event.x, event.y, {
 					clickCount: this.lastClick?.count ?? 1,
 				});
 				const overlay = this.dispatchMouseToOverlay(clickEvent);

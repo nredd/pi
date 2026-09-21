@@ -142,6 +142,46 @@ describe("InteractiveMode.showManagedToolStatus", () => {
 	});
 });
 
+describe("InteractiveMode Ctrl+C exit confirmation", () => {
+	test("clears once, announces the exit window, and exits on the second press", () => {
+		const clearEditor = vi.fn();
+		const showStatus = vi.fn();
+		const shutdown = vi.fn();
+		const context = { clearEditor, showStatus, shutdown, lastSigintTime: 0 };
+		const handleCtrlC = (InteractiveMode.prototype as unknown as { handleCtrlC(this: typeof context): void })
+			.handleCtrlC;
+		const now = vi.spyOn(Date, "now");
+		now.mockReturnValueOnce(1_000).mockReturnValueOnce(1_999);
+
+		handleCtrlC.call(context);
+		expect(clearEditor).toHaveBeenCalledOnce();
+		expect(showStatus).toHaveBeenCalledWith("Ctrl+C again within 1 second to exit");
+		expect(context.lastSigintTime).toBe(1_000);
+
+		handleCtrlC.call(context);
+		expect(shutdown).toHaveBeenCalledOnce();
+		expect(clearEditor).toHaveBeenCalledOnce();
+		now.mockRestore();
+	});
+
+	test("starts a new exit window after the previous window expires", () => {
+		const clearEditor = vi.fn();
+		const showStatus = vi.fn();
+		const shutdown = vi.fn();
+		const context = { clearEditor, showStatus, shutdown, lastSigintTime: 1_000 };
+		const handleCtrlC = (InteractiveMode.prototype as unknown as { handleCtrlC(this: typeof context): void })
+			.handleCtrlC;
+		const now = vi.spyOn(Date, "now").mockReturnValue(2_000);
+
+		handleCtrlC.call(context);
+		expect(clearEditor).toHaveBeenCalledOnce();
+		expect(showStatus).toHaveBeenCalledWith("Ctrl+C again within 1 second to exit");
+		expect(context.lastSigintTime).toBe(2_000);
+		expect(shutdown).not.toHaveBeenCalled();
+		now.mockRestore();
+	});
+});
+
 describe("InteractiveMode.setToolsExpanded", () => {
 	test("applies expansion state to the active header and chat entries", () => {
 		const header = { setExpanded: vi.fn() };

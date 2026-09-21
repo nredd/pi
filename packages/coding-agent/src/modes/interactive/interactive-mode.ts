@@ -372,6 +372,8 @@ export interface InteractiveModeOptions {
 	initialThemeSetting?: string;
 }
 
+const CTRL_C_EXIT_WINDOW_MS = 1_000;
+
 export class InteractiveMode {
 	private runtimeHost: AgentSessionRuntime;
 	private renderer: TuiMainScreen | TuiAltScreen;
@@ -3930,12 +3932,14 @@ export class InteractiveMode {
 
 	private handleCtrlC(): void {
 		const now = Date.now();
-		if (now - this.lastSigintTime < 500) {
+		if (now - this.lastSigintTime < CTRL_C_EXIT_WINDOW_MS) {
 			void this.shutdown();
-		} else {
-			this.clearEditor();
-			this.lastSigintTime = now;
+			return;
 		}
+
+		this.clearEditor();
+		this.lastSigintTime = now;
+		this.showStatus("Ctrl+C again within 1 second to exit");
 	}
 
 	private handleCtrlD(): void {

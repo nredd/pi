@@ -62,6 +62,27 @@ class RecordingTerminal extends VirtualTerminal {
 }
 
 describe("TuiAltScreen", () => {
+	it("preserves the pressed button for synthetic clicks after a generic release", async () => {
+		const terminal = new VirtualTerminal(20, 4);
+		let clicks = 0;
+		const tui = new TuiAltScreen(terminal);
+		tui.setLayoutRoot(
+			new MouseRegion(new Text("disclosure", 0, 0), (event) => {
+				if (event.type === "click" && event.button === "left") clicks += 1;
+				return undefined;
+			}),
+		);
+		tui.start();
+		await terminal.waitForRender();
+
+		terminal.sendInput("\x1b[<0;1;1M");
+		terminal.sendInput("\x1b[<3;1;1m");
+		await terminal.waitForRender();
+
+		assert.strictEqual(clicks, 1);
+		tui.stop();
+	});
+
 	it("renders a terminal-height viewport and preserves manual scroll position", async () => {
 		const terminal = new VirtualTerminal(20, 4);
 		const tui = new TuiAltScreen(terminal);

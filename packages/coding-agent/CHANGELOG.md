@@ -5,6 +5,7 @@
 ### Added
 
 - Added fullscreen header-only mouse disclosures for compact tool and thinking transcript blocks. Output remains selectable and external links retain their normal behavior.
+- Added a collapsed one-line summary (`+N -M`, `N lines`, `N results`, `N entries`) for built-in `edit`, `write`, `bash`, `grep`, `find`, and `ls` tool previews; full content and diffs now render only once the row is expanded.
 - Added inherited GPT-6 Sol and GPT-6 Luna support for OpenAI API keys and OpenAI Codex subscriptions.
 - Added inherited Claude Opus 5.5 support for Anthropic with adaptive thinking and a 1M context window.
 

@@ -1740,13 +1740,15 @@ describe("TuiAltScreen", () => {
 		const terminal = new RecordingTerminal(20, 2);
 		const tui = new TuiAltScreen(terminal);
 		let clicks = 0;
-		tui.addChild(
+		const transcript = new ScrollView(
 			new MouseRegion(new Text("clickable\nselectable", 0, 0), (event) => {
 				if (event.type !== "click") return undefined;
 				clicks += 1;
 				return { handled: true };
 			}),
+			{ primary: true },
 		);
+		tui.setLayoutRoot(transcript);
 		tui.start();
 		await terminal.waitForRender();
 

@@ -82,7 +82,7 @@ describe("ToolExecutionComponent parity", () => {
 		expect(rendered).not.toContain("converted-partial");
 	});
 
-	test("stacks custom call and result renderers like the old implementation", () => {
+	test("hides custom result renderers until the compact header is expanded", () => {
 		const toolDefinition: ToolDefinition = {
 			...createBaseToolDefinition(),
 			renderCall: () => new Text("custom call", 0, 0),
@@ -109,9 +109,27 @@ describe("ToolExecutionComponent parity", () => {
 			false,
 		);
 
-		const rendered = stripAnsi(component.render(120).join("\n"));
-		expect(rendered).toContain("custom call");
-		expect(rendered).toContain("custom result");
+		const collapsed = stripAnsi(component.render(120).join("\n"));
+		expect(collapsed).toContain("custom call");
+		expect(collapsed).not.toContain("custom result");
+
+		const headerRow = component.render(120).findIndex((line) => stripAnsi(line).includes("custom call"));
+		expect(
+			component.handleMouse({
+				type: "click",
+				button: "left",
+				x: 0,
+				y: headerRow,
+				screenX: 0,
+				screenY: headerRow,
+				width: 120,
+				height: component.render(120).length,
+				shift: false,
+				alt: false,
+				ctrl: false,
+			})?.handled,
+		).toBe(true);
+		expect(stripAnsi(component.render(120).join("\n"))).toContain("custom result");
 	});
 
 	test("self-rendered empty tool rows take no layout space", () => {
@@ -175,7 +193,7 @@ describe("ToolExecutionComponent parity", () => {
 		const callRow = collapsed.findIndex((line) => line.includes("self call"));
 		expect(callRow).toBeGreaterThan(0);
 		expect(collapsed[callRow]).toMatch(/^▸ /);
-		expect(collapsed.join("\n")).toContain("collapsed self");
+		expect(collapsed.join("\n")).not.toContain("collapsed self");
 		const event: TuiMouseEvent = {
 			type: "click",
 			button: "left",
@@ -209,7 +227,7 @@ describe("ToolExecutionComponent parity", () => {
 		expect(component.handleMouse({ ...event, x: 4, screenX: 4 })?.handled).toBe(true);
 		const collapsedAgain = component.render(width).map((line) => stripAnsi(line));
 		expect(collapsedAgain[callRow]).toMatch(/^▸ /);
-		expect(collapsedAgain.join("\n")).toContain("collapsed self");
+		expect(collapsedAgain.join("\n")).not.toContain("collapsed self");
 	});
 
 	test("uses built-in rendering for built-in overrides without custom renderers", () => {
@@ -337,6 +355,7 @@ describe("ToolExecutionComponent parity", () => {
 		const running = stripAnsi(component.render(120).join("\n"));
 
 		component.updateResult({ content: [], isError: false }, false);
+		component.setExpanded(true);
 		const completed = stripAnsi(component.render(120).join("\n"));
 
 		vi.advanceTimersByTime(1_000);
@@ -399,6 +418,7 @@ describe("ToolExecutionComponent parity", () => {
 			process.cwd(),
 		);
 		component.updateResult({ content: [{ type: "text", text: "hello" }], details: undefined, isError: false }, false);
+		component.setExpanded(true);
 		const rendered = stripAnsi(component.render(120).join("\n"));
 		expect(rendered).toContain("read");
 		expect(rendered).toContain("README.md");
@@ -421,6 +441,7 @@ describe("ToolExecutionComponent parity", () => {
 			process.cwd(),
 		);
 		component.updateResult({ content: [{ type: "text", text: "hello" }], details: undefined, isError: false }, false);
+		component.setExpanded(true);
 		const rendered = stripAnsi(component.render(120).join("\n"));
 		expect(rendered).toContain("override call");
 		expect(rendered).toContain("override result");
@@ -444,6 +465,7 @@ describe("ToolExecutionComponent parity", () => {
 			process.cwd(),
 		);
 		component.updateResult({ content: [{ type: "text", text: "hello" }], details: undefined, isError: false }, false);
+		component.setExpanded(true);
 		const rendered = stripAnsi(component.render(120).join("\n"));
 		expect(rendered).toContain("wrapped override call");
 		expect(rendered).toContain("wrapped override result");
@@ -472,6 +494,7 @@ describe("ToolExecutionComponent parity", () => {
 			process.cwd(),
 		);
 		component.updateResult({ content: [{ type: "text", text: "done" }], details: {}, isError: false }, false);
+		component.setExpanded(true);
 		const rendered = stripAnsi(component.render(120).join("\n"));
 		expect(rendered).toContain("custom call shared-token");
 		expect(rendered).toContain("custom result shared-token");
@@ -495,6 +518,7 @@ describe("ToolExecutionComponent parity", () => {
 			process.cwd(),
 		);
 		component.updateResult({ content: [{ type: "text", text: "done" }], details: {}, isError: false }, false);
+		component.setExpanded(true);
 		const rendered = stripAnsi(component.render(120).join("\n"));
 		expect(rendered).toContain("arg:bar");
 	});
@@ -518,10 +542,7 @@ describe("ToolExecutionComponent parity", () => {
 
 		const collapsed = stripAnsi(component.render(120).join("\n"));
 		expect(collapsed).toContain("custom_tool");
-		expect(collapsed).toContain("line-10");
-		expect(collapsed).not.toContain("line-11");
-		expect(collapsed).toContain("5 more lines");
-		expect(collapsed).toContain("to expand");
+		expect(collapsed).not.toContain("line-1");
 
 		component.setExpanded(true);
 		const expanded = stripAnsi(component.render(120).join("\n"));
@@ -595,6 +616,7 @@ describe("ToolExecutionComponent parity", () => {
 		);
 		const error = "Offset 120 is beyond end of file (96 lines total)";
 		component.updateResult({ content: [{ type: "text", text: error }], details: undefined, isError: true }, false);
+		component.setExpanded(true);
 
 		const rendered = component.render(120).join("\n");
 		expect(stripAnsi(rendered)).toContain(error);

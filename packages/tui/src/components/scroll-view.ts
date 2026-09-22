@@ -1,5 +1,11 @@
 import { LAYOUT_NODE, type ScrollLayoutNode } from "../layout-node.ts";
-import { type Component, Container } from "../tui.ts";
+import {
+	type Component,
+	Container,
+	dispatchMouseEvent,
+	type TuiMouseDispatchResult,
+	type TuiMouseEvent,
+} from "../tui.ts";
 
 export type ScrollViewScrollbar = "hidden" | "auto" | "always";
 
@@ -92,6 +98,15 @@ export class ScrollView extends Container {
 
 	getContentWidth(width: number): number {
 		return this.scrollbar === "always" && width > 1 ? width - 1 : width;
+	}
+
+	override handleMouse(event: TuiMouseEvent): TuiMouseDispatchResult | undefined {
+		if (event.y < 0 || event.y >= this.currentViewportHeight) return undefined;
+		return dispatchMouseEvent(this.child, {
+			...event,
+			y: event.y + this.currentScrollTop,
+			height: this.contentHeight,
+		});
 	}
 
 	private markScrollbarActivity(): void {

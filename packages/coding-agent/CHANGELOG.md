@@ -2,8 +2,6 @@
 
 ## [Unreleased]
 
-## [0.87.2] - 2026-09-22
-
 ### Fixed
 
 - Fixed settled tool rows disappearing from the transcript when an extension renders its compact summary from `renderResult`; renderers now always run and decide their own collapsed form.

@@ -36,7 +36,7 @@ describe("getSupportedThinkingLevels", () => {
 				supportsMidConvoToolChanges: true,
 			},
 		});
-		expect(getSupportedThinkingLevels(model)).toEqual(["low", "medium", "high", "xhigh", "max"]);
+		expect(getSupportedThinkingLevels(model)).toEqual(["minimal", "low", "medium", "high", "xhigh", "max"]);
 	});
 
 	it("includes max but not xhigh for Anthropic Sonnet 4.6 on anthropic-messages API", () => {

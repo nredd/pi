@@ -131,6 +131,11 @@ describe("AssistantMessageComponent", () => {
 		expect(component.handleMouse({ ...event, x: 4 })?.handled).toBe(true);
 		const expandedAgain = stripAnsi(component.render(width).join("\n"));
 		expect(expandedAgain).toContain("▾  first reasoning");
+
+		const answerRow = component.render(width).findIndex((line) => stripAnsi(line).includes("answer"));
+		expect(answerRow).toBeGreaterThan(firstThinkingRow);
+		expect(component.handleMouse({ ...event, y: answerRow, screenY: answerRow })).toBeUndefined();
+		expect(stripAnsi(component.render(width).join("\n"))).toContain("first reasoning");
 	});
 
 	test("uses configured output padding for text and thinking", () => {

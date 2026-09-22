@@ -145,7 +145,7 @@ describe("ToolExecutionComponent parity", () => {
 		expect(component.render(120)).toEqual([]);
 	});
 
-	test("toggles self-rendered tools from the gutter and content", () => {
+	test("toggles self-rendered tools from their compact header only", () => {
 		const toolDefinition: ToolDefinition = {
 			...createBaseToolDefinition(),
 			renderShell: "self",
@@ -195,6 +195,16 @@ describe("ToolExecutionComponent parity", () => {
 		const expanded = component.render(width).map((line) => stripAnsi(line));
 		expect(expanded[callRow]).toMatch(/^▾ /);
 		expect(expanded.join("\n")).toContain("expanded self");
+
+		const resultRow = expanded.findIndex((line) => line.includes("expanded self"));
+		expect(resultRow).toBeGreaterThan(callRow);
+		expect(component.handleMouse({ ...event, x: 4, screenX: 4, y: resultRow, screenY: resultRow })).toBeUndefined();
+		expect(
+			component
+				.render(width)
+				.map((line) => stripAnsi(line))
+				.join("\n"),
+		).toContain("expanded self");
 
 		expect(component.handleMouse({ ...event, x: 4, screenX: 4 })?.handled).toBe(true);
 		const collapsedAgain = component.render(width).map((line) => stripAnsi(line));

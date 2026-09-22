@@ -31,21 +31,31 @@ export class DisclosureGutter implements Component {
 	}
 
 	handleMouse(event: TuiMouseEvent): ReturnType<NonNullable<Component["handleMouse"]>> {
-		if (
-			event.type === "click" &&
+		const childWidth = event.width - GUTTER_WIDTH;
+		const lines = childWidth > 0 ? this.childRegion.render(childWidth) : [];
+		const headerRow = Math.max(
+			0,
+			lines.findIndex((line) => stripTerminalSequences(line).trim().length > 0),
+		);
+		const toggle = this.onToggle;
+		const isPrimaryHeader =
 			event.button === "left" &&
-			event.x < GUTTER_WIDTH &&
+			event.y === headerRow &&
+			!event.shift &&
+			!event.alt &&
+			!event.ctrl &&
 			this.getExpanded() !== undefined &&
-			this.onToggle
-		) {
-			this.onToggle();
+			toggle !== undefined;
+		if (event.type === "press" && isPrimaryHeader) return { handled: true };
+		if (event.type === "click" && isPrimaryHeader) {
+			toggle();
 			return { handled: true };
 		}
 		if (event.width <= GUTTER_WIDTH) return this.childRegion.handleMouse(event);
 		return this.childRegion.handleMouse({
 			...event,
 			x: Math.max(0, event.x - GUTTER_WIDTH),
-			width: event.width - GUTTER_WIDTH,
+			width: childWidth,
 		});
 	}
 

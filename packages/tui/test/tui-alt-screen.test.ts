@@ -1751,7 +1751,8 @@ describe("TuiAltScreen", () => {
 		await terminal.waitForRender();
 
 		terminal.sendInput("\x1b[<0;2;1M");
-		terminal.sendInput("\x1b[<0;2;1m");
+		// SGR encodes every release as button 3. The resulting click must retain the left press button.
+		terminal.sendInput("\x1b[<3;2;1m");
 		await terminal.waitForRender();
 		assert.strictEqual(clicks, 1);
 

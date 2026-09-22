@@ -1,5 +1,5 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { Container, Markdown, type MarkdownTheme, MouseRegion, Spacer, Text } from "@earendil-works/pi-tui";
+import { Container, Markdown, type MarkdownTheme, Spacer, Text } from "@earendil-works/pi-tui";
 import type { MarkdownTransformer } from "../../../core/extensions/types.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
 import { DisclosureGutter } from "./disclosure-gutter.ts";
@@ -162,12 +162,14 @@ export class AssistantMessageComponent extends Container {
 							},
 						);
 				this.contentContainer.addChild(
-					new MouseRegion(new DisclosureGutter(thinkingComponent, () => !hidden), (event) => {
-						if (event.type !== "click" || event.button !== "left") return undefined;
-						this.thinkingVisibilityOverrides.set(runIndex, !hidden);
-						if (this.lastMessage) this.updateContent(this.lastMessage);
-						return { handled: true };
-					}),
+					new DisclosureGutter(
+						thinkingComponent,
+						() => !hidden,
+						() => {
+							this.thinkingVisibilityOverrides.set(runIndex, !hidden);
+							if (this.lastMessage) this.updateContent(this.lastMessage);
+						},
+					),
 				);
 				if (hasVisibleContentAfter) {
 					this.contentContainer.addChild(new Spacer(1));

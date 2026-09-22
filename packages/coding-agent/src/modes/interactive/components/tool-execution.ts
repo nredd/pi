@@ -377,7 +377,9 @@ export class ToolExecutionComponent extends Container {
 				}
 			}
 
-			if (this.result && (this.expanded || this.isPartial)) {
+			// Renderers own their collapsed form via the `expanded` flag they are handed;
+			// skipping them entirely hides tools whose summary row lives in `renderResult`.
+			if (this.result) {
 				const resultRenderer = this.getResultRenderer();
 				if (!resultRenderer) {
 					const component = this.createResultFallback();

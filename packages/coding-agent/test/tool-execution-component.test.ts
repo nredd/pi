@@ -82,11 +82,11 @@ describe("ToolExecutionComponent parity", () => {
 		expect(rendered).not.toContain("converted-partial");
 	});
 
-	test("hides custom result renderers until the compact header is expanded", () => {
+	test("lets custom result renderers pick their collapsed form", () => {
 		const toolDefinition: ToolDefinition = {
 			...createBaseToolDefinition(),
 			renderCall: () => new Text("custom call", 0, 0),
-			renderResult: () => new Text("custom result", 0, 0),
+			renderResult: (_result, options) => new Text(options.expanded ? "custom result" : "custom summary", 0, 0),
 		};
 
 		const component = new ToolExecutionComponent(
@@ -111,6 +111,7 @@ describe("ToolExecutionComponent parity", () => {
 
 		const collapsed = stripAnsi(component.render(120).join("\n"));
 		expect(collapsed).toContain("custom call");
+		expect(collapsed).toContain("custom summary");
 		expect(collapsed).not.toContain("custom result");
 
 		const headerRow = component.render(120).findIndex((line) => stripAnsi(line).includes("custom call"));
@@ -130,6 +131,53 @@ describe("ToolExecutionComponent parity", () => {
 			})?.handled,
 		).toBe(true);
 		expect(stripAnsi(component.render(120).join("\n"))).toContain("custom result");
+	});
+
+	test("keeps summary rows visible for renderers that emit no call row", () => {
+		// Mirrors @vanillagreen/pi-tool-renderer: the call row is empty once the tool
+		// settles and the whole compact row comes out of renderResult.
+		const toolDefinition: ToolDefinition = {
+			...createBaseToolDefinition(),
+			renderShell: "self",
+			renderCall: (_args, _theme, context) => new Text(context.isPartial ? "$ ls (running)" : "", 0, 0),
+			renderResult: (_result, options) =>
+				new Text(options.expanded ? "$ ls · exit 0\nfile.txt" : "$ ls · exit 0", 0, 0),
+		};
+
+		const component = new ToolExecutionComponent(
+			"bash",
+			"tool-summary-only",
+			{ command: "ls" },
+			{},
+			toolDefinition,
+			createFakeTui(),
+			process.cwd(),
+		);
+		component.updateResult({ content: [{ type: "text", text: "file.txt" }], details: {}, isError: false }, false);
+
+		const collapsed = component.render(120).map((line) => stripAnsi(line));
+		const summaryRow = collapsed.findIndex((line) => line.includes("$ ls · exit 0"));
+		expect(summaryRow).toBeGreaterThanOrEqual(0);
+		expect(collapsed[summaryRow]).toMatch(/^\u25b8 /);
+		expect(collapsed.join("\n")).not.toContain("file.txt");
+
+		expect(
+			component.handleMouse({
+				type: "click",
+				button: "left",
+				x: 0,
+				y: summaryRow,
+				screenX: 0,
+				screenY: summaryRow,
+				width: 120,
+				height: collapsed.length,
+				shift: false,
+				alt: false,
+				ctrl: false,
+				clickCount: 1,
+			})?.handled,
+		).toBe(true);
+		expect(stripAnsi(component.render(120).join("\n"))).toContain("file.txt");
 	});
 
 	test("self-rendered empty tool rows take no layout space", () => {
@@ -193,7 +241,7 @@ describe("ToolExecutionComponent parity", () => {
 		const callRow = collapsed.findIndex((line) => line.includes("self call"));
 		expect(callRow).toBeGreaterThan(0);
 		expect(collapsed[callRow]).toMatch(/^▸ /);
-		expect(collapsed.join("\n")).not.toContain("collapsed self");
+		expect(collapsed.join("\n")).toContain("collapsed self");
 		const event: TuiMouseEvent = {
 			type: "click",
 			button: "left",
@@ -227,7 +275,8 @@ describe("ToolExecutionComponent parity", () => {
 		expect(component.handleMouse({ ...event, x: 4, screenX: 4 })?.handled).toBe(true);
 		const collapsedAgain = component.render(width).map((line) => stripAnsi(line));
 		expect(collapsedAgain[callRow]).toMatch(/^▸ /);
-		expect(collapsedAgain.join("\n")).not.toContain("collapsed self");
+		expect(collapsedAgain.join("\n")).toContain("collapsed self");
+		expect(collapsedAgain.join("\n")).not.toContain("expanded self");
 	});
 
 	test("uses built-in rendering for built-in overrides without custom renderers", () => {
@@ -542,7 +591,9 @@ describe("ToolExecutionComponent parity", () => {
 
 		const collapsed = stripAnsi(component.render(120).join("\n"));
 		expect(collapsed).toContain("custom_tool");
-		expect(collapsed).not.toContain("line-1");
+		expect(collapsed).toContain("line-1");
+		expect(collapsed).not.toContain("line-15");
+		expect(collapsed).toContain("more lines");
 
 		component.setExpanded(true);
 		const expanded = stripAnsi(component.render(120).join("\n"));

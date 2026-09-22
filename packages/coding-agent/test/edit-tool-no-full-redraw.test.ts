@@ -150,7 +150,7 @@ describe("edit tool TUI rendering", () => {
 		expect(settledRender).not.toContain("Successfully replaced");
 	});
 
-	it("hides a settled result until expanded without argsComplete", async () => {
+	it("summarizes a settled result until expanded without argsComplete", async () => {
 		const dir = await mkdtemp(join(tmpdir(), "pi-edit-replay-"));
 		tempDirs.push(dir);
 		const filePath = join(dir, "replay-edit.txt");
@@ -195,7 +195,7 @@ describe("edit tool TUI rendering", () => {
 		await waitForRender();
 
 		const rendered = component.render(80).join("\n");
-		expect(rendered).not.toContain("+2 -2");
+		expect(rendered).toContain("+2 -2");
 		expect(rendered).not.toContain("line 50 changed");
 		expect(rendered).not.toContain("line 150 changed");
 	});

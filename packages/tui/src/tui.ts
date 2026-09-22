@@ -13,7 +13,14 @@ import {
 	type TerminalColorScheme,
 } from "./terminal-colors.ts";
 import { getCapabilities, isImageLine, setCellDimensions } from "./terminal-image.ts";
-import { extractSegments, normalizeTerminalOutput, sliceByColumn, sliceWithWidth, visibleWidth } from "./utils.ts";
+import {
+	extractSegments,
+	normalizeTerminalOutput,
+	sliceByColumn,
+	sliceWithWidth,
+	stripTerminalSequences,
+	visibleWidth,
+} from "./utils.ts";
 
 /**
  * Component interface - all components must implement this
@@ -316,9 +323,58 @@ type OverlayFocusRestorePolicy = "clear" | "preserve";
 /**
  * Container - a component that contains other components
  */
+/** One child's geometry as the parent saw it, used for mouse dispatch. */
+interface ContainerMouseChild {
+	component: Component;
+	/** Height of the lines the child contributed to the parent's output. */
+	height: number;
+	/** Lines the child returned from its public `render`, after any subclass transform. */
+	lines: string[];
+	/** Resolved row shift from the child's public lines to its own internal geometry. */
+	offset?: number | undefined;
+	offsetResolved?: boolean;
+}
+
+/** Line geometry retained by {@link Container.render} for mouse dispatch. */
+interface ContainerMouseLayout {
+	width: number;
+	children: ContainerMouseChild[];
+	/** Lines produced by `Container.render` itself, before any subclass transform. */
+	lines: string[];
+}
+
+/** Number of leading lines that hold no visible glyphs. */
+function countLeadingBlankLines(lines: readonly string[]): number {
+	let count = 0;
+	while (count < lines.length && stripTerminalSequences(lines[count] ?? "").trim().length === 0) count++;
+	return count;
+}
+
+/**
+ * Rows a click must move to travel from a transformed render back to the geometry
+ * `Container.render` recorded, or `undefined` when the two cannot be aligned.
+ *
+ * Subclasses and extensions routinely trim blank lines off their own render output.
+ * Leading trims shift every row below them, so mouse dispatch has to undo the shift
+ * instead of trusting the untransformed layout.
+ */
+export function resolveContainerRowOffset(internal: readonly string[], output: readonly string[]): number | undefined {
+	if (output === internal) return 0;
+	const internalLeading = countLeadingBlankLines(internal);
+	const outputLeading = countLeadingBlankLines(output);
+	if (internalLeading >= internal.length || outputLeading >= output.length) {
+		// Blank-only on either side: nothing interactive to hit, so keep the naive mapping.
+		return internal.length === output.length ? 0 : undefined;
+	}
+	const offset = internalLeading - outputLeading;
+	const internalAnchor = stripTerminalSequences(internal[internalLeading] ?? "").trimEnd();
+	const outputAnchor = stripTerminalSequences(output[outputLeading] ?? "").trimEnd();
+	return internalAnchor === outputAnchor ? offset : undefined;
+}
+
 export class Container implements Component {
 	children: Component[] = [];
-	private mouseLayout?: { width: number; children: Array<{ component: Component; height: number }> };
+	private mouseLayout?: ContainerMouseLayout;
 
 	addChild(component: Component): void {
 		this.children.push(component);
@@ -341,19 +397,48 @@ export class Container implements Component {
 		}
 	}
 
+	/**
+	 * Lines this container produced from `Container.render`, before any subclass or
+	 * extension transformed them. Parents compare these against what they measured so
+	 * a trimmed render does not misplace clicks. Internal to mouse dispatch.
+	 */
+	getInternalRenderLines(width: number): string[] | undefined {
+		return this.mouseLayout?.width === width ? this.mouseLayout.lines : undefined;
+	}
+
+	/**
+	 * Rows to add to a click before handing it to `child`, undoing any trim the child
+	 * applied on top of its own `Container.render` output. `undefined` means the two
+	 * renders cannot be aligned, so the event is dropped rather than misrouted.
+	 */
+	private resolveChildRowOffset(entry: ContainerMouseChild, width: number): number | undefined {
+		if (entry.offsetResolved) return entry.offset;
+		const child = entry.component;
+		const internal = child instanceof Container ? child.getInternalRenderLines(width) : undefined;
+		entry.offset = internal ? resolveContainerRowOffset(internal, entry.lines) : 0;
+		entry.offsetResolved = true;
+		return entry.offset;
+	}
+
 	handleMouse(event: TuiMouseEvent): TuiMouseDispatchResult | undefined {
 		if (event.y < 0 || event.y >= event.height) return undefined;
 		const mouseChildren =
 			this.mouseLayout?.width === event.width
 				? this.mouseLayout.children
-				: this.children.map((component) => ({ component, height: component.render(event.width).length }));
+				: this.children.map((component) => {
+						const lines = component.render(event.width);
+						return { component, height: lines.length, lines };
+					});
 		let childY = 0;
-		for (const { component: child, height: childHeight } of mouseChildren) {
+		for (const entry of mouseChildren) {
+			const { component: child, height: childHeight } = entry;
 			if (event.y >= childY && event.y < childY + childHeight) {
+				const offset = this.resolveChildRowOffset(entry, event.width);
+				if (offset === undefined) return undefined;
 				const result = dispatchMouseEvent(child, {
 					...event,
-					y: event.y - childY,
-					height: childHeight,
+					y: event.y - childY + offset,
+					height: childHeight + offset,
 				});
 				if (result?.focus && (this as Component).handleInput) return { ...result, focusTarget: this };
 				return result;
@@ -365,15 +450,15 @@ export class Container implements Component {
 
 	render(width: number): string[] {
 		const lines: string[] = [];
-		const mouseChildren: Array<{ component: Component; height: number }> = [];
+		const mouseChildren: ContainerMouseChild[] = [];
 		for (const child of this.children) {
 			const childLines = child.render(width);
-			mouseChildren.push({ component: child, height: childLines.length });
+			mouseChildren.push({ component: child, height: childLines.length, lines: childLines });
 			for (const line of childLines) {
 				lines.push(line);
 			}
 		}
-		this.mouseLayout = { width, children: mouseChildren };
+		this.mouseLayout = { width, children: mouseChildren, lines };
 		return lines;
 	}
 }

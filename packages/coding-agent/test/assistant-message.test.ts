@@ -1,5 +1,5 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import type { TuiMouseEvent } from "@earendil-works/pi-tui";
+import { Container, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { describe, expect, test } from "vitest";
 import { AssistantMessageComponent } from "../src/modes/interactive/components/assistant-message.ts";
 import { UserMessageComponent } from "../src/modes/interactive/components/user-message.ts";
@@ -136,6 +136,60 @@ describe("AssistantMessageComponent", () => {
 		expect(answerRow).toBeGreaterThan(firstThinkingRow);
 		expect(component.handleMouse({ ...event, y: answerRow, screenY: answerRow })).toBeUndefined();
 		expect(stripAnsi(component.render(width).join("\n"))).toContain("first reasoning");
+	});
+
+	test("toggles thinking when an extension trims the leading blank line", () => {
+		initTheme("dark");
+		const component = new AssistantMessageComponent(
+			createAssistantMessage([
+				{ type: "thinking", thinking: "hidden reasoning" },
+				{ type: "toolCall", id: "tool-1", name: "bash", arguments: { command: "ls" } },
+			]),
+			true,
+		);
+
+		// Mirrors @vanillagreen/pi-tool-renderer's prototype patch: trim the outer blank
+		// lines and reattach the OSC 133 zone start to the new first line.
+		const original = component.render.bind(component);
+		component.render = (width: number) => {
+			const rendered = original(width);
+			const trimmed = [...rendered];
+			while (trimmed.length > 0 && stripAnsi(trimmed[0] ?? "").trim().length === 0) trimmed.shift();
+			while (trimmed.length > 0 && stripAnsi(trimmed[trimmed.length - 1] ?? "").trim().length === 0) trimmed.pop();
+			if (rendered[0]?.includes(OSC133_ZONE_START) && !trimmed[0]?.includes(OSC133_ZONE_START)) {
+				trimmed[0] = `${OSC133_ZONE_START}${trimmed[0] ?? ""}`;
+			}
+			return trimmed;
+		};
+
+		// The transcript dispatches through the chat container, never the message directly.
+		const transcript = new Container();
+		transcript.addChild(component);
+
+		const width = 80;
+		const lines = transcript.render(width);
+		const headerRow = lines.findIndex((line) => stripAnsi(line).includes("Thinking..."));
+		expect(headerRow).toBe(0);
+
+		const event: TuiMouseEvent = {
+			type: "click",
+			button: "left",
+			x: 0,
+			y: headerRow,
+			screenX: 0,
+			screenY: headerRow,
+			width,
+			height: lines.length,
+			shift: false,
+			alt: false,
+			ctrl: false,
+			clickCount: 1,
+		};
+		expect(transcript.handleMouse(event)?.handled).toBe(true);
+
+		const expanded = stripAnsi(transcript.render(width).join("\n"));
+		expect(expanded).toContain("▾  hidden reasoning");
+		expect(expanded).not.toContain("Thinking...");
 	});
 
 	test("uses configured output padding for text and thinking", () => {

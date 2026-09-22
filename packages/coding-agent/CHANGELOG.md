@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed settled tool rows disappearing from the transcript when an extension renders its compact summary from `renderResult`; renderers now always run and decide their own collapsed form.
+- Fixed disclosure headers ignoring clicks when an extension patches a message component's `render` to trim blank lines; mouse dispatch now reconciles the rendered lines with the recorded layout.
+
 ## [0.87.1] - 2026-09-22
 
 ### Added

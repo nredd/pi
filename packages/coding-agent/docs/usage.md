@@ -85,7 +85,7 @@ Use `/share` to upload the session and get a viewer link. With Radius authentica
 
 Regular mode uses the terminal's normal scrollback. Fullscreen mode keeps the editor and status area fixed while the transcript scrolls within the terminal window. Choose a mode through `/settings` or `--tui-mode`.
 
-In fullscreen mode, click a compact tool or thinking disclosure header to expand or collapse that block. Only the header is an activation target: tool output remains selectable, and external links retain their normal behavior. Regular mode leaves mouse input to the terminal, so use the existing keyboard expansion shortcuts there.
+In fullscreen mode, click a compact tool or thinking disclosure header to expand or collapse that block. A collapsed tool keeps its one-line summary row, and expanding it reveals the full output or diff. Only the header is an activation target: tool output remains selectable, and external links retain their normal behavior. Regular mode leaves mouse input to the terminal, so use the existing keyboard expansion shortcuts there.
 
 Terminal support for mouse input, keyboard shortcuts, and inline images varies. See [Terminal Setup](terminal-setup.md) for platform-specific configuration and [Keybindings](keybindings.md) for every configurable shortcut. Run `/hotkeys` to inspect the shortcuts active in your current session.
 

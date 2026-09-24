@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Changed fullscreen tool and thinking disclosures to toggle from a plain click on any row of the block body, not just the header. Dragging still selects output and external links still open.
+
 ### Fixed
 
 - Fixed settled tool rows disappearing from the transcript when an extension renders its compact summary from `renderResult`; renderers now always run and decide their own collapsed form.

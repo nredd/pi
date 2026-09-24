@@ -6,6 +6,10 @@ const GUTTER_WIDTH = 2;
  * Reserves a two-column disclosure gutter without changing a child's mouse surface.
  * `undefined` hides the marker while retaining the gutter, which keeps streaming
  * tool rows aligned with their completed form.
+ *
+ * The header row claims the whole press/click gesture. Every other row toggles only on
+ * the synthetic `click` the TUI emits after an unhandled press/release, so body rows
+ * never claim `press` and drag-selection plus OSC 8 links keep working.
  */
 export class DisclosureGutter implements Component {
 	private childRegion: MouseRegion;
@@ -38,25 +42,33 @@ export class DisclosureGutter implements Component {
 			lines.findIndex((line) => stripTerminalSequences(line).trim().length > 0),
 		);
 		const toggle = this.onToggle;
-		const isPrimaryHeader =
+		const isPrimaryToggle =
 			event.button === "left" &&
-			event.y === headerRow &&
 			!event.shift &&
 			!event.alt &&
 			!event.ctrl &&
 			this.getExpanded() !== undefined &&
 			toggle !== undefined;
+		const isPrimaryHeader = isPrimaryToggle && event.y === headerRow;
 		if (event.type === "press" && isPrimaryHeader) return { handled: true };
 		if (event.type === "click" && isPrimaryHeader) {
 			toggle();
 			return { handled: true };
 		}
-		if (event.width <= GUTTER_WIDTH) return this.childRegion.handleMouse(event);
-		return this.childRegion.handleMouse({
-			...event,
-			x: Math.max(0, event.x - GUTTER_WIDTH),
-			width: childWidth,
-		});
+		const childResult =
+			event.width <= GUTTER_WIDTH
+				? this.childRegion.handleMouse(event)
+				: this.childRegion.handleMouse({
+						...event,
+						x: Math.max(0, event.x - GUTTER_WIDTH),
+						width: childWidth,
+					});
+		if (childResult) return childResult;
+		if (event.type === "click" && isPrimaryToggle && event.y >= 0 && event.y < lines.length) {
+			toggle();
+			return { handled: true };
+		}
+		return undefined;
 	}
 
 	invalidate(): void {

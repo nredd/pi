@@ -138,6 +138,86 @@ describe("AssistantMessageComponent", () => {
 		expect(stripAnsi(component.render(width).join("\n"))).toContain("first reasoning");
 	});
 
+	test("collapses an expanded thinking run from a lower body row", () => {
+		initTheme("dark");
+		const component = new AssistantMessageComponent(
+			createAssistantMessage([
+				{ type: "thinking", thinking: "top reasoning\n\nmiddle reasoning\n\nbottom reasoning" },
+				{ type: "text", text: "answer" },
+			]),
+		);
+		const width = 80;
+		const lines = component.render(width);
+		const bottomRow = lines.findIndex((line) => stripAnsi(line).includes("bottom reasoning"));
+		const topRow = lines.findIndex((line) => stripAnsi(line).includes("top reasoning"));
+		expect(bottomRow).toBeGreaterThan(topRow);
+		const event: TuiMouseEvent = {
+			type: "click",
+			button: "left",
+			x: 6,
+			y: bottomRow,
+			screenX: 6,
+			screenY: bottomRow,
+			width,
+			height: lines.length,
+			shift: false,
+			alt: false,
+			ctrl: false,
+			clickCount: 1,
+		};
+		expect(component.handleMouse({ ...event, type: "press" })).toBeUndefined();
+		expect(component.handleMouse(event)?.handled).toBe(true);
+
+		const collapsed = stripAnsi(component.render(width).join("\n"));
+		expect(collapsed).toContain("▸  Thinking...");
+		expect(collapsed).not.toContain("bottom reasoning");
+		expect(collapsed).toContain("answer");
+	});
+
+	test("collapses thinking from a body row when an extension trims the leading blank line", () => {
+		initTheme("dark");
+		const component = new AssistantMessageComponent(
+			createAssistantMessage([
+				{ type: "thinking", thinking: "first line\n\nlast line" },
+				{ type: "toolCall", id: "tool-1", name: "bash", arguments: { command: "ls" } },
+			]),
+		);
+		const original = component.render.bind(component);
+		component.render = (width: number) => {
+			const rendered = original(width);
+			const trimmed = [...rendered];
+			while (trimmed.length > 0 && stripAnsi(trimmed[0] ?? "").trim().length === 0) trimmed.shift();
+			while (trimmed.length > 0 && stripAnsi(trimmed[trimmed.length - 1] ?? "").trim().length === 0) trimmed.pop();
+			return trimmed;
+		};
+		const transcript = new Container();
+		transcript.addChild(component);
+
+		const width = 80;
+		const lines = transcript.render(width);
+		const lastRow = lines.findIndex((line) => stripAnsi(line).includes("last line"));
+		expect(lastRow).toBeGreaterThan(0);
+		expect(
+			transcript.handleMouse({
+				type: "click",
+				button: "left",
+				x: 6,
+				y: lastRow,
+				screenX: 6,
+				screenY: lastRow,
+				width,
+				height: lines.length,
+				shift: false,
+				alt: false,
+				ctrl: false,
+				clickCount: 1,
+			})?.handled,
+		).toBe(true);
+		const collapsed = stripAnsi(transcript.render(width).join("\n"));
+		expect(collapsed).toContain("Thinking...");
+		expect(collapsed).not.toContain("last line");
+	});
+
 	test("toggles thinking when an extension trims the leading blank line", () => {
 		initTheme("dark");
 		const component = new AssistantMessageComponent(

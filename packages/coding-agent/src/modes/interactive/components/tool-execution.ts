@@ -309,6 +309,11 @@ export class ToolExecutionComponent extends Container {
 		return lines;
 	}
 
+	/**
+	 * Claims the header gesture here, then forwards shell rows to the disclosure gutter,
+	 * which toggles on a plain body `click` without claiming `press` (see `DisclosureGutter`).
+	 * The leading spacer and image rows stay inert.
+	 */
 	override handleMouse(event: TuiMouseEvent): ReturnType<Container["handleMouse"]> {
 		const handled = {
 			handled: true as const,

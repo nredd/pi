@@ -211,7 +211,7 @@ describe("ToolExecutionComponent parity", () => {
 		expect(component.render(120)).toEqual([]);
 	});
 
-	test("toggles self-rendered tools from their compact header only", () => {
+	test("toggles self-rendered tools from their header and body rows", () => {
 		const toolDefinition: ToolDefinition = {
 			...createBaseToolDefinition(),
 			renderShell: "self",
@@ -264,7 +264,13 @@ describe("ToolExecutionComponent parity", () => {
 
 		const resultRow = expanded.findIndex((line) => line.includes("expanded self"));
 		expect(resultRow).toBeGreaterThan(callRow);
-		expect(component.handleMouse({ ...event, x: 4, screenX: 4, y: resultRow, screenY: resultRow })).toBeUndefined();
+		const bodyEvent = { ...event, x: 4, screenX: 4, y: resultRow, screenY: resultRow };
+		// Body rows never claim the press, so drag-selection stays with the TUI.
+		expect(component.handleMouse({ ...bodyEvent, type: "press" })).toBeUndefined();
+		expect(component.handleMouse({ ...bodyEvent, shift: true })).toBeUndefined();
+		expect(component.handleMouse({ ...bodyEvent, alt: true })).toBeUndefined();
+		expect(component.handleMouse({ ...bodyEvent, ctrl: true })).toBeUndefined();
+		expect(component.handleMouse({ ...bodyEvent, button: "right" })).toBeUndefined();
 		expect(
 			component
 				.render(width)
@@ -272,7 +278,7 @@ describe("ToolExecutionComponent parity", () => {
 				.join("\n"),
 		).toContain("expanded self");
 
-		expect(component.handleMouse({ ...event, x: 4, screenX: 4 })?.handled).toBe(true);
+		expect(component.handleMouse(bodyEvent)?.handled).toBe(true);
 		const collapsedAgain = component.render(width).map((line) => stripAnsi(line));
 		expect(collapsedAgain[callRow]).toMatch(/^▸ /);
 		expect(collapsedAgain.join("\n")).toContain("collapsed self");
@@ -756,6 +762,140 @@ describe("ToolExecutionComponent parity", () => {
 		const collapsedAgain = component.render(width).map((line) => stripAnsi(line));
 		expect(collapsedAgain[resultRow]).toMatch(/^▸ /);
 		expect(collapsedAgain.join("\n")).not.toContain("hidden content");
+	});
+
+	test("collapses an expanded tool from any body row, including box padding", () => {
+		const toolDefinition: ToolDefinition = {
+			...createBaseToolDefinition(),
+			renderCall: () => new Text("boxed call", 0, 0),
+			renderResult: (_result, options) =>
+				new Text(options.expanded ? "line one\nline two\nline three" : "boxed summary", 0, 0),
+		};
+		const component = new ToolExecutionComponent(
+			"custom_tool",
+			"tool-body-collapse",
+			{},
+			{},
+			toolDefinition,
+			createFakeTui(),
+			process.cwd(),
+		);
+		component.updateResult({ content: [{ type: "text", text: "done" }], details: {}, isError: false }, false);
+		component.setExpanded(true);
+
+		const width = 120;
+		const expanded = component.render(width).map((line) => stripAnsi(line));
+		const event: TuiMouseEvent = {
+			type: "click",
+			button: "left",
+			x: 10,
+			y: 0,
+			screenX: 10,
+			screenY: 0,
+			width,
+			height: expanded.length,
+			shift: false,
+			alt: false,
+			ctrl: false,
+			clickCount: 1,
+		};
+
+		// The leading spacer separates blocks and stays inert.
+		expect(stripAnsi(expanded[0] ?? "").trim()).toBe("");
+		expect(component.handleMouse(event)).toBeUndefined();
+
+		const deepRow = expanded.findIndex((line) => line.includes("line three"));
+		expect(deepRow).toBeGreaterThan(0);
+		expect(component.handleMouse({ ...event, y: deepRow, screenY: deepRow })?.handled).toBe(true);
+		const collapsed = component.render(width).map((line) => stripAnsi(line));
+		expect(collapsed.join("\n")).toContain("boxed summary");
+		expect(collapsed.join("\n")).not.toContain("line three");
+
+		// The Box's bottom padding row is part of the body too.
+		const paddingRow = collapsed.length - 1;
+		expect(stripAnsi(collapsed[paddingRow] ?? "").trim()).toBe("");
+		expect(component.handleMouse({ ...event, y: paddingRow, screenY: paddingRow })?.handled).toBe(true);
+		expect(stripAnsi(component.render(width).join("\n"))).toContain("line three");
+	});
+
+	test("ignores body clicks while a tool is still streaming", () => {
+		const toolDefinition: ToolDefinition = {
+			...createBaseToolDefinition(),
+			renderCall: () => new Text("streaming call", 0, 0),
+			renderResult: () => new Text("partial one\npartial two", 0, 0),
+		};
+		const component = new ToolExecutionComponent(
+			"custom_tool",
+			"tool-body-partial",
+			{},
+			{},
+			toolDefinition,
+			createFakeTui(),
+			process.cwd(),
+		);
+		component.updateResult({ content: [{ type: "text", text: "partial" }], details: {}, isError: false }, true);
+
+		const width = 120;
+		const lines = component.render(width).map((line) => stripAnsi(line));
+		const bodyRow = lines.findIndex((line) => line.includes("partial two"));
+		expect(bodyRow).toBeGreaterThan(0);
+		expect(
+			component.handleMouse({
+				type: "click",
+				button: "left",
+				x: 6,
+				y: bodyRow,
+				screenX: 6,
+				screenY: bodyRow,
+				width,
+				height: lines.length,
+				shift: false,
+				alt: false,
+				ctrl: false,
+				clickCount: 1,
+			}),
+		).toBeUndefined();
+	});
+
+	test("collapses an expanded read result from its content row", () => {
+		const component = new ToolExecutionComponent(
+			"read",
+			"tool-read-body-collapse",
+			{ path: "notes.txt" },
+			{},
+			createReadToolDefinition(process.cwd()),
+			createFakeTui(),
+			process.cwd(),
+		);
+		component.updateResult(
+			{ content: [{ type: "text", text: "alpha\nbeta\ngamma" }], details: undefined, isError: false },
+			false,
+		);
+		component.setExpanded(true);
+
+		const width = 120;
+		const expanded = component.render(width).map((line) => stripAnsi(line));
+		const contentRow = expanded.findIndex((line) => line.includes("gamma"));
+		expect(contentRow).toBeGreaterThan(0);
+		expect(
+			component.handleMouse({
+				type: "click",
+				button: "left",
+				x: 6,
+				y: contentRow,
+				screenX: 6,
+				screenY: contentRow,
+				width,
+				height: expanded.length,
+				shift: false,
+				alt: false,
+				ctrl: false,
+				clickCount: 1,
+			})?.handled,
+		).toBe(true);
+		const collapsed = stripAnsi(component.render(width).join("\n"));
+		expect(collapsed).toContain("notes.txt");
+		expect(collapsed).not.toContain("gamma");
 	});
 
 	test("collapses ordinary read results until expanded", () => {

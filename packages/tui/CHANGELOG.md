@@ -5,6 +5,7 @@
 ### Fixed
 
 - Fixed `Container` mouse dispatch misplacing clicks when a child transforms its own render output, by aligning the child's rendered lines with the geometry it recorded.
+- Fixed `TuiAltScreen` synthesized clicks carrying the release's button 3 instead of the pressed button, which stopped left-click handlers from firing.
 
 ## [0.99.1] - 2026-09-29
 

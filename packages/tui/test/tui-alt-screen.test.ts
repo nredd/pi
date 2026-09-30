@@ -1789,6 +1789,28 @@ describe("TuiAltScreen", () => {
 		tui.stop();
 	});
 
+	it("reports the pressed button on clicks whose release carries button 3", async () => {
+		const terminal = new RecordingTerminal(20, 2);
+		const tui = new TuiAltScreen(terminal);
+		const clickButtons: string[] = [];
+		tui.addChild(
+			new MouseRegion(new Text("clickable", 0, 0), (event) => {
+				if (event.type !== "click") return undefined;
+				clickButtons.push(event.button);
+				return { handled: true };
+			}),
+		);
+		tui.start();
+		await terminal.waitForRender();
+
+		// Some terminals encode every release as button 3; the click must keep the left press button.
+		terminal.sendInput("\x1b[<0;2;1M");
+		terminal.sendInput("\x1b[<3;2;1m");
+		await terminal.waitForRender();
+		assert.deepStrictEqual(clickButtons, ["left"]);
+		tui.stop();
+	});
+
 	it("focuses and captures drag gestures for mouse-aware components", async () => {
 		const terminal = new VirtualTerminal(20, 2);
 		const tui = new TuiAltScreen(terminal);

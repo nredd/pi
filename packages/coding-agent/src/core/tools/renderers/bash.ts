@@ -6,16 +6,14 @@
  * tool definition, so the tool's public shape is unchanged.
  */
 
-import { Container, Spacer, Text } from "@earendil-works/pi-tui";
+import { Container, Text } from "@earendil-works/pi-tui";
 import { keyHint } from "../../../modes/interactive/components/keybinding-hints.ts";
-import { VisualLinePreview } from "../../../modes/interactive/components/visual-truncate.ts";
 import { theme } from "../../../modes/interactive/theme/theme.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../../extensions/types.ts";
 import type { BashToolDetails } from "../bash.ts";
 import { getTextOutput, invalidArgText, str } from "../render-utils.ts";
 import { DEFAULT_MAX_BYTES, formatSize } from "../truncate.ts";
 
-const BASH_PREVIEW_LINES = 5;
 export const BASH_UPDATE_THROTTLE_MS = 100;
 function formatDuration(ms: number): string {
 	const seconds = ms / 1000;
@@ -59,25 +57,17 @@ function rebuildBashResultRenderComponent(
 	}
 
 	if (output) {
-		const styledOutput = output
-			.split("\n")
-			.map((line) => theme.fg("toolOutput", line))
-			.join("\n");
-
 		if (options.expanded) {
+			const styledOutput = output
+				.split("\n")
+				.map((line) => theme.fg("toolOutput", line))
+				.join("\n");
 			component.addChild(new Text(`\n${styledOutput}`, 0, 0));
 		} else {
-			component.addChild(new Spacer(1));
-			component.addChild(
-				new VisualLinePreview({
-					text: styledOutput,
-					maxVisualLines: BASH_PREVIEW_LINES,
-					keep: "end",
-					formatHint: (hidden) =>
-						theme.fg("muted", `... (${hidden} earlier lines,`) +
-						` ${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`,
-				}),
-			);
+			const totalLines = output.split("\n").length;
+			const label = totalLines === 1 ? "1 line" : `${totalLines} lines`;
+			const hint = theme.fg("muted", `${label} output · `) + keyHint("app.tools.expand", "to expand");
+			component.addChild(new Text(`\n${hint}`, 0, 0));
 		}
 	}
 

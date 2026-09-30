@@ -1,5 +1,12 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- Settled tool and thinking blocks show a `▸`/`▾` disclosure marker, and clicking anywhere in the block toggles it in fullscreen mode. Clicks on still-streaming tools are ignored, and modified clicks, drag selection, and links keep their behavior.
+- Collapsed built-in `bash`, `edit`, `write`, `grep`, `find`, and `ls` results show a one-line summary instead of an output preview.
+
 ## [1.0.0] - 2026-10-01
 
 ### New Features

@@ -8,11 +8,39 @@
 
 import { Box, Container, Spacer, Text } from "@earendil-works/pi-tui";
 import { renderDiff } from "../../../modes/interactive/components/diff.ts";
+import { keyHint } from "../../../modes/interactive/components/keybinding-hints.ts";
 import type { Theme } from "../../../modes/interactive/theme/theme.ts";
 import type { ToolDefinition } from "../../extensions/types.ts";
 import type { EditToolDetails } from "../edit.ts";
 import { computeEditsDiff, type Edit, type EditDiffError, type EditDiffResult } from "../edit-diff.ts";
 import { renderToolPath, str } from "../render-utils.ts";
+
+/**
+ * Count +/- lines in a display-oriented diff for a compact collapsed summary.
+ */
+function summarizeEditDiff(diffText: string): string {
+	let added = 0;
+	let removed = 0;
+	for (const line of diffText.split("\n")) {
+		if (line.startsWith("+")) added++;
+		else if (line.startsWith("-")) removed++;
+	}
+	const parts: string[] = [];
+	if (added) parts.push(`+${added}`);
+	if (removed) parts.push(`-${removed}`);
+	return parts.length > 0 ? parts.join(" ") : "no changes";
+}
+
+/**
+ * Render a display-oriented diff. Collapsed rows show only a one-line change summary;
+ * the full diff body renders only once the row is explicitly expanded.
+ */
+function renderEditDiff(diffText: string, expanded: boolean, theme: Theme): string {
+	if (!expanded) {
+		return theme.fg("muted", `${summarizeEditDiff(diffText)} · ${keyHint("app.tools.expand", "to expand")}`);
+	}
+	return renderDiff(diffText);
+}
 
 type EditPreview = EditDiffResult | EditDiffError;
 export type EditRenderState = {
@@ -85,13 +113,12 @@ function formatEditCall(args: RenderableEditArgs | undefined, theme: Theme, cwd:
 	return `${theme.fg("toolTitle", theme.bold("edit"))} ${pathDisplay}`;
 }
 function formatEditResult(
-	args: RenderableEditArgs | undefined,
 	preview: EditPreview | undefined,
 	result: EditToolResultLike,
 	theme: Theme,
 	isError: boolean,
+	expanded: boolean,
 ): string | undefined {
-	const rawPath = str(args?.file_path ?? args?.path);
 	const previewDiff = preview && !("error" in preview) ? preview.diff : undefined;
 	const previewError = preview && "error" in preview ? preview.error : undefined;
 	if (isError) {
@@ -106,8 +133,10 @@ function formatEditResult(
 	}
 
 	const resultDiff = result.details?.diff;
+	// Skip re-rendering the result diff when it's unchanged from the call-time preview
+	// already shown above it, to avoid printing the same diff twice.
 	if (resultDiff && resultDiff !== previewDiff) {
-		return renderDiff(resultDiff, { filePath: rawPath ?? undefined });
+		return renderEditDiff(resultDiff, expanded, theme);
 	}
 
 	return undefined;
@@ -133,6 +162,7 @@ function buildEditCallComponent(
 	args: RenderableEditArgs | undefined,
 	theme: Theme,
 	cwd: string,
+	expanded: boolean,
 ): EditCallRenderComponent {
 	component.setBgFn(getEditHeaderBg(component.preview, component.settledError, theme));
 	component.clear();
@@ -143,7 +173,9 @@ function buildEditCallComponent(
 	}
 
 	const body =
-		"error" in component.preview ? theme.fg("error", component.preview.error) : renderDiff(component.preview.diff);
+		"error" in component.preview
+			? theme.fg("error", component.preview.error)
+			: renderEditDiff(component.preview.diff, expanded, theme);
 	component.addChild(new Spacer(1));
 	component.addChild(new Text(body, 0, 0));
 	return component;
@@ -192,7 +224,13 @@ export const editRenderers: Pick<ToolDefinition<any, any>, "renderCall" | "rende
 			});
 		}
 
-		return buildEditCallComponent(component, args as RenderableEditArgs | undefined, theme, context.cwd);
+		return buildEditCallComponent(
+			component,
+			args as RenderableEditArgs | undefined,
+			theme,
+			context.cwd,
+			context.expanded,
+		);
 	},
 	renderResult(result, _options, theme, context) {
 		const callComponent = context.state.callComponent;
@@ -215,17 +253,17 @@ export const editRenderers: Pick<ToolDefinition<any, any>, "renderCall" | "rende
 				changed = true;
 			}
 			if (changed) {
-				buildEditCallComponent(callComponent, context.args as RenderableEditArgs | undefined, theme, context.cwd);
+				buildEditCallComponent(
+					callComponent,
+					context.args as RenderableEditArgs | undefined,
+					theme,
+					context.cwd,
+					context.expanded,
+				);
 			}
 		}
 
-		const output = formatEditResult(
-			context.args as RenderableEditArgs | undefined,
-			callComponent?.preview,
-			typedResult,
-			theme,
-			context.isError,
-		);
+		const output = formatEditResult(callComponent?.preview, typedResult, theme, context.isError, context.expanded);
 		const component = (context.lastComponent as Container | undefined) ?? new Container();
 		component.clear();
 		if (!output) {

@@ -22,7 +22,7 @@ To include files or images:
 
 Pi shows each tool call and result while it works. Press `Ctrl+O` to expand or collapse tool output. Press `Ctrl+T` to show or hide thinking blocks.
 
-In fullscreen mode, a `▸`/`▾` marker sits beside each settled tool and thinking block. Click anywhere in the block to expand or collapse it. A collapsed built-in tool shows only its summary row, such as `12 lines output` for `bash` or `+3 -1` for `edit`; expanding it reveals the full output or diff. Dragging still selects text, modified clicks do not toggle, links keep their normal behavior, and clicks on a still-streaming tool are ignored. Regular mode leaves mouse input to the terminal, so use the keyboard shortcuts there.
+A `▸`/`▾` marker sits beside each settled tool block and each thinking block, in both TUI modes. In fullscreen mode, click anywhere in the block to expand or collapse it. A collapsed built-in tool shows only its summary row, such as `12 lines output` for `bash` or `+3 -1` for `edit`; expanding it reveals the full output or diff. Dragging still selects text, modified clicks do not toggle, links keep their normal behavior, and clicks on a still-streaming tool are ignored. Regular mode leaves mouse input to the terminal, so use the keyboard shortcuts there.
 
 The startup header lists the instructions and resources Pi loaded. The editor border indicates the current thinking level. The footer updates as the model uses context and reports usage.
 

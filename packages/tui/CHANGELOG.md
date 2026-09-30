@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+
+- Fixed `Container` mouse dispatch misplacing clicks when a child transforms its own render output, by aligning the child's rendered lines with the geometry it recorded.
+
 ## [1.0.0] - 2026-10-01
 
 ### Added

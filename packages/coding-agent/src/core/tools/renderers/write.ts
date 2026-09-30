@@ -108,18 +108,17 @@ function formatWriteCall(
 	if (fileContent === null) {
 		text += `\n\n${theme.fg("error", "[invalid content arg - expected string]")}`;
 	} else if (fileContent) {
-		const lang = rawPath ? getLanguageFromPath(rawPath) : undefined;
-		const renderedLines = lang
-			? (cache?.highlightedLines ?? highlightCode(replaceTabs(normalizeDisplayText(fileContent)), lang))
-			: normalizeDisplayText(fileContent).split("\n");
-		const lines = trimTrailingEmptyLines(renderedLines);
-		const totalLines = lines.length;
-		const maxLines = options.expanded ? lines.length : 10;
-		const displayLines = lines.slice(0, maxLines);
-		const remaining = lines.length - maxLines;
-		text += `\n\n${displayLines.map((line) => (lang ? line : theme.fg("toolOutput", replaceTabs(line)))).join("\n")}`;
-		if (remaining > 0) {
-			text += `${theme.fg("muted", `\n... (${remaining} more lines, ${totalLines} total,`)} ${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`;
+		if (!options.expanded) {
+			const totalLines = trimTrailingEmptyLines(normalizeDisplayText(fileContent).split("\n")).length;
+			const label = totalLines === 1 ? "1 line" : `${totalLines} lines`;
+			text += `\n${theme.fg("muted", `${label} · `)}${keyHint("app.tools.expand", "to expand")}`;
+		} else {
+			const lang = rawPath ? getLanguageFromPath(rawPath) : undefined;
+			const renderedLines = lang
+				? (cache?.highlightedLines ?? highlightCode(replaceTabs(normalizeDisplayText(fileContent)), lang))
+				: normalizeDisplayText(fileContent).split("\n");
+			const lines = trimTrailingEmptyLines(renderedLines);
+			text += `\n\n${lines.map((line) => (lang ? line : theme.fg("toolOutput", replaceTabs(line)))).join("\n")}`;
 		}
 	}
 

@@ -37,6 +37,7 @@ import { convertToPng } from "../../../utils/image-convert.ts";
 import { theme } from "../theme/theme.ts";
 import { DisclosureGutter } from "./disclosure-gutter.ts";
 import { keyHint } from "./keybinding-hints.ts";
+import { firstTextLine, lastTextLine, OneLineRow, renderedContentLines } from "./one-line.ts";
 
 const FALLBACK_PREVIEW_LINES = 10;
 
@@ -55,8 +56,11 @@ export interface ToolExecutionOptions {
 
 export class ToolExecutionComponent extends Container {
 	private contentBox: Box;
+	private compactBox: Box;
 	private contentText: Text;
 	private selfRenderContainer: Container;
+	private shellSlot: Container;
+	private collapsedRow?: OneLineRow;
 	private shellGutter: DisclosureGutter;
 	private shellContainer: Container;
 	private shellRenderHeight = 0;
@@ -113,17 +117,16 @@ export class ToolExecutionComponent extends Container {
 		// Always create all shell variants. contentBox is used for default renderer-based composition.
 		// selfRenderContainer is used when the tool renders its own framing.
 		// contentText is reserved for generic fallback rendering when no tool definition exists.
+		// compactBox carries the collapsed one-line row, so it drops the vertical padding.
 		this.contentBox = new Box(1, 1, (text: string) => theme.bg("toolPendingBg", text));
+		this.compactBox = new Box(1, 0, (text: string) => theme.bg("toolPendingBg", text));
 		this.contentText = new Text("", 1, 1, (text: string) => theme.bg("toolPendingBg", text));
 		this.selfRenderContainer = new Container();
+		// shellSlot holds whichever shell variant matches the current expanded state.
+		this.shellSlot = new Container();
 
-		const shell = this.hasRendererDefinition()
-			? this.getRenderShell() === "self"
-				? this.selfRenderContainer
-				: this.contentBox
-			: this.contentText;
 		this.shellGutter = new DisclosureGutter(
-			shell,
+			this.shellSlot,
 			() => (this.result && !this.isPartial ? this.expanded : undefined),
 			() => this.setExpanded(!this.expanded),
 		);
@@ -302,6 +305,10 @@ export class ToolExecutionComponent extends Container {
 			return lines;
 		}
 
+		if (this.collapsedRow && this.collapsedRow.render(width).length === 0) {
+			return [];
+		}
+
 		const lines = super.render(width);
 		const shellLines = this.shellContainer.render(width);
 		this.shellRenderHeight = shellLines.length;
@@ -356,66 +363,43 @@ export class ToolExecutionComponent extends Container {
 				? (text: string) => theme.bg("toolErrorBg", text)
 				: (text: string) => theme.bg("toolSuccessBg", text);
 
-		let hasContent = false;
+		const collapsed = !this.expanded;
+		const selfShell = this.hasRendererDefinition() && this.getRenderShell() === "self";
 		this.hideComponent = false;
-		if (this.hasRendererDefinition()) {
-			const renderContainer = this.getRenderShell() === "self" ? this.selfRenderContainer : this.contentBox;
+		this.collapsedRow = undefined;
+		this.shellSlot.clear();
+
+		let hasContent = false;
+		if (collapsed || this.hasRendererDefinition()) {
+			// Collapsed rows always use compactBox so every one-line row shares the same framing.
+			const renderContainer = collapsed ? this.compactBox : selfShell ? this.selfRenderContainer : this.contentBox;
 			if (renderContainer instanceof Box) {
 				renderContainer.setBgFn(bgFn);
 			}
 			renderContainer.clear();
+			this.shellSlot.addChild(renderContainer);
 
-			const callRenderer = this.getCallRenderer();
-			if (!callRenderer) {
-				renderContainer.addChild(this.createCallFallback());
+			const callComponent = this.renderCallComponent();
+			const resultComponent = this.renderResultComponent();
+			if (collapsed) {
+				this.collapsedRow = new OneLineRow([
+					() => renderedContentLines(callComponent)[0],
+					() => this.getCollapsedResultLine(callComponent, resultComponent),
+				]);
+				renderContainer.addChild(this.collapsedRow);
 				hasContent = true;
 			} else {
-				try {
-					const component = callRenderer(this.args, theme, this.getRenderContext(this.callRendererComponent));
-					this.callRendererComponent = component;
-					renderContainer.addChild(component);
-					hasContent = true;
-				} catch {
-					this.callRendererComponent = undefined;
-					renderContainer.addChild(this.createCallFallback());
-					hasContent = true;
-				}
-			}
-
-			// Renderers own their collapsed form via the `expanded` flag they are handed;
-			// skipping them entirely hides tools whose summary row lives in `renderResult`.
-			if (this.result) {
-				const resultRenderer = this.getResultRenderer();
-				if (!resultRenderer) {
-					const component = this.createResultFallback();
+				for (const component of [callComponent, resultComponent]) {
 					if (component) {
 						renderContainer.addChild(component);
 						hasContent = true;
-					}
-				} else {
-					try {
-						const component = resultRenderer(
-							{ content: this.result.content as any, details: this.result.details },
-							{ expanded: this.expanded, isPartial: this.isPartial },
-							theme,
-							this.getRenderContext(this.resultRendererComponent),
-						);
-						this.resultRendererComponent = component;
-						renderContainer.addChild(component);
-						hasContent = true;
-					} catch {
-						this.resultRendererComponent = undefined;
-						const component = this.createResultFallback();
-						if (component) {
-							renderContainer.addChild(component);
-							hasContent = true;
-						}
 					}
 				}
 			}
 		} else {
 			this.contentText.setCustomBgFn(bgFn);
 			this.contentText.setText(this.formatToolExecution());
+			this.shellSlot.addChild(this.contentText);
 			hasContent = true;
 		}
 
@@ -428,7 +412,7 @@ export class ToolExecutionComponent extends Container {
 		}
 		this.imageSpacers = [];
 
-		if (this.result) {
+		if (this.result && !collapsed) {
 			const imageBlocks = this.result.content.filter((c) => c.type === "image");
 			const caps = getCapabilities();
 			for (let i = 0; i < imageBlocks.length; i++) {
@@ -459,6 +443,74 @@ export class ToolExecutionComponent extends Container {
 		if (this.hasRendererDefinition() && !hasContent && this.imageComponents.length === 0) {
 			this.hideComponent = true;
 		}
+	}
+
+	/** Renders the call row through the tool's renderer, falling back to `name args`. */
+	private renderCallComponent(): Component {
+		const callRenderer = this.hasRendererDefinition() ? this.getCallRenderer() : undefined;
+		if (!callRenderer) return this.createCallFallback();
+		try {
+			const component = callRenderer(this.args, theme, this.getRenderContext(this.callRendererComponent));
+			this.callRendererComponent = component;
+			return component;
+		} catch {
+			this.callRendererComponent = undefined;
+			return this.createCallFallback();
+		}
+	}
+
+	/**
+	 * Renders the result through the tool's renderer. Renderers own their collapsed form via the
+	 * `expanded` flag they are handed; skipping them entirely hides tools whose summary row lives
+	 * in `renderResult`. `undefined` means there is no result renderer to ask.
+	 */
+	private renderResultComponent(): Component | undefined {
+		if (!this.result) return undefined;
+		const resultRenderer = this.hasRendererDefinition() ? this.getResultRenderer() : undefined;
+		if (!resultRenderer) return this.expanded ? this.createResultFallback() : undefined;
+		try {
+			const component = resultRenderer(
+				{ content: this.result.content as any, details: this.result.details },
+				{ expanded: this.expanded, isPartial: this.isPartial },
+				theme,
+				this.getRenderContext(this.resultRendererComponent),
+			);
+			this.resultRendererComponent = component;
+			return component;
+		} catch {
+			this.resultRendererComponent = undefined;
+			return this.expanded ? this.createResultFallback() : undefined;
+		}
+	}
+
+	/**
+	 * The summary half of a collapsed row: the first error line on failure, the result renderer's
+	 * first line, the last output line while streaming, the call's second line for renderers that
+	 * fold their summary into the call (e.g. `edit`, `write`), or a line count for plain text output.
+	 */
+	private getCollapsedResultLine(
+		callComponent: Component,
+		resultComponent: Component | undefined,
+	): string | undefined {
+		const callSummary = renderedContentLines(callComponent)[1];
+		if (!this.result) return callSummary;
+		const output = this.getTextOutput();
+		if (this.result.isError && !this.isPartial) {
+			const errorLine = firstTextLine(output);
+			if (errorLine) return theme.fg("error", errorLine);
+		}
+		const rendered = renderedContentLines(resultComponent)[0];
+		if (rendered) return rendered;
+		if (this.isPartial) {
+			const lastLine = lastTextLine(output);
+			if (lastLine) return theme.fg("toolOutput", lastLine);
+		}
+		if (callSummary) return callSummary;
+		if (resultComponent || this.isPartial) return undefined;
+		const lines = output.split("\n").filter((line) => line.trim().length > 0);
+		if (lines.length === 0) return undefined;
+		if (lines.length === 1) return theme.fg("toolOutput", lines[0]!.trim());
+		return theme.fg("muted", `${lines.length} lines`);
 	}
 
 	private getTextOutput(): string {

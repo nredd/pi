@@ -63,6 +63,8 @@ describe("ToolExecutionComponent parity", () => {
 			createFakeTui(),
 			process.cwd(),
 		);
+		// Collapsed rows hide images, so expand to exercise the image path.
+		component.setExpanded(true);
 
 		component.updateResult(
 			{ content: [{ type: "image", data: "partial-jpeg", mimeType: "image/jpeg" }], isError: false },
@@ -640,9 +642,8 @@ describe("ToolExecutionComponent parity", () => {
 
 		const collapsed = stripAnsi(component.render(120).join("\n"));
 		expect(collapsed).toContain("custom_tool");
-		expect(collapsed).toContain("line-1");
-		expect(collapsed).not.toContain("line-15");
-		expect(collapsed).toContain("more lines");
+		expect(collapsed).toContain("15 lines");
+		expect(collapsed).not.toContain("line-1");
 
 		component.setExpanded(true);
 		const expanded = stripAnsi(component.render(120).join("\n"));
@@ -798,10 +799,11 @@ describe("ToolExecutionComponent parity", () => {
 		};
 		expect(component.handleMouse(event)?.handled).toBe(true);
 		const expanded = component.render(width).map((line) => stripAnsi(line));
-		expect(expanded[resultRow]).toMatch(/^▾ /);
+		const expandedRow = expanded.findIndex((line) => line.includes("notes.txt"));
+		expect(expanded[expandedRow]).toMatch(/^▾ /);
 		expect(expanded.join("\n")).toContain("hidden content");
 
-		expect(component.handleMouse({ ...event, x: 4 })?.handled).toBe(true);
+		expect(component.handleMouse({ ...event, x: 4, y: expandedRow, height: expanded.length })?.handled).toBe(true);
 		const collapsedAgain = component.render(width).map((line) => stripAnsi(line));
 		expect(collapsedAgain[resultRow]).toMatch(/^▸ /);
 		expect(collapsedAgain.join("\n")).not.toContain("hidden content");
@@ -854,11 +856,20 @@ describe("ToolExecutionComponent parity", () => {
 		expect(collapsed.join("\n")).toContain("boxed summary");
 		expect(collapsed.join("\n")).not.toContain("line three");
 
-		// The Box's bottom padding row is part of the body too.
-		const paddingRow = collapsed.length - 1;
-		expect(stripAnsi(collapsed[paddingRow] ?? "").trim()).toBe("");
-		expect(component.handleMouse({ ...event, y: paddingRow, screenY: paddingRow })?.handled).toBe(true);
-		expect(stripAnsi(component.render(width).join("\n"))).toContain("line three");
+		// The collapsed form is a single row joining call and summary.
+		expect(collapsed.filter((line) => line.trim().length > 0)).toEqual([
+			expect.stringMatching(/^▸ +boxed call · boxed summary *$/),
+		]);
+
+		// The expanded Box's bottom padding row is part of the body too.
+		component.setExpanded(true);
+		const reexpanded = component.render(width).map((line) => stripAnsi(line));
+		const paddingRow = reexpanded.length - 1;
+		expect(stripAnsi(reexpanded[paddingRow] ?? "").trim()).toBe("");
+		expect(
+			component.handleMouse({ ...event, y: paddingRow, screenY: paddingRow, height: reexpanded.length })?.handled,
+		).toBe(true);
+		expect(stripAnsi(component.render(width).join("\n"))).not.toContain("line three");
 	});
 
 	test("ignores body clicks while a tool is still streaming", () => {
@@ -877,6 +888,7 @@ describe("ToolExecutionComponent parity", () => {
 			process.cwd(),
 		);
 		component.updateResult({ content: [{ type: "text", text: "partial" }], details: {}, isError: false }, true);
+		component.setExpanded(true);
 
 		const width = 120;
 		const lines = component.render(width).map((line) => stripAnsi(line));

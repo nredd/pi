@@ -6,6 +6,8 @@
 
 - Settled tool blocks and all thinking blocks show a `▸`/`▾` disclosure marker in both TUI modes, and clicking anywhere in the block toggles it in fullscreen mode. Clicks on still-streaming tools are ignored, and modified clicks, drag selection, and links keep their behavior.
 - Collapsed built-in `bash`, `edit`, `write`, `grep`, `find`, and `ls` results show a one-line summary instead of an output preview.
+- Every collapsed tool row, built-in or extension, renders on one line: the call's first line, then ` · ` and the result's first line (the first error line on failure, the last output line while streaming), truncated with `…`. Images and further lines appear once expanded.
+- Extension messages with a registered renderer get the same disclosure marker and collapse to the renderer's first line until clicked or expanded with `Ctrl+O`.
 
 ## [1.0.0] - 2026-10-01
 

@@ -42,7 +42,12 @@ import {
 import { uuidv7 } from "../utils/uuid.ts";
 import { createGrammarToolInputProperties } from "./constrained-sampling.ts";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.ts";
-import { convertResponsesMessages, convertResponsesTools, processResponsesStream } from "./openai-responses-shared.ts";
+import {
+	convertResponsesMessages,
+	convertResponsesTools,
+	DEFAULT_REASONING_SUMMARY,
+	processResponsesStream,
+} from "./openai-responses-shared.ts";
 import { buildBaseOptions } from "./simple-options.ts";
 
 // ============================================================================
@@ -589,7 +594,7 @@ function buildRequestBody(
 		if (effort !== null) {
 			body.reasoning = {
 				effort,
-				summary: options.reasoningSummary ?? "auto",
+				summary: options.reasoningSummary ?? DEFAULT_REASONING_SUMMARY,
 			};
 		}
 	} else if (model.reasoning && model.thinkingLevelMap?.off !== null) {

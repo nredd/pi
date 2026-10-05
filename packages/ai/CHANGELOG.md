@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- Changed the OpenAI-family Responses requests (OpenAI, Azure OpenAI, Codex) to default `reasoning.summary` to `detailed`. `auto` often returned only a bold headline. An explicit `reasoningSummary` still wins. A model or organization that rejects `detailed` needs `reasoningSummary: "auto"`.
+
 ## [1.0.0] - 2026-10-01
 
 ### Added

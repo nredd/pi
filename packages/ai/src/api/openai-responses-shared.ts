@@ -107,6 +107,12 @@ function convertToolResultOutput<TApi extends Api>(
 	return output;
 }
 
+/**
+ * Reasoning summary requested when the caller names none. `auto` often returns
+ * only a one-line bold headline; `detailed` returns the summary body too.
+ */
+export const DEFAULT_REASONING_SUMMARY = "detailed";
+
 export interface OpenAIResponsesStreamOptions {
 	onProviderStreamEvent?: StreamOptions["onProviderStreamEvent"];
 	serviceTier?: ResponseCreateParamsStreaming["service_tier"];

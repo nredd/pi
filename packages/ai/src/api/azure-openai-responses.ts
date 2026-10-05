@@ -19,7 +19,12 @@ import { retryProviderRequest } from "../utils/provider-retry.ts";
 import { getDeclaredTools, resolveTranscript, resolveTranscriptTools } from "../utils/transcript.ts";
 import { createGrammarToolInputProperties } from "./constrained-sampling.ts";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.ts";
-import { convertResponsesMessages, convertResponsesTools, processResponsesStream } from "./openai-responses-shared.ts";
+import {
+	convertResponsesMessages,
+	convertResponsesTools,
+	DEFAULT_REASONING_SUMMARY,
+	processResponsesStream,
+} from "./openai-responses-shared.ts";
 import { buildBaseOptions } from "./simple-options.ts";
 
 const DEFAULT_AZURE_API_VERSION = "v1";
@@ -334,7 +339,7 @@ function buildParams(
 				: "medium";
 			params.reasoning = {
 				effort: effort as NonNullable<typeof params.reasoning>["effort"],
-				summary: options?.reasoningSummary || "auto",
+				summary: options?.reasoningSummary || DEFAULT_REASONING_SUMMARY,
 			};
 			params.include = ["reasoning.encrypted_content"];
 		} else if (model.thinkingLevelMap?.off !== null) {

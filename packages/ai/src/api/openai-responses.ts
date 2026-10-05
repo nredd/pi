@@ -25,7 +25,12 @@ import { getDeclaredTools, resolveTranscript, resolveTranscriptTools } from "../
 import { createGrammarToolInputProperties } from "./constrained-sampling.ts";
 import { buildCopilotDynamicHeaders, hasCopilotVisionInput } from "./github-copilot-headers.ts";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.ts";
-import { convertResponsesMessages, convertResponsesTools, processResponsesStream } from "./openai-responses-shared.ts";
+import {
+	convertResponsesMessages,
+	convertResponsesTools,
+	DEFAULT_REASONING_SUMMARY,
+	processResponsesStream,
+} from "./openai-responses-shared.ts";
 import { buildBaseOptions } from "./simple-options.ts";
 
 const OPENAI_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "opencode"]);
@@ -367,7 +372,7 @@ function buildParams(
 				: "medium";
 			params.reasoning = {
 				effort: effort as NonNullable<typeof params.reasoning>["effort"],
-				summary: options?.reasoningSummary || "auto",
+				summary: options?.reasoningSummary || DEFAULT_REASONING_SUMMARY,
 			};
 			params.include = ["reasoning.encrypted_content"];
 		} else if (model.provider !== "github-copilot" && model.thinkingLevelMap?.off !== null) {

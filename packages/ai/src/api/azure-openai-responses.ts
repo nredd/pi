@@ -11,7 +11,12 @@ import { getDeclaredTools, resolveTranscript, resolveTranscriptTools } from "../
 import { type AzureEndpointOptions, resolveAzureConfig, resolveDeploymentName } from "./azure-openai-config.ts";
 import { createGrammarToolInputProperties } from "./constrained-sampling.ts";
 import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.ts";
-import { convertResponsesMessages, convertResponsesTools, processResponsesStream } from "./openai-responses-shared.ts";
+import {
+	convertResponsesMessages,
+	convertResponsesTools,
+	DEFAULT_REASONING_SUMMARY,
+	processResponsesStream,
+} from "./openai-responses-shared.ts";
 import { buildBaseOptions, resolveSamplingParams } from "./simple-options.ts";
 
 const AZURE_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "opencode", "azure"]);
@@ -229,7 +234,7 @@ function buildParams(
 				: reasoningEffort;
 			params.reasoning = {
 				effort: effort as NonNullable<typeof params.reasoning>["effort"],
-				summary: options?.reasoningSummary || "auto",
+				summary: options?.reasoningSummary || DEFAULT_REASONING_SUMMARY,
 			};
 			params.include = ["reasoning.encrypted_content"];
 		} else if (model.thinkingLevelMap?.off !== null) {

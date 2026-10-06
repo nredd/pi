@@ -19,6 +19,7 @@ import { formatToolCallWithArgs, getTextOutput as getRenderedTextOutput } from "
 import { ensurePngTranscoder } from "../../../utils/image-convert.ts";
 import { theme } from "../theme/theme.ts";
 import { DisclosureGutter } from "./disclosure-gutter.ts";
+import { entryRule } from "./entry-rule.ts";
 import { keyHint } from "./keybinding-hints.ts";
 import { firstTextLine, lastTextLine, OneLineRow, renderedContentLines } from "./one-line.ts";
 
@@ -97,7 +98,7 @@ export class ToolExecutionComponent extends Container {
 		this.ui = ui;
 		this.cwd = cwd;
 
-		this.addChild(new Spacer(1));
+		this.addChild(entryRule());
 
 		// Always create all shell variants. contentBox is used for default renderer-based composition.
 		// selfRenderContainer is used when the tool renders its own framing.
@@ -253,7 +254,7 @@ export class ToolExecutionComponent extends Container {
 
 			const lines: string[] = [];
 			if (contentLines.length > 0) {
-				lines.push("");
+				lines.push(...entryRule().render(width));
 				lines.push(...contentLines);
 			}
 			for (let i = 0; i < this.imageComponents.length; i++) {
@@ -296,7 +297,11 @@ export class ToolExecutionComponent extends Container {
 				height: event.height,
 			},
 		};
-		const headerRow = this.render(event.width).findIndex((line) => stripTerminalSequences(line).trim().length > 0);
+		// The leading entry rule is a non-blank row; the header is the shell's first content row.
+		const lines = this.render(event.width);
+		const headerRow = lines.findIndex(
+			(line, index) => index >= this.shellRenderOffset && stripTerminalSequences(line).trim().length > 0,
+		);
 		const isPrimaryHeader =
 			event.button === "left" && event.y === headerRow && !event.shift && !event.alt && !event.ctrl;
 		if (event.type === "press" && isPrimaryHeader) return handled;

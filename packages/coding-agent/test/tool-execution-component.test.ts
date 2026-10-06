@@ -2,13 +2,13 @@ import { join, resolve } from "node:path";
 import { resetCapabilitiesCache, setCapabilities, Text, type TUI, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
-
 import { getReadmePath } from "../src/config.ts";
 import type { ToolDefinition } from "../src/core/extensions/types.ts";
 import { type BashOperations, createBashToolDefinition } from "../src/core/tools/bash.ts";
 import { createReadTool, createReadToolDefinition } from "../src/core/tools/read.ts";
 import { withBuiltInRenderers } from "../src/core/tools/renderers/index.ts";
 import { createWriteToolDefinition } from "../src/core/tools/write.ts";
+import { isEntryRule } from "../src/modes/interactive/components/entry-rule.ts";
 import { ToolExecutionComponent } from "../src/modes/interactive/components/tool-execution.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
@@ -853,8 +853,8 @@ describe("ToolExecutionComponent parity", () => {
 			clickCount: 1,
 		};
 
-		// The leading spacer separates blocks and stays inert.
-		expect(stripAnsi(expanded[0] ?? "").trim()).toBe("");
+		// The leading entry rule separates blocks and stays inert.
+		expect(isEntryRule(expanded[0] ?? "")).toBe(true);
 		expect(component.handleMouse(event)).toBeUndefined();
 
 		const deepRow = expanded.findIndex((line) => line.includes("line three"));
@@ -865,7 +865,7 @@ describe("ToolExecutionComponent parity", () => {
 		expect(collapsed.join("\n")).not.toContain("line three");
 
 		// The collapsed form is a single row joining call and summary.
-		expect(collapsed.filter((line) => line.trim().length > 0)).toEqual([
+		expect(collapsed.filter((line) => line.trim().length > 0 && !isEntryRule(line))).toEqual([
 			expect.stringMatching(/^▸ +boxed call · boxed summary *$/),
 		]);
 

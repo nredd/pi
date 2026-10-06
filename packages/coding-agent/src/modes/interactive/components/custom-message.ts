@@ -5,6 +5,7 @@ import type { MessageRenderer } from "../../../core/extensions/types.ts";
 import type { CustomMessage } from "../../../core/messages.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
 import { DisclosureGutter } from "./disclosure-gutter.ts";
+import { entryRule } from "./entry-rule.ts";
 import { OneLineRow, renderedContentLines } from "./one-line.ts";
 
 /**
@@ -35,7 +36,7 @@ export class CustomMessageComponent extends Container {
 		this.markdownTheme = markdownTheme;
 		this.outputPad = outputPad;
 
-		this.addChild(new Spacer(1));
+		this.addChild(entryRule());
 
 		// Create box with purple background (used for default rendering)
 		this.box = new Box(1, 1, (t) => theme.bg("customMessageBg", t));

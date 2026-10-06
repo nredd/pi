@@ -724,7 +724,7 @@ describe("ToolExecutionComponent parity", () => {
 		expect(rendered).toContain(theme.fg("toolOutput", error));
 	});
 
-	test("reserves the disclosure gutter but omits its marker until the result is complete", () => {
+	test("shows the disclosure marker while a tool is pending, streaming, and complete", () => {
 		const component = new ToolExecutionComponent(
 			"read",
 			"tool-streaming-disclosure",
@@ -738,8 +738,7 @@ describe("ToolExecutionComponent parity", () => {
 		const pending = component.render(120).map((line) => stripAnsi(line));
 		const pendingRow = pending.find((line) => line.includes("notes.txt"));
 		expect(pendingRow).toBeDefined();
-		expect(pendingRow).toMatch(/^ {2}/);
-		expect(pendingRow).not.toMatch(/[▸▾]/);
+		expect(pendingRow).toMatch(/^▸ /);
 
 		component.updateResult(
 			{ content: [{ type: "text", text: "partial" }], details: undefined, isError: false },
@@ -749,8 +748,7 @@ describe("ToolExecutionComponent parity", () => {
 			.render(120)
 			.map((line) => stripAnsi(line))
 			.find((line) => line.includes("notes.txt"));
-		expect(streamingRow).toMatch(/^ {2}/);
-		expect(streamingRow).not.toMatch(/[▸▾]/);
+		expect(streamingRow).toMatch(/^▸ /);
 
 		component.updateResult(
 			{ content: [{ type: "text", text: "complete" }], details: undefined, isError: false },
@@ -872,7 +870,7 @@ describe("ToolExecutionComponent parity", () => {
 		expect(stripAnsi(component.render(width).join("\n"))).not.toContain("line three");
 	});
 
-	test("ignores body clicks while a tool is still streaming", () => {
+	test("toggles a streaming tool from its header and shows the partial output", () => {
 		const toolDefinition: ToolDefinition = {
 			...createBaseToolDefinition(),
 			renderCall: () => new Text("streaming call", 0, 0),
@@ -888,28 +886,37 @@ describe("ToolExecutionComponent parity", () => {
 			process.cwd(),
 		);
 		component.updateResult({ content: [{ type: "text", text: "partial" }], details: {}, isError: false }, true);
-		component.setExpanded(true);
 
 		const width = 120;
-		const lines = component.render(width).map((line) => stripAnsi(line));
-		const bodyRow = lines.findIndex((line) => line.includes("partial two"));
-		expect(bodyRow).toBeGreaterThan(0);
-		expect(
+		const click = (y: number, height: number) =>
 			component.handleMouse({
 				type: "click",
 				button: "left",
 				x: 6,
-				y: bodyRow,
+				y,
 				screenX: 6,
-				screenY: bodyRow,
+				screenY: y,
 				width,
-				height: lines.length,
+				height,
 				shift: false,
 				alt: false,
 				ctrl: false,
 				clickCount: 1,
-			}),
-		).toBeUndefined();
+			});
+		const collapsed = component.render(width).map((line) => stripAnsi(line));
+		const headerRow = collapsed.findIndex((line) => line.includes("streaming call"));
+		expect(collapsed[headerRow]).toMatch(/^▸ /);
+		expect(collapsed.join("\n")).not.toContain("partial two");
+
+		expect(click(headerRow, collapsed.length)?.handled).toBe(true);
+		const expanded = component.render(width).map((line) => stripAnsi(line));
+		const expandedHeader = expanded.findIndex((line) => line.includes("streaming call"));
+		expect(expanded[expandedHeader]).toMatch(/^▾ /);
+		const bodyRow = expanded.findIndex((line) => line.includes("partial two"));
+		expect(bodyRow).toBeGreaterThan(expandedHeader);
+
+		expect(click(bodyRow, expanded.length)?.handled).toBe(true);
+		expect(stripAnsi(component.render(width).join("\n"))).not.toContain("partial two");
 	});
 
 	test("collapses an expanded read result from its content row", () => {

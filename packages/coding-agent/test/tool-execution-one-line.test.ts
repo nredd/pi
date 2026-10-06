@@ -118,7 +118,7 @@ const cases: Case[] = [
 				tui,
 				cwd,
 			),
-		row: /^ +write x\.txt · 2 lines/,
+		row: /^▸ +write x\.txt · 2 lines/,
 	},
 	{
 		title: "custom renderer with tree glyphs",
@@ -176,7 +176,7 @@ const cases: Case[] = [
 			c.updateResult(text("first\nlatest\n"), true);
 			return c;
 		},
-		row: /^ +streaming · latest$/,
+		row: /^▸ +streaming · latest$/,
 	},
 	{
 		title: "no result",
@@ -190,7 +190,7 @@ const cases: Case[] = [
 				tui,
 				cwd,
 			),
-		row: /^ +waiting$/,
+		row: /^▸ +waiting$/,
 	},
 	{
 		title: "text fallback with many lines",

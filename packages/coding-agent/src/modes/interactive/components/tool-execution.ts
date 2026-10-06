@@ -125,9 +125,10 @@ export class ToolExecutionComponent extends Container {
 		// shellSlot holds whichever shell variant matches the current expanded state.
 		this.shellSlot = new Container();
 
+		// Running rows toggle too: expanding a live tool shows the output streamed so far.
 		this.shellGutter = new DisclosureGutter(
 			this.shellSlot,
-			() => (this.result && !this.isPartial ? this.expanded : undefined),
+			() => this.expanded,
 			() => this.setExpanded(!this.expanded),
 		);
 		this.shellContainer = new Container();
@@ -334,13 +335,7 @@ export class ToolExecutionComponent extends Container {
 		};
 		const headerRow = this.render(event.width).findIndex((line) => stripTerminalSequences(line).trim().length > 0);
 		const isPrimaryHeader =
-			event.button === "left" &&
-			event.y === headerRow &&
-			!event.shift &&
-			!event.alt &&
-			!event.ctrl &&
-			this.result &&
-			!this.isPartial;
+			event.button === "left" && event.y === headerRow && !event.shift && !event.alt && !event.ctrl;
 		if (event.type === "press" && isPrimaryHeader) return handled;
 		if (event.type === "click" && isPrimaryHeader) {
 			this.setExpanded(!this.expanded);

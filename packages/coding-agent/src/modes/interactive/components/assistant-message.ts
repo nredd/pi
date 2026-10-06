@@ -3,6 +3,7 @@ import { Container, Markdown, type MarkdownTheme, Spacer, Text } from "@earendil
 import type { MarkdownTransformer } from "../../../core/extensions/types.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
 import { DisclosureGutter } from "./disclosure-gutter.ts";
+import { entryRule } from "./entry-rule.ts";
 import { createMarkdownTransform } from "./markdown-transform.ts";
 import { firstSentence, OneLineRow } from "./one-line.ts";
 import { RuledBlock } from "./ruled-block.ts";
@@ -108,7 +109,7 @@ export class AssistantMessageComponent extends Container {
 		);
 
 		if (hasVisibleContent) {
-			this.contentContainer.addChild(new Spacer(1));
+			this.contentContainer.addChild(entryRule());
 		}
 
 		// Render content in order
@@ -191,7 +192,7 @@ export class AssistantMessageComponent extends Container {
 					),
 				);
 				if (hasVisibleContentAfter) {
-					this.contentContainer.addChild(new Spacer(1));
+					this.contentContainer.addChild(entryRule());
 				}
 			}
 		}

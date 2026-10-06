@@ -56,6 +56,17 @@ export function firstTextLine(text: string): string | undefined {
 		?.trim();
 }
 
+/**
+ * Returns the first sentence of the first non-blank line: up to the first `.`, `!`, or `?` that
+ * ends the line or precedes whitespace, else the whole line.
+ */
+export function firstSentence(text: string): string | undefined {
+	const line = firstTextLine(text);
+	if (line === undefined) return undefined;
+	const match = /^(.*?[.!?])(?:\s|$)/.exec(line);
+	return match ? match[1] : line;
+}
+
 /** Renders a component unwrapped and returns its content lines. */
 export function renderedContentLines(component: Component | undefined): string[] {
 	return component ? contentLines(component.render(UNWRAPPED_RENDER_WIDTH)) : [];

@@ -3851,8 +3851,9 @@ export class InteractiveMode {
 			case "user": {
 				const textContent = this.getUserMessageText(message);
 				if (textContent) {
+					// A muted rule, not a blank line, opens every turn after the first.
 					if (this.chatContainer.children.length > 0) {
-						this.chatContainer.addChild(new Spacer(1));
+						this.chatContainer.addChild(new DynamicBorder((text) => theme.fg("borderMuted", text)));
 					}
 					const skillBlock = parseSkillBlock(textContent);
 					if (skillBlock) {

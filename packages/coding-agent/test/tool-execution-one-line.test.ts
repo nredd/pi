@@ -6,6 +6,7 @@ import { createBashToolDefinition } from "../src/core/tools/bash.ts";
 import { createEditToolDefinition } from "../src/core/tools/edit.ts";
 import { createReadToolDefinition } from "../src/core/tools/read.ts";
 import { createWriteToolDefinition } from "../src/core/tools/write.ts";
+import { firstSentence } from "../src/modes/interactive/components/one-line.ts";
 import { ToolExecutionComponent } from "../src/modes/interactive/components/tool-execution.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
@@ -224,6 +225,16 @@ const cases: Case[] = [
 function contentRows(component: ToolExecutionComponent, width: number): string[] {
 	return component.render(width).filter((line) => stripAnsi(line).trim().length > 0);
 }
+
+describe("firstSentence", () => {
+	test("stops at the first sentence end followed by whitespace or the line end", () => {
+		expect(firstSentence("Check the addon. Then restart.")).toBe("Check the addon.");
+		expect(firstSentence("Is it running? Yes")).toBe("Is it running?");
+		expect(firstSentence("v1.0.0 is out\nnext line")).toBe("v1.0.0 is out");
+		expect(firstSentence("\n\n  Only line  \n")).toBe("Only line");
+		expect(firstSentence("   \n")).toBeUndefined();
+	});
+});
 
 describe("collapsed tool rows", () => {
 	beforeAll(() => {

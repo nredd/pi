@@ -718,11 +718,13 @@ describe("ToolExecutionComponent parity", () => {
 		);
 		const error = "Offset 120 is beyond end of file (96 lines total)";
 		component.updateResult({ content: [{ type: "text", text: error }], details: undefined, isError: true }, false);
+		// The expansion would only repeat the error line, so the settled row stays collapsed and
+		// carries the error color, still as one unhighlighted run.
 		component.setExpanded(true);
 
 		const rendered = component.render(120).join("\n");
 		expect(stripAnsi(rendered)).toContain(error);
-		expect(rendered).toContain(theme.fg("toolOutput", error));
+		expect(rendered).toContain(theme.fg("error", error));
 	});
 
 	test("shows the disclosure marker while a tool is pending, streaming, and complete", () => {

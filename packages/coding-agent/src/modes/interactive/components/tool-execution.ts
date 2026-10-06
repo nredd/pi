@@ -33,6 +33,8 @@ export interface ToolRenderers {
 }
 
 import { formatToolCallWithArgs, getTextOutput as getRenderedTextOutput } from "../../../core/tools/render-utils.ts";
+import { ShellResultRenderComponent } from "../../../core/tools/renderers/bash.ts";
+import { editRenderers } from "../../../core/tools/renderers/edit.ts";
 import { convertToPng } from "../../../utils/image-convert.ts";
 import { theme } from "../theme/theme.ts";
 import { DisclosureGutter } from "./disclosure-gutter.ts";
@@ -93,6 +95,12 @@ export class ToolExecutionComponent extends Container {
 		{ sourceData: string; sourceMimeType: string; data: string; mimeType: string }
 	> = new Map();
 	private hideComponent = false;
+	/**
+	 * Memoized `hasExpandableDetail()`; reset by every input change and renderer-requested invalidate.
+	 * Not reset by `invalidate()`: the verdict compares unwrapped plain text, so theme and resize
+	 * cannot change it, and recomputing per component per frame made full renders ~50% slower.
+	 */
+	private expandableDetail?: boolean;
 
 	constructor(
 		toolName: string,
@@ -129,7 +137,7 @@ export class ToolExecutionComponent extends Container {
 		// Running rows toggle too: expanding a live tool shows the output streamed so far.
 		this.shellGutter = new DisclosureGutter(
 			this.shellSlot,
-			() => this.expanded,
+			() => (this.hasExpandableDetail() ? this.expanded : undefined),
 			() => this.setExpanded(!this.expanded),
 		);
 		this.shellContainer = new Container();
@@ -155,38 +163,53 @@ export class ToolExecutionComponent extends Container {
 		return this.toolDefinition?.renderShell ?? "default";
 	}
 
-	private getRenderContext(lastComponent: Component | undefined): ToolRenderContext {
+	/**
+	 * `probeState` marks a throwaway render: it gets its own renderer state and a no-op `invalidate`,
+	 * because stateful renderers such as `edit` mutate and reuse their components and must not see a
+	 * probe's expanded form. Flags stay honest, with one exception: the built-in `edit` renderer starts a
+	 * background diff of the file on `argsComplete`, pure wasted I/O for a probe whose settled result
+	 * already carries the diff, so only that renderer is probed with `argsComplete=false`.
+	 */
+	private getRenderContext(
+		lastComponent: Component | undefined,
+		expanded = this.expanded,
+		probeState?: object,
+	): ToolRenderContext {
 		return {
 			args: this.args,
 			toolCallId: this.toolCallId,
-			invalidate: () => {
-				this.invalidate();
-				this.ui.requestRender();
-			},
+			invalidate: probeState
+				? () => {}
+				: () => {
+						// A renderer's own async state change may alter either form; theme/resize may not.
+						this.expandableDetail = undefined;
+						this.invalidate();
+						this.ui.requestRender();
+					},
 			lastComponent,
-			state: this.rendererState,
+			state: probeState ?? this.rendererState,
 			cwd: this.cwd,
 			executionStarted: this.executionStarted,
-			argsComplete: this.argsComplete,
+			argsComplete: this.argsComplete && !(probeState && this.isBuiltInEdit()),
 			isPartial: this.isPartial,
-			expanded: this.expanded,
+			expanded,
 			showImages: this.showImages,
 			isError: this.result?.isError ?? false,
 		};
 	}
 
-	private createCallFallback(): Component {
-		return new Text(formatToolCallWithArgs(this.toolName, this.args, theme, this.expanded), 0, 0);
+	private createCallFallback(expanded: boolean): Component {
+		return new Text(formatToolCallWithArgs(this.toolName, this.args, theme, expanded), 0, 0);
 	}
 
-	private createResultFallback(): Component | undefined {
+	private createResultFallback(expanded: boolean): Component | undefined {
 		const output = this.getTextOutput();
 		if (!output) {
 			return undefined;
 		}
 
 		const lines = output.split("\n");
-		const displayLines = this.expanded ? lines : lines.slice(0, FALLBACK_PREVIEW_LINES);
+		const displayLines = expanded ? lines : lines.slice(0, FALLBACK_PREVIEW_LINES);
 		const remaining = lines.length - displayLines.length;
 		let text = displayLines.map((line) => theme.fg("toolOutput", line)).join("\n");
 		if (remaining > 0) {
@@ -197,17 +220,20 @@ export class ToolExecutionComponent extends Container {
 
 	updateArgs(args: any): void {
 		this.args = args;
+		this.expandableDetail = undefined;
 		this.updateDisplay();
 	}
 
 	markExecutionStarted(): void {
 		this.executionStarted = true;
+		this.expandableDetail = undefined;
 		this.updateDisplay();
 		this.ui.requestRender();
 	}
 
 	setArgsComplete(): void {
 		this.argsComplete = true;
+		this.expandableDetail = undefined;
 		this.updateDisplay();
 		this.ui.requestRender();
 	}
@@ -222,6 +248,7 @@ export class ToolExecutionComponent extends Container {
 	): void {
 		this.result = result;
 		this.isPartial = isPartial;
+		this.expandableDetail = undefined;
 		this.updateDisplay();
 		this.maybeConvertImagesForKitty();
 	}
@@ -263,6 +290,7 @@ export class ToolExecutionComponent extends Container {
 
 	setShowImages(show: boolean): void {
 		this.showImages = show;
+		this.expandableDetail = undefined;
 		this.updateDisplay();
 	}
 
@@ -341,6 +369,7 @@ export class ToolExecutionComponent extends Container {
 		);
 		const isPrimaryHeader =
 			event.button === "left" && event.y === headerRow && !event.shift && !event.alt && !event.ctrl;
+		if (!this.hasExpandableDetail()) return undefined;
 		if (event.type === "press" && isPrimaryHeader) return handled;
 		if (event.type === "click" && isPrimaryHeader) {
 			this.setExpanded(!this.expanded);
@@ -363,7 +392,8 @@ export class ToolExecutionComponent extends Container {
 				? (text: string) => theme.bg("toolErrorBg", text)
 				: (text: string) => theme.bg("toolSuccessBg", text);
 
-		const collapsed = !this.expanded;
+		// A settled entry whose expansion adds nothing stays one row, whatever the expanded flag says.
+		const collapsed = !this.expanded || !this.hasExpandableDetail();
 		const selfShell = this.hasRendererDefinition() && this.getRenderShell() === "self";
 		this.hideComponent = false;
 		this.collapsedRow = undefined;
@@ -379,12 +409,12 @@ export class ToolExecutionComponent extends Container {
 			renderContainer.clear();
 			this.shellSlot.addChild(renderContainer);
 
-			const callComponent = this.renderCallComponent();
-			const resultComponent = this.renderResultComponent();
+			const callComponent = this.renderCallComponent(!collapsed);
+			const resultComponent = this.renderResultComponent(!collapsed);
 			if (collapsed) {
 				this.collapsedRow = new OneLineRow([
 					() => renderedContentLines(callComponent)[0],
-					() => this.getCollapsedResultLine(callComponent, resultComponent),
+					() => this.getCollapsedResultLine(renderedContentLines(callComponent)[1], resultComponent),
 				]);
 				renderContainer.addChild(this.collapsedRow);
 				hasContent = true;
@@ -446,16 +476,21 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	/** Renders the call row through the tool's renderer, falling back to `name args`. */
-	private renderCallComponent(): Component {
+	private renderCallComponent(expanded: boolean, probeState?: object): Component {
 		const callRenderer = this.hasRendererDefinition() ? this.getCallRenderer() : undefined;
-		if (!callRenderer) return this.createCallFallback();
+		if (!callRenderer) return this.createCallFallback(expanded);
 		try {
-			const component = callRenderer(this.args, theme, this.getRenderContext(this.callRendererComponent));
-			this.callRendererComponent = component;
+			const context = this.getRenderContext(
+				probeState ? undefined : this.callRendererComponent,
+				expanded,
+				probeState,
+			);
+			const component = callRenderer(this.args, theme, context);
+			if (!probeState) this.callRendererComponent = component;
 			return component;
 		} catch {
-			this.callRendererComponent = undefined;
-			return this.createCallFallback();
+			if (!probeState) this.callRendererComponent = undefined;
+			return this.createCallFallback(expanded);
 		}
 	}
 
@@ -464,23 +499,65 @@ export class ToolExecutionComponent extends Container {
 	 * `expanded` flag they are handed; skipping them entirely hides tools whose summary row lives
 	 * in `renderResult`. `undefined` means there is no result renderer to ask.
 	 */
-	private renderResultComponent(): Component | undefined {
+	private renderResultComponent(expanded: boolean, probeState?: object): Component | undefined {
 		if (!this.result) return undefined;
 		const resultRenderer = this.hasRendererDefinition() ? this.getResultRenderer() : undefined;
-		if (!resultRenderer) return this.expanded ? this.createResultFallback() : undefined;
+		if (!resultRenderer) return expanded ? this.createResultFallback(expanded) : undefined;
 		try {
 			const component = resultRenderer(
 				{ content: this.result.content as any, details: this.result.details },
-				{ expanded: this.expanded, isPartial: this.isPartial },
+				{ expanded, isPartial: this.isPartial },
 				theme,
-				this.getRenderContext(this.resultRendererComponent),
+				this.getRenderContext(probeState ? undefined : this.resultRendererComponent, expanded, probeState),
 			);
-			this.resultRendererComponent = component;
+			if (!probeState) this.resultRendererComponent = component;
 			return component;
 		} catch {
-			this.resultRendererComponent = undefined;
-			return this.expanded ? this.createResultFallback() : undefined;
+			if (!probeState) this.resultRendererComponent = undefined;
+			return expanded ? this.createResultFallback(expanded) : undefined;
 		}
+	}
+
+	/**
+	 * Whether expanding a settled entry would show anything its collapsed row does not. Both forms
+	 * are rendered unwrapped and compared line by line (plain text), so the verdict is independent of
+	 * terminal width. Running entries and entries with images always toggle: more output may arrive.
+	 */
+	private isBuiltInEdit(): boolean {
+		return this.toolDefinition?.renderCall === editRenderers.renderCall;
+	}
+
+	private hasExpandableDetail(): boolean {
+		this.expandableDetail ??= this.computeExpandableDetail();
+		return this.expandableDetail;
+	}
+
+	private computeExpandableDetail(): boolean {
+		if (!this.result || this.isPartial) return true;
+		if (this.showImages && this.result.content.some((block) => block.type === "image")) return true;
+		const plain = (lines: readonly string[]) => lines.map((line) => stripTerminalSequences(line).trim());
+		const collapsedState = {};
+		const expandedState = {};
+		// Build both components before reading either: a renderer's result pass may rebuild its call component.
+		const collapsedCallComponent = this.renderCallComponent(false, collapsedState);
+		const collapsedResult = this.renderResultComponent(false, collapsedState);
+		if (collapsedResult instanceof ShellResultRenderComponent && collapsedResult.hasExpandableOutput) return true;
+		const collapsedCall = renderedContentLines(collapsedCallComponent);
+		// Multiset, not set: expanded `same\nsame` against a collapsed `same` is extra detail.
+		const remaining = new Map<string, number>();
+		const collapsedParts = [collapsedCall[0], this.getCollapsedResultLine(collapsedCall[1], collapsedResult)];
+		for (const line of plain(collapsedParts.filter((part): part is string => part !== undefined))) {
+			remaining.set(line, (remaining.get(line) ?? 0) + 1);
+		}
+		const expandedCall = this.renderCallComponent(true, expandedState);
+		const expandedResult = this.renderResultComponent(true, expandedState);
+		const expandedLines = [...renderedContentLines(expandedCall), ...renderedContentLines(expandedResult)];
+		return plain(expandedLines).some((line) => {
+			const left = remaining.get(line) ?? 0;
+			if (left === 0) return true;
+			remaining.set(line, left - 1);
+			return false;
+		});
 	}
 
 	/**
@@ -489,10 +566,9 @@ export class ToolExecutionComponent extends Container {
 	 * fold their summary into the call (e.g. `edit`, `write`), or a line count for plain text output.
 	 */
 	private getCollapsedResultLine(
-		callComponent: Component,
+		callSummary: string | undefined,
 		resultComponent: Component | undefined,
 	): string | undefined {
-		const callSummary = renderedContentLines(callComponent)[1];
 		if (!this.result) return callSummary;
 		const output = this.getTextOutput();
 		if (this.result.isError && !this.isPartial) {

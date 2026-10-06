@@ -6,6 +6,7 @@ import { createBashToolDefinition } from "../src/core/tools/bash.ts";
 import { createEditToolDefinition } from "../src/core/tools/edit.ts";
 import { createReadToolDefinition } from "../src/core/tools/read.ts";
 import { createWriteToolDefinition } from "../src/core/tools/write.ts";
+import { isEntryRule } from "../src/modes/interactive/components/entry-rule.ts";
 import { firstSentence } from "../src/modes/interactive/components/one-line.ts";
 import { ToolExecutionComponent } from "../src/modes/interactive/components/tool-execution.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
@@ -223,7 +224,7 @@ const cases: Case[] = [
 ];
 
 function contentRows(component: ToolExecutionComponent, width: number): string[] {
-	return component.render(width).filter((line) => stripAnsi(line).trim().length > 0);
+	return component.render(width).filter((line) => stripAnsi(line).trim().length > 0 && !isEntryRule(line));
 }
 
 describe("firstSentence", () => {

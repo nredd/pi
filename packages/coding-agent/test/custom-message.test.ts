@@ -3,6 +3,7 @@ import { describe, expect, test } from "vitest";
 import type { MessageRenderer, MessageRenderOptions } from "../src/core/extensions/types.ts";
 import type { CustomMessage } from "../src/core/messages.ts";
 import { CustomMessageComponent } from "../src/modes/interactive/components/custom-message.ts";
+import { isEntryRule } from "../src/modes/interactive/components/entry-rule.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
 
@@ -52,13 +53,13 @@ describe("CustomMessageComponent", () => {
 		const rows = component
 			.render(width)
 			.map(stripAnsi)
-			.filter((line) => line.trim().length > 0);
+			.filter((line) => line.trim().length > 0 && !isEntryRule(line));
 		expect(rows).toHaveLength(1);
 		expect(rows[0]).toMatch(/^▸ ✓ agent done x+…$/);
 		expect(visibleWidth(component.render(width).at(-1) ?? "")).toBeLessThanOrEqual(width);
 	});
 
-	test("toggles a rendered message on click and leaves the spacer inert", () => {
+	test("toggles a rendered message on click and leaves the entry rule inert", () => {
 		initTheme("dark");
 		const renderer: MessageRenderer = (_message, options) =>
 			new Text(options.expanded ? "head\nbody line" : "head", 0, 0);

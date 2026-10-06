@@ -153,6 +153,8 @@ describe("container mouse geometry", () => {
 		assert.strictEqual(resolveContainerRowOffset(["a", "b"], ["a", "b"]), 0);
 		assert.strictEqual(resolveContainerRowOffset(["a"], ["", "a"]), -1);
 		assert.strictEqual(resolveContainerRowOffset(["a"], ["b"]), undefined);
+		assert.strictEqual(resolveContainerRowOffset(["┄┄┄", "a", "b"], ["a", "b"]), 1);
+		assert.strictEqual(resolveContainerRowOffset(["", "label", "a"], ["a"]), 2);
 		assert.strictEqual(resolveContainerRowOffset([""], ["", ""]), undefined);
 	});
 

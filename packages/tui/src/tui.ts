@@ -394,10 +394,13 @@ export function resolveContainerRowOffset(internal: readonly string[], output: r
 		// Blank-only on either side: nothing interactive to hit, so keep the naive mapping.
 		return internal.length === output.length ? 0 : undefined;
 	}
-	const offset = internalLeading - outputLeading;
-	const internalAnchor = stripTerminalSequences(internal[internalLeading] ?? "").trimEnd();
+	// Anchor on the output's first visible line wherever it sits in the internal render, so a
+	// transform that trims leading rules or labels, not only blanks, still aligns.
 	const outputAnchor = stripTerminalSequences(output[outputLeading] ?? "").trimEnd();
-	return internalAnchor === outputAnchor ? offset : undefined;
+	const internalAnchorRow = internal.findIndex(
+		(line, index) => index >= internalLeading && stripTerminalSequences(line).trimEnd() === outputAnchor,
+	);
+	return internalAnchorRow === -1 ? undefined : internalAnchorRow - outputLeading;
 }
 
 export class Container implements Component {

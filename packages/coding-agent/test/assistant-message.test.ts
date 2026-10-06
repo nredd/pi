@@ -2,6 +2,7 @@ import type { AssistantMessage } from "@earendil-works/pi-ai";
 import { Container, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { describe, expect, test } from "vitest";
 import { AssistantMessageComponent } from "../src/modes/interactive/components/assistant-message.ts";
+import { isEntryRule } from "../src/modes/interactive/components/entry-rule.ts";
 import { UserMessageComponent } from "../src/modes/interactive/components/user-message.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
@@ -235,7 +236,11 @@ describe("AssistantMessageComponent", () => {
 		component.render = (width: number) => {
 			const rendered = original(width);
 			const trimmed = [...rendered];
-			while (trimmed.length > 0 && stripAnsi(trimmed[0] ?? "").trim().length === 0) trimmed.shift();
+			while (
+				trimmed.length > 0 &&
+				(stripAnsi(trimmed[0] ?? "").trim().length === 0 || isEntryRule(trimmed[0] ?? ""))
+			)
+				trimmed.shift();
 			while (trimmed.length > 0 && stripAnsi(trimmed[trimmed.length - 1] ?? "").trim().length === 0) trimmed.pop();
 			if (rendered[0]?.includes(OSC133_ZONE_START) && !trimmed[0]?.includes(OSC133_ZONE_START)) {
 				trimmed[0] = `${OSC133_ZONE_START}${trimmed[0] ?? ""}`;

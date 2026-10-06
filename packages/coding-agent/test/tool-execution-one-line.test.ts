@@ -37,6 +37,8 @@ interface Case {
 	build: () => ToolExecutionComponent;
 	/** Expected stripped row at a width wide enough to avoid truncation. */
 	row: RegExp;
+	/** False when a settled entry's expansion adds nothing to its row, so it must not toggle. */
+	expandable?: false;
 }
 
 const cases: Case[] = [
@@ -213,6 +215,69 @@ const cases: Case[] = [
 		row: /^▸ +mystery a=1 · only line$/,
 	},
 	{
+		title: "settled renderer whose expansion repeats an output line",
+		build: () => {
+			const c = new ToolExecutionComponent(
+				"dup",
+				"dup",
+				{},
+				{},
+				custom({
+					renderCall: () => new Text("dup", 0, 0),
+					renderResult: () => new Text("same\nsame", 0, 0),
+				}),
+				tui,
+				cwd,
+			);
+			c.updateResult(text("x"));
+			return c;
+		},
+		row: /^▸ +dup · same$/,
+	},
+	{
+		title: "settled renderer that reveals detail only once args are complete",
+		build: () => {
+			const c = new ToolExecutionComponent(
+				"late",
+				"late",
+				{},
+				{},
+				custom({
+					renderCall: () => new Text("late", 0, 0),
+					renderResult: (_result, options, _theme, context) =>
+						new Text(options.expanded && context.argsComplete ? "✓\nfull detail" : "✓", 0, 0),
+				}),
+				tui,
+				cwd,
+			);
+			c.setArgsComplete();
+			c.updateResult(text("x"));
+			return c;
+		},
+		row: /^▸ +late · ✓$/,
+	},
+	{
+		title: "settled renderer whose expansion only repeats the row",
+		build: () => {
+			const c = new ToolExecutionComponent(
+				"todo",
+				"flat",
+				{},
+				{},
+				custom({
+					renderCall: () => new Text("todo ≡ 4 ops", 0, 0),
+					renderResult: () => new Text("✓", 0, 0),
+				}),
+				tui,
+				cwd,
+			);
+			c.updateResult(text("x"));
+			return c;
+		},
+		row: /^ +todo ≡ 4 ops · ✓$/,
+		expandable: false,
+	},
+	{
 		title: "unknown tool without a definition",
 		build: () => {
 			const c = new ToolExecutionComponent("ghost", "g", { a: 1 }, {}, undefined, tui, cwd);
@@ -261,6 +326,78 @@ describe("collapsed tool rows", () => {
 			expect(contentRows(component, 200).length).toBeGreaterThanOrEqual(1);
 		});
 	}
+
+	for (const testCase of cases) {
+		const flat = testCase.expandable === false;
+		test(`${testCase.title} ${flat ? "stays one unmarked row" : "toggles to a marked, fuller render"} when expanded`, () => {
+			const component = testCase.build();
+			const collapsed = contentRows(component, 200).map(stripAnsi);
+			component.setExpanded(true);
+			const expanded = contentRows(component, 200).map(stripAnsi);
+			if (flat) {
+				expect(expanded).toEqual(collapsed);
+				expect(collapsed[0]).not.toMatch(/[▸▾]/);
+			} else {
+				expect(expanded[0]).toMatch(/^▾/);
+			}
+		});
+	}
+
+	test("multiline shell output does not render its full body merely to decide disclosure", () => {
+		const definition = createBashToolDefinition(cwd);
+		const renderResult = definition.renderResult!;
+		let expandedRenders = 0;
+		definition.renderResult = (result, options, renderTheme, context) => {
+			if (options.expanded) expandedRenders++;
+			return renderResult(result, options, renderTheme, context);
+		};
+		const component = new ToolExecutionComponent(
+			"bash",
+			"large",
+			{ command: "seq 1 50000" },
+			{},
+			definition,
+			tui,
+			cwd,
+		);
+		component.updateResult(text(Array.from({ length: 2000 }, (_, index) => String(index)).join("\n")));
+		expect(stripAnsi(contentRows(component, 200)[0]!)).toMatch(/^▸/);
+		expect(expandedRenders).toBe(0);
+		component.setExpanded(true);
+		expect(expandedRenders).toBe(1);
+	});
+
+	test("a tui-wide invalidate reuses the expandable-detail verdict; a renderer-requested one recomputes it", () => {
+		let resultCalls = 0;
+		let requestInvalidate: (() => void) | undefined;
+		const component = new ToolExecutionComponent(
+			"probe",
+			"probe",
+			{},
+			{},
+			custom({
+				renderCall: () => new Text("probe", 0, 0),
+				renderResult: (_result, options, _theme, context) => {
+					resultCalls++;
+					requestInvalidate = context.invalidate;
+					return new Text(options.expanded ? "ok\nmore" : "ok", 0, 0);
+				},
+			}),
+			tui,
+			cwd,
+		);
+		component.updateResult(text("x"));
+		component.render(80);
+		const settled = resultCalls;
+		component.invalidate();
+		component.render(80);
+		// Only the visible form re-renders: no collapsed and expanded probes on a theme change or resize.
+		expect(resultCalls).toBe(settled + 1);
+		requestInvalidate?.();
+		component.render(80);
+		// Visible form plus the collapsed and expanded probes.
+		expect(resultCalls).toBe(settled + 4);
+	});
 
 	test("colors the first error line with the error color", () => {
 		const component = cases.find((c) => c.title === "bash error")!.build();

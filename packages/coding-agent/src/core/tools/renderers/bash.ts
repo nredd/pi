@@ -15,6 +15,11 @@ import { getTextOutput, invalidArgText, startToolTimer, str, toolTimerText } fro
 import { DEFAULT_MAX_BYTES, formatSize } from "../truncate.ts";
 
 export const BASH_UPDATE_THROTTLE_MS = 100;
+
+/** Native shell output with a cheap guarantee of detail beyond its collapsed summary. */
+export class ShellResultRenderComponent extends Container {
+	hasExpandableOutput = false;
+}
 function formatShellCall(args: { command?: string; timeout?: number } | undefined, prompt: string): string {
 	const command = str(args?.command);
 	const timeout = args?.timeout as number | undefined;
@@ -23,7 +28,7 @@ function formatShellCall(args: { command?: string; timeout?: number } | undefine
 	return theme.fg("toolTitle", theme.bold(`${prompt} ${commandDisplay}`)) + timeoutSuffix;
 }
 function rebuildBashResultRenderComponent(
-	component: Container,
+	component: ShellResultRenderComponent,
 	result: {
 		content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
 		details?: BashToolDetails;
@@ -44,6 +49,9 @@ function rebuildBashResultRenderComponent(
 		}
 	}
 
+	// Two output lines plus the call cannot fit in the two logical parts of a collapsed row.
+	// This avoids styling/rendering a large expanded body solely to decide its disclosure marker.
+	component.hasExpandableOutput = output.includes("\n");
 	if (output) {
 		if (options.expanded) {
 			const styledOutput = output
@@ -90,7 +98,8 @@ export function createShellRenderers(prompt: string): Pick<ToolDefinition<any, a
 		},
 		renderResult(result, options, _theme, context) {
 			const timerText = toolTimerText(context, options.isPartial);
-			const component = (context.lastComponent as Container | undefined) ?? new Container();
+			const component =
+				(context.lastComponent as ShellResultRenderComponent | undefined) ?? new ShellResultRenderComponent();
 			rebuildBashResultRenderComponent(component, result as any, options, context.showImages, timerText);
 			component.invalidate();
 			return component;

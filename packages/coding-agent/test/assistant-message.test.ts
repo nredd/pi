@@ -1,5 +1,6 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { Container, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import { Container, type TuiMouseEvent, visibleWidth } from "@earendil-works/pi-tui";
+import chalk from "chalk";
 import { describe, expect, test } from "vitest";
 import { AssistantMessageComponent } from "../src/modes/interactive/components/assistant-message.ts";
 import { isEntryRule } from "../src/modes/interactive/components/entry-rule.ts";
@@ -73,6 +74,60 @@ describe("AssistantMessageComponent", () => {
 
 		expect(stripAnsi(rendered)).toContain("▸ Thinking · private reasoning");
 		expect(rendered).toContain("Response was truncated before completion.");
+	});
+
+	test("renders bold in the collapsed thinking summary instead of literal asterisks", () => {
+		initTheme("dark");
+		// chalk drops bold/italic without a TTY; force colors so the SGR codes are observable.
+		const level = chalk.level;
+		chalk.level = 3;
+
+		const component = new AssistantMessageComponent(
+			createAssistantMessage([
+				{ type: "thinking", thinking: "**Evaluating commit strategy**\n\nI should look at the diff." },
+			]),
+			true,
+		);
+		const raw = component.render(80).join("\n");
+		const row = stripAnsi(raw);
+
+		expect(row).toContain("▸ Thinking · Evaluating commit strategy");
+		expect(row).not.toContain("**");
+		expect(raw).toMatch(/\x1b\[1m(?:\x1b\[[0-9;]*m)*Evaluating commit strategy/);
+		chalk.level = level;
+	});
+
+	test("truncates a bold collapsed thinking summary without leaking SGR state", () => {
+		initTheme("dark");
+		const level = chalk.level;
+		chalk.level = 3;
+		const component = new AssistantMessageComponent(
+			createAssistantMessage([
+				{ type: "thinking", thinking: "**Evaluating a very long commit strategy headline**" },
+			]),
+			true,
+		);
+		const lines = component.render(30).filter((line) => !isEntryRule(line) && stripAnsi(line).includes("Thinking"));
+		chalk.level = level;
+
+		expect(lines).toHaveLength(1);
+		expect(visibleWidth(lines[0]!)).toBeLessThanOrEqual(30);
+		expect(stripAnsi(lines[0]!)).toContain("…");
+		expect(stripAnsi(lines[0]!)).not.toContain("**");
+		expect(lines[0]).toContain("\x1b[1m");
+	});
+
+	test("keeps a bold thinking headline whole when it contains a sentence end", () => {
+		initTheme("dark");
+
+		const component = new AssistantMessageComponent(
+			createAssistantMessage([{ type: "thinking", thinking: "**Done. Really** now\nnext" }]),
+			true,
+		);
+		const row = stripAnsi(component.render(80).join("\n"));
+
+		expect(row).toContain("Thinking · Done. Really now");
+		expect(row).not.toContain("**");
 	});
 
 	test("coalesces adjacent thinking blocks into one collapsed thinking row", () => {

@@ -5,12 +5,22 @@ import { getMarkdownTheme, theme } from "../theme/theme.ts";
 import { DisclosureGutter } from "./disclosure-gutter.ts";
 import { entryRule } from "./entry-rule.ts";
 import { createMarkdownTransform } from "./markdown-transform.ts";
-import { firstSentence, OneLineRow } from "./one-line.ts";
+import { firstSentence, firstTextLine, OneLineRow, renderedContentLines } from "./one-line.ts";
 import { RuledBlock } from "./ruled-block.ts";
 
 /** `Thinking...` -> `Thinking`: the collapsed row's head, before ` · <summary>`. */
 function thinkingHead(label: string): string {
 	return label.replace(/[.\u2026\s]+$/u, "") || label;
+}
+
+/**
+ * The collapsed thinking summary: the first sentence, or the whole first line when the sentence
+ * would cut through `**bold**` (e.g. `**Done.** more`).
+ */
+function thinkingSummary(text: string): string | undefined {
+	const sentence = firstSentence(text);
+	if (sentence === undefined) return undefined;
+	return (sentence.match(/\*\*/g)?.length ?? 0) % 2 === 0 ? sentence : firstTextLine(text);
 }
 
 const OSC133_ZONE_START = "\x1b]133;A\x07";
@@ -160,8 +170,14 @@ export class AssistantMessageComponent extends Container {
 					? new OneLineRow([
 							() => dim(thinkingHead(this.hiddenThinkingLabel)),
 							() => {
-								const sentence = firstSentence(thinkingText);
-								return sentence === undefined ? undefined : dim(sentence);
+								const summary = thinkingSummary(thinkingText);
+								if (summary === undefined) return undefined;
+								// Inline Markdown (bold headlines) through the same renderer as the expanded block.
+								const rendered = new Markdown(summary, 0, 0, this.markdownTheme, {
+									color: (text: string) => theme.fg("thinkingText", text),
+									italic: true,
+								});
+								return renderedContentLines(rendered)[0] ?? dim(summary);
 							},
 						])
 					: new Markdown(

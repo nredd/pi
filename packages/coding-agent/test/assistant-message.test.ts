@@ -70,11 +70,11 @@ describe("AssistantMessageComponent", () => {
 		);
 		const rendered = component.render(80).join("\n");
 
-		expect(rendered).toContain("Thinking...");
+		expect(stripAnsi(rendered)).toContain("▸ Thinking · private reasoning");
 		expect(rendered).toContain("Response was truncated before completion.");
 	});
 
-	test("coalesces adjacent thinking blocks into one hidden thinking label", () => {
+	test("coalesces adjacent thinking blocks into one collapsed thinking row", () => {
 		initTheme("dark");
 
 		const component = new AssistantMessageComponent(
@@ -88,9 +88,10 @@ describe("AssistantMessageComponent", () => {
 		);
 		const rendered = stripAnsi(component.render(80).join("\n"));
 
-		expect(rendered.match(/Thinking\.\.\./g)).toHaveLength(1);
-		expect(rendered).toContain("▸  Thinking...");
-		expect(rendered).toContain("answer");
+		expect(rendered.match(/Thinking · /g)).toHaveLength(1);
+		expect(rendered).toContain("▸ Thinking · first thought");
+		expect(rendered).not.toContain("second thought");
+		expect(rendered).toContain("│ answer");
 	});
 
 	test("collapses individual thinking runs when clicked", () => {
@@ -124,9 +125,9 @@ describe("AssistantMessageComponent", () => {
 		expect(component.handleMouse(event)?.handled).toBe(true);
 
 		const collapsed = stripAnsi(component.render(width).join("\n"));
-		expect(collapsed).not.toContain("first reasoning");
-		expect(collapsed).toContain("▸  Thinking...");
-		expect(collapsed).toContain("second reasoning");
+		expect(collapsed).toContain("▸ Thinking · first reasoning");
+		expect(collapsed).not.toContain("▾  first reasoning");
+		expect(collapsed).toContain("▾  second reasoning");
 
 		expect(component.handleMouse({ ...event, x: 4 })?.handled).toBe(true);
 		const expandedAgain = stripAnsi(component.render(width).join("\n"));
@@ -169,7 +170,7 @@ describe("AssistantMessageComponent", () => {
 		expect(component.handleMouse(event)?.handled).toBe(true);
 
 		const collapsed = stripAnsi(component.render(width).join("\n"));
-		expect(collapsed).toContain("▸  Thinking...");
+		expect(collapsed).toContain("▸ Thinking · top reasoning");
 		expect(collapsed).not.toContain("bottom reasoning");
 		expect(collapsed).toContain("answer");
 	});
@@ -214,7 +215,7 @@ describe("AssistantMessageComponent", () => {
 			})?.handled,
 		).toBe(true);
 		const collapsed = stripAnsi(transcript.render(width).join("\n"));
-		expect(collapsed).toContain("Thinking...");
+		expect(collapsed).toContain("▸ Thinking · first line");
 		expect(collapsed).not.toContain("last line");
 	});
 
@@ -248,7 +249,7 @@ describe("AssistantMessageComponent", () => {
 
 		const width = 80;
 		const lines = transcript.render(width);
-		const headerRow = lines.findIndex((line) => stripAnsi(line).includes("Thinking..."));
+		const headerRow = lines.findIndex((line) => stripAnsi(line).includes("Thinking · hidden reasoning"));
 		expect(headerRow).toBe(0);
 
 		const event: TuiMouseEvent = {
@@ -269,10 +270,10 @@ describe("AssistantMessageComponent", () => {
 
 		const expanded = stripAnsi(transcript.render(width).join("\n"));
 		expect(expanded).toContain("▾  hidden reasoning");
-		expect(expanded).not.toContain("Thinking...");
+		expect(expanded).not.toContain("Thinking · ");
 	});
 
-	test("uses configured output padding for text and thinking", () => {
+	test("rules prose regardless of output padding and pads thinking by it", () => {
 		initTheme("dark");
 
 		const component = new AssistantMessageComponent(
@@ -287,13 +288,72 @@ describe("AssistantMessageComponent", () => {
 		);
 		const lines = component.render(80).map((line) => stripAnsi(line));
 
-		expect(lines.some((line) => line.includes(" hello"))).toBe(true);
+		expect(lines.some((line) => line.startsWith("│ hello"))).toBe(true);
 		expect(lines.some((line) => line.startsWith("▾  reasoning"))).toBe(true);
 
 		component.setOutputPad(0);
 		const updatedLines = component.render(80).map((line) => stripAnsi(line));
-		expect(updatedLines.some((line) => line.startsWith("hello"))).toBe(true);
+		expect(updatedLines.some((line) => line.startsWith("│ hello"))).toBe(true);
 		expect(updatedLines.some((line) => line.startsWith("▾ reasoning"))).toBe(true);
+	});
+
+	test("rules every prose line, blanks included, and leaves errors unruled", () => {
+		initTheme("dark");
+
+		const component = new AssistantMessageComponent(
+			createAssistantMessage([{ type: "text", text: "first paragraph\n\nsecond paragraph" }], {
+				stopReason: "error",
+			}),
+		);
+		const lines = component.render(80).map((line) => stripAnsi(line));
+		const first = lines.findIndex((line) => line.includes("first paragraph"));
+		const second = lines.findIndex((line) => line.includes("second paragraph"));
+		expect(first).toBeGreaterThanOrEqual(0);
+		expect(second).toBe(first + 2);
+		expect(lines.slice(first, second + 1).map((line) => line.trimEnd())).toEqual([
+			"│ first paragraph",
+			"│",
+			"│ second paragraph",
+		]);
+		const errorRow = lines.find((line) => line.includes("Error: Unknown error"));
+		expect(errorRow).toBeDefined();
+		expect(errorRow).not.toContain("│");
+	});
+
+	test("rules streaming prose the same as settled prose", () => {
+		initTheme("dark");
+
+		const component = new AssistantMessageComponent();
+		component.updateContent(createAssistantMessage([{ type: "text", text: "partial" }]), true);
+		const lines = component.render(80).map((line) => stripAnsi(line));
+		expect(lines.some((line) => line.startsWith("│ partial"))).toBe(true);
+	});
+
+	test("summarizes collapsed thinking with its first sentence and the configured label head", () => {
+		initTheme("dark");
+
+		const component = new AssistantMessageComponent(
+			createAssistantMessage([
+				{ type: "thinking", thinking: "Check the addon first! Then restart it.\n\nMore detail." },
+				{ type: "text", text: "answer" },
+			]),
+			true,
+			undefined,
+			"Pondering…",
+		);
+		const row = component
+			.render(120)
+			.map((line) => stripAnsi(line))
+			.find((line) => line.includes("Pondering"));
+		expect(row).toBe("▸ Pondering · Check the addon first!");
+
+		const narrow = component
+			.render(30)
+			.map((line) => stripAnsi(line))
+			.find((line) => line.includes("Pondering"));
+		expect(narrow).toBeDefined();
+		expect(narrow?.length).toBeLessThanOrEqual(30);
+		expect(narrow).toMatch(/…$/);
 	});
 
 	test("chains Markdown transformers in registration order", () => {

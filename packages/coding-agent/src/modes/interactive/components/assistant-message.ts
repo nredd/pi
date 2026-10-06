@@ -4,6 +4,13 @@ import type { MarkdownTransformer } from "../../../core/extensions/types.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
 import { DisclosureGutter } from "./disclosure-gutter.ts";
 import { createMarkdownTransform } from "./markdown-transform.ts";
+import { firstSentence, OneLineRow } from "./one-line.ts";
+import { RuledBlock } from "./ruled-block.ts";
+
+/** `Thinking...` -> `Thinking`: the collapsed row's head, before ` · <summary>`. */
+function thinkingHead(label: string): string {
+	return label.replace(/[.\u2026\s]+$/u, "") || label;
+}
 
 const OSC133_ZONE_START = "\x1b]133;A\x07";
 const OSC133_ZONE_END = "\x1b]133;B\x07";
@@ -109,12 +116,15 @@ export class AssistantMessageComponent extends Container {
 		for (let i = 0; i < message.content.length; i++) {
 			const content = message.content[i];
 			if (content.type === "text" && content.text.trim()) {
-				// Assistant text messages with no background - trim the text
+				// Assistant prose sits behind a left rule instead of a background; the rule takes the
+				// place of outputPad so it lines up with the tool rows' disclosure gutter.
 				// Set paddingY=0 to avoid extra spacing before tool executions
 				this.contentContainer.addChild(
-					new Markdown(content.text.trim(), this.outputPad, 0, this.markdownTheme, undefined, {
-						transform: createMarkdownTransform("assistant", this.isStreaming, this.markdownTransformers),
-					}),
+					new RuledBlock(
+						new Markdown(content.text.trim(), 0, 0, this.markdownTheme, undefined, {
+							transform: createMarkdownTransform("assistant", this.isStreaming, this.markdownTransformers),
+						}),
+					),
 				);
 			} else if (content.type === "thinking") {
 				const thinkingBlocks: string[] = [];
@@ -142,10 +152,19 @@ export class AssistantMessageComponent extends Container {
 
 				const runIndex = thinkingRunIndex++;
 				const hidden = this.thinkingVisibilityOverrides.get(runIndex) ?? this.hideThinkingBlock;
+				const thinkingText = thinkingBlocks.join("\n\n");
+				const dim = (text: string) => theme.italic(theme.fg("thinkingText", text));
+				// Collapsed: `Thinking · <first sentence>`, one line like a tool row.
 				const thinkingComponent = hidden
-					? new Text(theme.italic(theme.fg("thinkingText", this.hiddenThinkingLabel)), this.outputPad, 0)
+					? new OneLineRow([
+							() => dim(thinkingHead(this.hiddenThinkingLabel)),
+							() => {
+								const sentence = firstSentence(thinkingText);
+								return sentence === undefined ? undefined : dim(sentence);
+							},
+						])
 					: new Markdown(
-							thinkingBlocks.join("\n\n"),
+							thinkingText,
 							this.outputPad,
 							0,
 							this.markdownTheme,

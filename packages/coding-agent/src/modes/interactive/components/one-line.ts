@@ -37,9 +37,17 @@ function trimStartDecoration(line: string): string {
 	return current;
 }
 
-/** Returns the rows with visible text, stripped of padding and tree glyphs. */
-export function contentLines(lines: readonly string[]): string[] {
-	return lines.filter(hasVisibleText).map((line) => trimEndVisible(trimStartDecoration(line)));
+/**
+ * Returns the rows with visible text, stripped of padding and tree glyphs. Stops after `limit`
+ * rows: collapsed rows read one or two lines of children that can hold thousands, every frame.
+ */
+export function contentLines(lines: readonly string[], limit = Number.POSITIVE_INFINITY): string[] {
+	const content: string[] = [];
+	for (const line of lines) {
+		if (content.length >= limit) break;
+		if (hasVisibleText(line)) content.push(trimEndVisible(trimStartDecoration(line)));
+	}
+	return content;
 }
 
 /** Returns the last non-blank line of plain text, trimmed. */
@@ -67,12 +75,13 @@ export function firstSentence(text: string): string | undefined {
 	return match ? match[1] : line;
 }
 
-/** Renders a component unwrapped and returns its content lines. */
-export function renderedContentLines(component: Component | undefined): string[] {
-	return component ? contentLines(component.render(UNWRAPPED_RENDER_WIDTH)) : [];
+/** Renders a component unwrapped and returns its first `limit` content lines. */
+export function renderedContentLines(component: Component | undefined, limit = Number.POSITIVE_INFINITY): string[] {
+	return component ? contentLines(component.render(UNWRAPPED_RENDER_WIDTH), limit) : [];
 }
 
 const SEPARATOR_WIDTH = 3;
+const MAX_CACHED_WIDTHS = 4;
 
 /**
  * Joins parts with a muted ` · ` and truncates the row to `width` with `…`. When the row
@@ -95,23 +104,41 @@ export function joinOneLine(parts: ReadonlyArray<string | undefined>, width: num
 }
 
 /**
- * A single-row view over a settled transcript entry. Each source is resolved at render time so
- * renderers that update in place (live status, streaming output) stay current.
+ * A single-row view over a transcript entry. Each source is resolved at render time so renderers
+ * that update in place (live status, streaming output) stay current.
+ *
+ * Resolving a source renders a child component, and the TUI renders every row on every frame, so
+ * an uncached row costs O(transcript) per keystroke. Once `isSettled` reports true the row is
+ * cached per width until `invalidate()`; owners rebuild the row whenever its entry changes.
  */
 export class OneLineRow implements Component {
 	private sources: ReadonlyArray<() => string | undefined>;
+	private isSettled: () => boolean;
+	/** Rendered lines per width: owners render the row at more than one width per frame. */
+	private cached = new Map<number, string[]>();
 
-	constructor(sources: ReadonlyArray<() => string | undefined>) {
+	constructor(sources: ReadonlyArray<() => string | undefined>, isSettled: () => boolean = () => false) {
 		this.sources = sources;
+		this.isSettled = isSettled;
 	}
 
 	render(width: number): string[] {
+		const hit = this.cached.get(width);
+		if (hit) return hit;
 		const line = joinOneLine(
 			this.sources.map((source) => source()),
 			width,
 		);
-		return hasVisibleText(line) ? [line] : [];
+		const lines = hasVisibleText(line) ? [line] : [];
+		if (this.isSettled()) {
+			// Resizes add widths; keep only the latest few.
+			if (this.cached.size >= MAX_CACHED_WIDTHS) this.cached.clear();
+			this.cached.set(width, lines);
+		}
+		return lines;
 	}
 
-	invalidate(): void {}
+	invalidate(): void {
+		this.cached.clear();
+	}
 }

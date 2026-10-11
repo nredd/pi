@@ -11,6 +11,10 @@
 - Every collapsed tool row, built-in or extension, renders on one line: the call's first line, then ` · ` and the result's first line (the first error line on failure, the last output line while streaming), truncated with `…`. Images and further lines appear once expanded.
 - Extension messages with a registered renderer get the same disclosure marker and collapse to the renderer's first line until clicked or expanded with `Ctrl+O`.
 
+### Fixed
+
+- Collapsed rows no longer re-render every settled tool and thinking entry on each frame. Settled one-line rows are cached per width until invalidated, so keystrokes and the working spinner cost the same in a long session as in a new one (a 1100-entry session went from ~110 ms CPU per keystroke and 100% CPU while a tool ran to ~11 ms and 8%).
+
 ## [1.0.0] - 2026-10-01
 
 ### New Features

@@ -182,7 +182,7 @@ export class AssistantMessageComponent extends Container {
 								},
 							],
 							// A function of the captured `thinkingText` and label; `updateContent` rebuilds on change.
-							() => true,
+							true,
 						)
 					: new Markdown(
 							thinkingText,

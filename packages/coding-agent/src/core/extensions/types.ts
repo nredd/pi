@@ -469,7 +469,11 @@ export interface ToolRenderContext<TState = any, TArgs = any> {
 	args: TArgs;
 	/** Unique id for this tool execution. Stable across call/result renders for the same tool call. */
 	toolCallId: string;
-	/** Invalidate just this tool execution component for redraw. */
+	/**
+	 * Invalidate just this tool execution component for redraw. The TUI caches a settled row's
+	 * collapsed line, so a renderer whose output changes after the final result (live status, a
+	 * background run) must call this when it does; a repaint alone shows the cached line.
+	 */
 	invalidate: () => void;
 	/** Previously returned component for this render slot, if any. */
 	lastComponent: Component | undefined;
@@ -489,6 +493,12 @@ export interface ToolRenderContext<TState = any, TArgs = any> {
 	showImages: boolean;
 	/** Whether the current result is an error. */
 	isError: boolean;
+	/**
+	 * Whether this is a throwaway render the host makes to compare forms (e.g. deciding whether a
+	 * collapsed row has more to show). Its `invalidate` is a no-op and its `state` is discarded, so
+	 * start no timers, I/O, or other side effects. Absent on hosts that never probe.
+	 */
+	probe?: boolean;
 }
 
 /**

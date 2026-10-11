@@ -1,6 +1,6 @@
 import { resetCapabilitiesCache, setCapabilities, Text, type TUI, visibleWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { afterEach, beforeAll, describe, expect, test } from "vitest";
+import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import type { ToolDefinition } from "../src/core/extensions/types.ts";
 import { createBashToolDefinition } from "../src/core/tools/bash.ts";
 import { createEditToolDefinition } from "../src/core/tools/edit.ts";
@@ -339,7 +339,7 @@ describe("OneLineRow", () => {
 					return "row";
 				},
 			],
-			() => true,
+			true,
 		);
 		// Owners render at more than one width per frame; neither may evict the other.
 		for (let frame = 0; frame < 3; frame++) {
@@ -519,6 +519,44 @@ describe("collapsed tool rows", () => {
 			requestInvalidate?.();
 			expect(stripAnsi(contentRows(component, 80)[0]!)).toContain("call second");
 		});
+	});
+
+	test("marks disclosure probes so a live renderer starts one ticker, not one per re-probe", () => {
+		vi.useFakeTimers();
+		try {
+			const probes: boolean[] = [];
+			const component = new ToolExecutionComponent(
+				"live",
+				"live",
+				{},
+				{},
+				custom({
+					renderCall: () => new Text("live", 0, 0),
+					renderResult: (_result, _options, _theme, context) => {
+						probes.push(context.probe === true);
+						// A live row's ticker, as `pi-subagents` keeps one: each tick re-probes the row.
+						const state = context.state as { ticker?: ReturnType<typeof setInterval> };
+						if (!context.probe && state.ticker === undefined) {
+							state.ticker = setInterval(() => context.invalidate(), 1000);
+						}
+						return new Text("running", 0, 0);
+					},
+				}),
+				tui,
+				cwd,
+			);
+			component.updateResult(text("started"));
+			component.render(80);
+			for (let tick = 0; tick < 5; tick++) {
+				vi.advanceTimersByTime(1000);
+				component.render(80);
+			}
+			expect(probes).toContain(true);
+			expect(probes).toContain(false);
+			expect(vi.getTimerCount()).toBe(1);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	test("colors the first error line with the error color", () => {

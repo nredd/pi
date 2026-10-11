@@ -167,19 +167,23 @@ export class AssistantMessageComponent extends Container {
 				const dim = (text: string) => theme.italic(theme.fg("thinkingText", text));
 				// Collapsed: `Thinking · <first sentence>`, one line like a tool row.
 				const thinkingComponent = hidden
-					? new OneLineRow([
-							() => dim(thinkingHead(this.hiddenThinkingLabel)),
-							() => {
-								const summary = thinkingSummary(thinkingText);
-								if (summary === undefined) return undefined;
-								// Inline Markdown (bold headlines) through the same renderer as the expanded block.
-								const rendered = new Markdown(summary, 0, 0, this.markdownTheme, {
-									color: (text: string) => theme.fg("thinkingText", text),
-									italic: true,
-								});
-								return renderedContentLines(rendered)[0] ?? dim(summary);
-							},
-						])
+					? new OneLineRow(
+							[
+								() => dim(thinkingHead(this.hiddenThinkingLabel)),
+								() => {
+									const summary = thinkingSummary(thinkingText);
+									if (summary === undefined) return undefined;
+									// Inline Markdown (bold headlines) through the same renderer as the expanded block.
+									const rendered = new Markdown(summary, 0, 0, this.markdownTheme, {
+										color: (text: string) => theme.fg("thinkingText", text),
+										italic: true,
+									});
+									return renderedContentLines(rendered, 1)[0] ?? dim(summary);
+								},
+							],
+							// A function of the captured `thinkingText` and label; `updateContent` rebuilds on change.
+							() => true,
+						)
 					: new Markdown(
 							thinkingText,
 							this.outputPad,

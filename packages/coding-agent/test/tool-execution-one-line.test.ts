@@ -7,7 +7,7 @@ import { createEditToolDefinition } from "../src/core/tools/edit.ts";
 import { createReadToolDefinition } from "../src/core/tools/read.ts";
 import { createWriteToolDefinition } from "../src/core/tools/write.ts";
 import { isEntryRule } from "../src/modes/interactive/components/entry-rule.ts";
-import { firstSentence } from "../src/modes/interactive/components/one-line.ts";
+import { contentLines, firstSentence, OneLineRow } from "../src/modes/interactive/components/one-line.ts";
 import { ToolExecutionComponent } from "../src/modes/interactive/components/tool-execution.ts";
 import { initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
@@ -302,6 +302,70 @@ describe("firstSentence", () => {
 	});
 });
 
+/** A `Text` that counts its renders: how a test sees a collapsed row re-resolve its children. */
+class CountingText extends Text {
+	renders = 0;
+	private readonly read: () => string;
+	constructor(read: () => string) {
+		super(read(), 0, 0);
+		this.read = read;
+	}
+	override render(width: number): string[] {
+		this.renders++;
+		this.setText(this.read());
+		return super.render(width);
+	}
+}
+
+describe("contentLines", () => {
+	test("stops scanning once it has `limit` content rows", () => {
+		const lines = ["", "  └─ first  ", "   ", "second", "third"];
+		expect(contentLines(lines)).toEqual(["first", "second", "third"]);
+		expect(contentLines(lines, 2)).toEqual(["first", "second"]);
+	});
+});
+
+describe("OneLineRow", () => {
+	beforeAll(() => {
+		initTheme("dark");
+	});
+
+	test("caches a settled row per width until invalidated", () => {
+		let calls = 0;
+		const row = new OneLineRow(
+			[
+				() => {
+					calls++;
+					return "row";
+				},
+			],
+			() => true,
+		);
+		// Owners render at more than one width per frame; neither may evict the other.
+		for (let frame = 0; frame < 3; frame++) {
+			row.render(80);
+			row.render(78);
+		}
+		expect(calls).toBe(2);
+		row.invalidate();
+		row.render(80);
+		expect(calls).toBe(3);
+	});
+
+	test("re-resolves a live row on every render", () => {
+		let calls = 0;
+		const row = new OneLineRow([
+			() => {
+				calls++;
+				return "row";
+			},
+		]);
+		row.render(80);
+		row.render(80);
+		expect(calls).toBe(2);
+	});
+});
+
 describe("collapsed tool rows", () => {
 	beforeAll(() => {
 		initTheme("dark");
@@ -397,6 +461,64 @@ describe("collapsed tool rows", () => {
 		component.render(80);
 		// Visible form plus the collapsed and expanded probes.
 		expect(resultCalls).toBe(settled + 4);
+	});
+
+	describe("frame cost", () => {
+		let label = "first";
+		let call: CountingText;
+		let result: CountingText;
+		let requestInvalidate: (() => void) | undefined;
+		const build = () => {
+			label = "first";
+			requestInvalidate = undefined;
+			call = new CountingText(() => `call ${label}`);
+			result = new CountingText(() => `result ${label}`);
+			return new ToolExecutionComponent(
+				"probe",
+				"frames",
+				{},
+				{},
+				custom({
+					renderCall: () => call,
+					renderResult: (_result, _options, _theme, context) => {
+						// The first render is the visible one; later disclosure probes get a no-op `invalidate`.
+						requestInvalidate ??= context.invalidate;
+						return result;
+					},
+				}),
+				tui,
+				cwd,
+			);
+		};
+		const childRenders = () => call.renders + result.renders;
+
+		test("a settled row does not re-render its children on later frames", () => {
+			const component = build();
+			component.updateResult(text("x"));
+			component.render(80);
+			const settled = childRenders();
+			for (let frame = 0; frame < 5; frame++) component.render(80);
+			// Every frame used to re-render and re-strip each child: O(transcript) per keystroke.
+			expect(childRenders()).toBe(settled);
+		});
+
+		test("a streaming row re-renders its children every frame", () => {
+			const component = build();
+			component.updateResult(text("x"), true);
+			component.render(80);
+			const first = childRenders();
+			component.render(80);
+			expect(childRenders()).toBeGreaterThan(first);
+		});
+
+		test("a renderer-requested invalidate refreshes a settled row", () => {
+			const component = build();
+			component.updateResult(text("x"));
+			expect(stripAnsi(contentRows(component, 80)[0]!)).toContain("call first");
+			label = "second";
+			requestInvalidate?.();
+			expect(stripAnsi(contentRows(component, 80)[0]!)).toContain("call second");
+		});
 	});
 
 	test("colors the first error line with the error color", () => {

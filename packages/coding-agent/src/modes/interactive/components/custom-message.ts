@@ -81,7 +81,7 @@ export class CustomMessageComponent extends Container {
 				);
 				if (component) {
 					// Custom renderer provides its own styled component
-					const body = this._expanded ? component : new OneLineRow([() => renderedContentLines(component)[0]]);
+					const body = this._expanded ? component : new OneLineRow([() => renderedContentLines(component, 1)[0]]);
 					this.customComponent = new DisclosureGutter(
 						body,
 						() => this._expanded,

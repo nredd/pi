@@ -222,6 +222,11 @@
 ### Fixed
 
 - Collapsed rows no longer re-render every settled tool and thinking entry on each frame. Settled one-line rows are cached per width until invalidated, so keystrokes and the working spinner cost the same in a long session as in a new one (a 1100-entry session went from ~110 ms CPU per keystroke and 100% CPU while a tool ran to ~11 ms and 8%).
+- Disclosure probes no longer start renderer side effects. Probe renders carry `context.probe: true`, which the `edit` renderer uses to skip its diff, replacing the special case that probed only `edit` with `argsComplete: false`. Live-row tickers that ignored it started two more timers per tick.
+
+### Added
+
+- `ToolRenderContext.probe` marks a throwaway render: no timers or I/O. `docs/tui.md` now states that a renderer whose output changes after the final result must call `context.invalidate()`, since settled rows are cached.
 
 ## [1.0.0] - 2026-10-01
 

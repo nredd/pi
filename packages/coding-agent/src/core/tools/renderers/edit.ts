@@ -215,7 +215,8 @@ export const editRenderers: Pick<ToolDefinition<any, any>, "renderCall" | "rende
 			component.settledError = false;
 		}
 
-		if (context.argsComplete && previewInput && !component.preview && !component.previewPending) {
+		// A probe's state is discarded, so its diff would be wasted I/O.
+		if (!context.probe && context.argsComplete && previewInput && !component.preview && !component.previewPending) {
 			component.previewPending = true;
 			const requestKey = argsKey;
 			void computeEditsDiff(previewInput.path, previewInput.edits, context.cwd).then((preview) => {

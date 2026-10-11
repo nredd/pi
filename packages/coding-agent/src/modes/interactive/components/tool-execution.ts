@@ -17,7 +17,6 @@ export type { ToolRenderers };
 
 import { formatToolCallWithArgs, getTextOutput as getRenderedTextOutput } from "../../../core/tools/render-utils.ts";
 import { ShellResultRenderComponent } from "../../../core/tools/renderers/bash.ts";
-import { editRenderers } from "../../../core/tools/renderers/edit.ts";
 import { ensurePngTranscoder } from "../../../utils/image-convert.ts";
 import { theme } from "../theme/theme.ts";
 import { DisclosureGutter } from "./disclosure-gutter.ts";
@@ -149,11 +148,11 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	/**
-	 * `probeState` marks a throwaway render: it gets its own renderer state and a no-op `invalidate`,
-	 * because stateful renderers such as `edit` mutate and reuse their components and must not see a
-	 * probe's expanded form. Flags stay honest, with one exception: the built-in `edit` renderer starts a
-	 * background diff of the file on `argsComplete`, pure wasted I/O for a probe whose settled result
-	 * already carries the diff, so only that renderer is probed with `argsComplete=false`.
+	 * `probeState` marks a throwaway render: it gets its own renderer state, a no-op `invalidate`, and
+	 * `probe: true`, because stateful renderers such as `edit` mutate and reuse their components and
+	 * must not see a probe's expanded form. Renderers skip side effects (the `edit` diff, live-row
+	 * tickers) on a probe: each renderer-requested invalidate re-probes, so a ticker started there
+	 * would multiply.
 	 */
 	private getRenderContext(
 		lastComponent: Component | undefined,
@@ -175,13 +174,14 @@ export class ToolExecutionComponent extends Container {
 			state: probeState ?? this.rendererState,
 			cwd: this.cwd,
 			executionStarted: this.executionStarted,
-			argsComplete: this.argsComplete && !(probeState && this.isBuiltInEdit()),
+			argsComplete: this.argsComplete,
 			isPartial: this.isPartial,
 			expanded,
 			showImages: this.showImages,
 			isError: this.result?.isError ?? false,
 			durationMs: this.isPartial ? undefined : this.result?.durationMs,
 			outputPad: this.outputPad,
+			probe: probeState !== undefined,
 		};
 	}
 
@@ -382,7 +382,7 @@ export class ToolExecutionComponent extends Container {
 						() => this.getCollapsedResultLine(renderedContentLines(callComponent, 2)[1], resultComponent),
 					],
 					// Every state change rebuilds this row through `updateDisplay`; only live renderers change in place.
-					() => this.result !== undefined && !this.isPartial,
+					this.result !== undefined && !this.isPartial,
 				);
 				renderContainer.addChild(this.collapsedRow);
 				hasContent = true;
@@ -502,10 +502,6 @@ export class ToolExecutionComponent extends Container {
 	 * are rendered unwrapped and compared line by line (plain text), so the verdict is independent of
 	 * terminal width. Running entries and entries with images always toggle: more output may arrive.
 	 */
-	private isBuiltInEdit(): boolean {
-		return this.toolDefinition?.renderCall === editRenderers.renderCall;
-	}
-
 	private hasExpandableDetail(): boolean {
 		this.expandableDetail ??= this.computeExpandableDetail();
 		return this.expandableDetail;

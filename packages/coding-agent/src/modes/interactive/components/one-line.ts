@@ -108,18 +108,18 @@ export function joinOneLine(parts: ReadonlyArray<string | undefined>, width: num
  * that update in place (live status, streaming output) stay current.
  *
  * Resolving a source renders a child component, and the TUI renders every row on every frame, so
- * an uncached row costs O(transcript) per keystroke. Once `isSettled` reports true the row is
- * cached per width until `invalidate()`; owners rebuild the row whenever its entry changes.
+ * an uncached row costs O(transcript) per keystroke. A `settled` row is cached per width until
+ * `invalidate()`; owners rebuild the row whenever its entry changes.
  */
 export class OneLineRow implements Component {
 	private sources: ReadonlyArray<() => string | undefined>;
-	private isSettled: () => boolean;
+	private settled: boolean;
 	/** Rendered lines per width: owners render the row at more than one width per frame. */
 	private cached = new Map<number, string[]>();
 
-	constructor(sources: ReadonlyArray<() => string | undefined>, isSettled: () => boolean = () => false) {
+	constructor(sources: ReadonlyArray<() => string | undefined>, settled = false) {
 		this.sources = sources;
-		this.isSettled = isSettled;
+		this.settled = settled;
 	}
 
 	render(width: number): string[] {
@@ -130,7 +130,7 @@ export class OneLineRow implements Component {
 			width,
 		);
 		const lines = hasVisibleText(line) ? [line] : [];
-		if (this.isSettled()) {
+		if (this.settled) {
 			// Resizes add widths; keep only the latest few.
 			if (this.cached.size >= MAX_CACHED_WIDTHS) this.cached.clear();
 			this.cached.set(width, lines);

@@ -376,10 +376,14 @@ export class ToolExecutionComponent extends Container {
 			const callComponent = this.renderCallComponent(!collapsed);
 			const resultComponent = this.renderResultComponent(!collapsed);
 			if (collapsed) {
-				this.collapsedRow = new OneLineRow([
-					() => renderedContentLines(callComponent)[0],
-					() => this.getCollapsedResultLine(renderedContentLines(callComponent)[1], resultComponent),
-				]);
+				this.collapsedRow = new OneLineRow(
+					[
+						() => renderedContentLines(callComponent, 1)[0],
+						() => this.getCollapsedResultLine(renderedContentLines(callComponent, 2)[1], resultComponent),
+					],
+					// Every state change rebuilds this row through `updateDisplay`; only live renderers change in place.
+					() => this.result !== undefined && !this.isPartial,
+				);
 				renderContainer.addChild(this.collapsedRow);
 				hasContent = true;
 			} else {
@@ -517,7 +521,7 @@ export class ToolExecutionComponent extends Container {
 		const collapsedCallComponent = this.renderCallComponent(false, collapsedState);
 		const collapsedResult = this.renderResultComponent(false, collapsedState);
 		if (collapsedResult instanceof ShellResultRenderComponent && collapsedResult.hasExpandableOutput) return true;
-		const collapsedCall = renderedContentLines(collapsedCallComponent);
+		const collapsedCall = renderedContentLines(collapsedCallComponent, 2);
 		// Multiset, not set: expanded `same\nsame` against a collapsed `same` is extra detail.
 		const remaining = new Map<string, number>();
 		const collapsedParts = [collapsedCall[0], this.getCollapsedResultLine(collapsedCall[1], collapsedResult)];
@@ -550,7 +554,7 @@ export class ToolExecutionComponent extends Container {
 			const errorLine = firstTextLine(output);
 			if (errorLine) return theme.fg("error", errorLine);
 		}
-		const rendered = renderedContentLines(resultComponent)[0];
+		const rendered = renderedContentLines(resultComponent, 1)[0];
 		if (rendered) return rendered;
 		if (this.isPartial) {
 			const lastLine = lastTextLine(output);

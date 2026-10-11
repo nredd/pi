@@ -219,6 +219,10 @@
 
 - Removed `npm-shrinkwrap.json` from the published package. npm installations no longer pin transitive dependencies, and library consumers can now override them. Use the pi.dev installer for pinned installations ([#5653](https://github.com/earendil-works/pi/issues/5653))
 
+### Fixed
+
+- Collapsed rows no longer re-render every settled tool and thinking entry on each frame. Settled one-line rows are cached per width until invalidated, so keystrokes and the working spinner cost the same in a long session as in a new one (a 1100-entry session went from ~110 ms CPU per keystroke and 100% CPU while a tool ran to ~11 ms and 8%).
+
 ## [1.0.0] - 2026-10-01
 
 ### New Features

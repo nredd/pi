@@ -202,6 +202,18 @@ interface FlatSessionNode {
 	ancestorContinues: boolean[];
 }
 
+/** pi-subagents names child sessions `<agent>#<first 8 hex of the agent id>`. */
+const SUBAGENT_SESSION_NAME = /^.+#[0-9a-f]{8}$/;
+
+/**
+ * Subagent child sessions are spawn output, not conversations to resume: they
+ * carry a parent link plus the `<agent>#<id>` name. User forks have a parent
+ * link but never that name, so they stay listed.
+ */
+export function isSubagentSession(session: SessionInfo): boolean {
+	return session.parentSessionPath !== undefined && SUBAGENT_SESSION_NAME.test(session.name ?? "");
+}
+
 /**
  * Build a tree structure from sessions based on parentSessionPath.
  * Returns root nodes sorted by modified date (descending).
@@ -374,8 +386,8 @@ class SessionList implements Component, Focusable {
 
 	private filterSessions(query: string): void {
 		const trimmed = query.trim();
-		const nameFiltered =
-			this.nameFilter === "all" ? this.allSessions : this.allSessions.filter((session) => hasSessionName(session));
+		const topLevel = this.allSessions.filter((session) => !isSubagentSession(session));
+		const nameFiltered = this.nameFilter === "all" ? topLevel : topLevel.filter((session) => hasSessionName(session));
 
 		if (this.sortMode === "threaded" && !trimmed) {
 			// Threaded mode without search: show tree structure

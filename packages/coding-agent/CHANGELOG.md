@@ -1,5 +1,25 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- Settled tool blocks and all thinking blocks show a `▸`/`▾` disclosure marker in both TUI modes, and clicking anywhere in the block toggles it in fullscreen mode. Clicks on still-streaming tools are ignored, and modified clicks, drag selection, and links keep their behavior.
+- Collapsed built-in `bash`, `edit`, `write`, `grep`, `find`, and `ls` results show a one-line summary instead of an output preview.
+- Transcript framing: a dashed `┄` rule separates entries instead of a blank line, a solid `─` rule opens every user turn after the first, assistant prose carries a `│` rule in `borderAccent` (replacing its `outputPad` indent), and collapsed thinking rows read `Thinking · <first sentence>`.
+- Running tool rows carry the disclosure marker and toggle like settled ones, showing the output streamed so far when expanded.
+- Every collapsed tool row, built-in or extension, renders on one line: the call's first line, then ` · ` and the result's first line (the first error line on failure, the last output line while streaming), truncated with `…`. Images and further lines appear once expanded.
+- Extension messages with a registered renderer get the same disclosure marker and collapse to the renderer's first line until clicked or expanded with `Ctrl+O`.
+
+### Fixed
+
+- Collapsed rows no longer re-render every settled tool and thinking entry on each frame. Settled one-line rows are cached per width until invalidated, so keystrokes and the working spinner cost the same in a long session as in a new one (a 1100-entry session went from ~110 ms CPU per keystroke and 100% CPU while a tool ran to ~11 ms and 8%).
+- Disclosure probes no longer start renderer side effects. Probe renders carry `context.probe: true`, which the `edit` renderer uses to skip its diff, replacing the special case that probed only `edit` with `argsComplete: false`. Live-row tickers that ignored it started two more timers per tick.
+
+### Added
+
+- `ToolRenderContext.probe` marks a throwaway render: no timers or I/O. `docs/tui.md` now states that a renderer whose output changes after the final result must call `context.invalidate()`, since settled rows are cached.
+
 ## [1.2.0] - 2026-10-12
 
 ### New Features

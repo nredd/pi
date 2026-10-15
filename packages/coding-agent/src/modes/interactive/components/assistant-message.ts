@@ -8,11 +8,6 @@ import { createMarkdownTransform } from "./markdown-transform.ts";
 import { firstSentence, firstTextLine, OneLineRow, renderedContentLines } from "./one-line.ts";
 import { RuledBlock } from "./ruled-block.ts";
 
-/** `Thinking...` -> `Thinking`: the collapsed row's head, before ` · <summary>`. */
-function thinkingHead(label: string): string {
-	return label.replace(/[.\u2026\s]+$/u, "") || label;
-}
-
 /**
  * The collapsed thinking summary: the first sentence, or the whole first line when the sentence
  * would cut through `**bold**` (e.g. `**Done.** more`).
@@ -169,7 +164,8 @@ export class AssistantMessageComponent extends Container {
 				const thinkingComponent = hidden
 					? new OneLineRow(
 							[
-								() => dim(thinkingHead(this.hiddenThinkingLabel)),
+								// `Thinking...` -> `Thinking`: the collapsed row's head, before ` · <summary>`.
+								() => dim(this.hiddenThinkingLabel.replace(/[.\u2026\s]+$/u, "") || this.hiddenThinkingLabel),
 								() => {
 									const summary = thinkingSummary(thinkingText);
 									if (summary === undefined) return undefined;

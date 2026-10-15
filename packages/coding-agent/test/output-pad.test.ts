@@ -22,11 +22,14 @@ const tool: ToolDefinition = {
 
 type OutputPaddedComponent = Component & { setOutputPad(outputPad: number): void };
 
+/** Width of the disclosure gutter that tool rows reserve ahead of `outputPad` (nredd fork). */
+const DISCLOSURE_GUTTER = 2;
+
 /** Text lines without ANSI codes or trailing fill. Blank lines and full-width borders are skipped. */
-function renderLines(component: Component): string[] {
+function renderLines(component: Component, gutter = 0): string[] {
 	return component
 		.render(60)
-		.map((line) => stripAnsi(line).trimEnd())
+		.map((line) => stripAnsi(line).slice(gutter).trimEnd())
 		.filter((line) => /[\w$(]/.test(line));
 }
 
@@ -36,7 +39,7 @@ function createTool(definition: ToolDefinition | undefined, outputPad: number): 
 	return component;
 }
 
-const components: Array<{ name: string; create: (outputPad: number) => OutputPaddedComponent }> = [
+const components: Array<{ name: string; gutter?: number; create: (outputPad: number) => OutputPaddedComponent }> = [
 	{
 		name: "bash execution",
 		create: (outputPad) => {
@@ -46,10 +49,15 @@ const components: Array<{ name: string; create: (outputPad: number) => OutputPad
 			return component;
 		},
 	},
-	{ name: "tool execution", create: (outputPad) => createTool(tool, outputPad) },
-	{ name: "tool execution without a definition", create: (outputPad) => createTool(undefined, outputPad) },
+	{ name: "tool execution", gutter: DISCLOSURE_GUTTER, create: (outputPad) => createTool(tool, outputPad) },
+	{
+		name: "tool execution without a definition",
+		gutter: DISCLOSURE_GUTTER,
+		create: (outputPad) => createTool(undefined, outputPad),
+	},
 	{
 		name: "self-rendered edit result",
+		gutter: DISCLOSURE_GUTTER,
 		create: (outputPad) => {
 			const component = new ToolExecutionComponent(
 				"edit",
@@ -84,11 +92,11 @@ describe("outputPad", () => {
 		ui.stop();
 	});
 
-	test.each(components)("$name renders at outputPad 0 and 1", ({ create }) => {
+	test.each(components)("$name renders at outputPad 0 and 1", ({ create, gutter }) => {
 		const component = create(0);
-		const lines = renderLines(component);
+		const lines = renderLines(component, gutter);
 		expect(lines.filter((line) => line.startsWith(" "))).toEqual([]);
 		component.setOutputPad(1);
-		expect(renderLines(component)).toEqual(lines.map((line) => ` ${line}`));
+		expect(renderLines(component, gutter)).toEqual(lines.map((line) => ` ${line}`));
 	});
 });

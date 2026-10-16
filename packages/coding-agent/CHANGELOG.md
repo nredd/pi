@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fullscreen copy-on-select rejoins soft-wrapped rows (no stray newlines inside paragraphs or URLs) and leaves the `│` transcript rule and disclosure gutter out of copied text. Clicking a plain-text URL that wraps across rows opens the whole URL.
+
 ### Changed
 
 - Settled tool blocks and all thinking blocks show a `▸`/`▾` disclosure marker in both TUI modes, and clicking anywhere in the block toggles it in fullscreen mode. Modified clicks, drag selection, and links keep their behavior.

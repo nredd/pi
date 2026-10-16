@@ -1,4 +1,10 @@
-import { type Component, MouseRegion, stripTerminalSequences, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import {
+	type Component,
+	copyGutterEndMarker,
+	MouseRegion,
+	stripTerminalSequences,
+	type TuiMouseEvent,
+} from "@earendil-works/pi-tui";
 
 const GUTTER_WIDTH = 2;
 
@@ -30,7 +36,7 @@ export class DisclosureGutter implements Component {
 		const markerLine = Math.max(0, firstContentLine);
 		return lines.map((line, index) => {
 			const marker = index === markerLine && expanded !== undefined ? (expanded ? "▾" : "▸") : " ";
-			return `${marker} ${line}`;
+			return `${marker} ${copyGutterEndMarker()}${line}`;
 		});
 	}
 

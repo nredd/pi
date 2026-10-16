@@ -50,10 +50,13 @@ import {
 } from "./tui.ts";
 import {
 	extractAnsiCode,
+	getCopyRowInfo,
 	getGraphemeCellRange,
 	getOsc8LinkAtColumn,
 	getWordSegmenter,
+	setCopyMarkersEnabled,
 	sliceByColumn,
+	stripCopyMarkers,
 	stripTerminalSequences,
 	truncateToWidth,
 	visibleWidth,
@@ -90,6 +93,9 @@ interface CachedKittyImage {
 	transmissionBytes: number;
 	estimatedDecodedBytes: number;
 }
+
+const PLAIN_URL_PATTERN = /https?:\/\/[^\s<>"'`]+/g;
+const PLAIN_URL_TRAILING_PUNCTUATION = /[.,;:!?)\]}]+$/;
 
 interface SelectionPoint {
 	row: number;
@@ -261,6 +267,8 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		options: TuiAltScreenOptions = {},
 	) {
 		super(terminal, showHardwareCursor, logDirectory);
+		// Selection and URL clicks need to know which rows are soft wraps and gutters; markers are stripped on output.
+		setCopyMarkersEnabled(true);
 		this.implicitDocument = {
 			render: (width) => super.render(width),
 			handleMouse: (event) => super.handleMouse(event),
@@ -410,7 +418,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		} else {
 			const width = Math.max(1, this.terminal.columns);
 			const documentLines = this.resolveFakeCursors(this.render(width)).map((line) =>
-				line.replace(OSC133_ZONE_PREFIX, ""),
+				stripCopyMarkers(line.replace(OSC133_ZONE_PREFIX, "")),
 			);
 			this.lastDocument = this.applyLineResets(documentLines.map((line) => line.replaceAll(CURSOR_MARKER, ""))).map(
 				(line) => (isImageLine(line) || visibleWidth(line) <= width ? line : sliceByColumn(line, 0, width, true)),
@@ -1178,6 +1186,44 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		return this.previousScreen[point.row] ?? "";
 	}
 
+	/**
+	 * Find a plain-text URL under a click, rejoining rows that were soft-wrapped. Rendered OSC 8 links are
+	 * handled separately; this covers URLs printed as text, which terminals cannot click while the
+	 * application owns the mouse.
+	 */
+	private getPlainUrlAt(point: SelectionPoint): string | undefined {
+		const rowAt = (row: number): string => this.getSelectionSourceLine({ ...point, row });
+		const rowCount =
+			point.scrollView && this.currentLayout
+				? (getScrollViewBox(this.currentLayout, point.scrollView)?.scrollContentLines?.length ?? 0)
+				: this.previousScreen.length;
+		let first = point.row;
+		while (first > 0 && getCopyRowInfo(rowAt(first)).join !== "none") first--;
+		let text = "";
+		let clickIndex = -1;
+		for (let row = first; row < rowCount; row++) {
+			const line = rowAt(row);
+			const info = getCopyRowInfo(line);
+			if (row > first) {
+				if (info.join === "none") break;
+				if (info.join === "space") text += " ";
+			}
+			const visible = (start: number, length: number): string =>
+				stripTerminalSequences(sliceByColumn(line, start, length, true));
+			if (row === point.row) {
+				const before = Math.max(0, point.col - info.gutterEnd);
+				clickIndex = text.length + visible(info.gutterEnd, before).length;
+			}
+			text += visible(info.gutterEnd, Math.max(0, visibleWidth(line) - info.gutterEnd)).trimEnd();
+		}
+		if (clickIndex < 0) return undefined;
+		for (const match of text.matchAll(PLAIN_URL_PATTERN)) {
+			const url = match[0].replace(PLAIN_URL_TRAILING_PUNCTUATION, "");
+			if (clickIndex >= match.index && clickIndex < match.index + url.length) return url;
+		}
+		return undefined;
+	}
+
 	private getWordSelection(point: SelectionPoint): SelectionRange | undefined {
 		const line = stripTerminalSequences(this.getSelectionSourceLine(point));
 		const segments: Array<{ start: number; end: number; selectable: boolean; joiner: boolean }> = [];
@@ -1396,10 +1442,10 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		this.selectionDragged = false;
 		this.pressedUrl = range
 			? undefined
-			: getOsc8LinkAtColumn(
+			: (getOsc8LinkAtColumn(
 					this.previousScreen[Math.max(0, Math.min(this.terminal.rows - 1, event.y))] ?? "",
 					Math.max(0, Math.min(this.terminal.columns - 1, event.x)),
-				);
+				) ?? this.getPlainUrlAt(anchor));
 		this.requestRender();
 	}
 
@@ -1451,17 +1497,22 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 			if (!box?.scrollContentLines) return undefined;
 			sourceLines = box.scrollContentLines;
 		}
-		const lines: string[] = [];
+		// Rows are copied as the text they were rendered from: decorative gutters are skipped and rows
+		// that only exist because of soft wrapping are rejoined instead of split with a newline.
+		let text = "";
 		for (let row = selection.start.row; row <= selection.end.row; row++) {
 			const line = sourceLines[row] ?? "";
-			const columns = this.getSelectionColumns(line, row, selection);
-			lines.push(
-				stripTerminalSequences(
-					sliceByColumn(line, columns.start, Math.max(0, columns.end - columns.start), true),
-				).trimEnd(),
-			);
+			const info = getCopyRowInfo(line);
+			const columns = this.getSelectionColumns(line, row, selection, info.gutterEnd);
+			let rowText = stripTerminalSequences(
+				sliceByColumn(line, columns.start, Math.max(0, columns.end - columns.start), true),
+			).trimEnd();
+			if (row > selection.start.row) {
+				text += info.join === "none" ? "\n" : info.join === "space" ? " " : "";
+				if (info.join === "space") rowText = rowText.trimStart();
+			}
+			text += rowText;
 		}
-		const text = lines.join("\n");
 		return text.length === 0 ? undefined : text;
 	}
 
@@ -1691,7 +1742,9 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 			nextLayout = renderLayoutFrame(root, width, height, () => this.requestRender());
 		}
 		// Resolve fake cursors before highlighting and compositing, which only track SGR codes
-		let screen = this.resolveFakeCursors(nextLayout.lines.map((line) => line.replace(OSC133_ZONE_PREFIX, "")));
+		let screen = this.resolveFakeCursors(
+			nextLayout.lines.map((line) => stripCopyMarkers(line.replace(OSC133_ZONE_PREFIX, ""))),
+		);
 		screen = this.applySearchHighlights(screen, nextLayout);
 		screen = this.compositeScrollToEndIndicator(screen, nextLayout, width);
 		screen = this.compositeOverlays(screen, width, height);

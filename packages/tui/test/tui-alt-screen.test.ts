@@ -22,7 +22,7 @@ import {
 } from "../src/terminal-image.ts";
 import { renderFakeCursor, type TuiMouseEvent } from "../src/tui.ts";
 import { TuiAltScreen } from "../src/tui-alt-screen.ts";
-import { stripTerminalSequences, visibleWidth } from "../src/utils.ts";
+import { copyGutterEndMarker, stripTerminalSequences, visibleWidth } from "../src/utils.ts";
 import { VirtualTerminal } from "./virtual-terminal.ts";
 
 const OSC133_ZONE_START = "\x1b]133;A\x07";
@@ -1407,6 +1407,80 @@ describe("TuiAltScreen", () => {
 		);
 		assert.ok(terminal.getViewport().some((line) => line.includes("Copied!")));
 
+		tui.stop();
+	});
+
+	it("copies soft-wrapped text without newlines and skips the gutter", async () => {
+		const terminal = new RecordingTerminal(14, 6);
+		const copied: string[] = [];
+		const tui = new TuiAltScreen(terminal, undefined, undefined, {
+			copySelection: async (text) => {
+				copied.push(text);
+				return true;
+			},
+		});
+		const gutter = {
+			render: (width: number) =>
+				new Text("alpha beta gamma delta\nsecond", 0, 0)
+					.render(width - 2)
+					.map((line) => `| ${copyGutterEndMarker()}${line}`),
+			invalidate: () => {},
+		};
+		tui.addChild(gutter);
+		tui.start();
+		await terminal.waitForRender();
+
+		terminal.sendInput("\x1b[<0;1;1M");
+		terminal.sendInput("\x1b[<32;8;3M");
+		terminal.sendInput("\x1b[<0;8;3m");
+		await terminal.waitForRender();
+
+		assert.deepStrictEqual(copied, ["alpha beta gamma delta\nsecond"]);
+		assert.ok(terminal.getViewport()[1]?.startsWith("| gamma delta"), "markers must not reach the terminal");
+		tui.stop();
+	});
+
+	it("copies a mid-word wrapped URL as one line", async () => {
+		const terminal = new RecordingTerminal(12, 4);
+		const copied: string[] = [];
+		const tui = new TuiAltScreen(terminal, undefined, undefined, {
+			copySelection: async (text) => {
+				copied.push(text);
+				return true;
+			},
+		});
+		tui.addChild(new Text("https://example.com/a/long/path", 0, 0));
+		tui.start();
+		await terminal.waitForRender();
+
+		terminal.sendInput("\x1b[<0;1;1M");
+		terminal.sendInput("\x1b[<32;12;3M");
+		terminal.sendInput("\x1b[<0;12;3m");
+		await terminal.waitForRender();
+
+		assert.deepStrictEqual(copied, ["https://example.com/a/long/path"]);
+		tui.stop();
+	});
+
+	it("opens a plain-text URL that wraps across rows from any row", async () => {
+		const terminal = new RecordingTerminal(12, 4);
+		const openedUrls: string[] = [];
+		const tui = new TuiAltScreen(terminal, undefined, undefined, {
+			openUrl: (url) => openedUrls.push(url),
+		});
+		tui.addChild(new Text("see https://example.com/a/long/path.", 0, 0));
+		tui.start();
+		await terminal.waitForRender();
+
+		terminal.sendInput("\x1b[<0;3;3M");
+		terminal.sendInput("\x1b[<0;3;3m");
+		await terminal.waitForRender();
+		assert.deepStrictEqual(openedUrls, ["https://example.com/a/long/path"]);
+
+		terminal.sendInput("\x1b[<0;2;1M");
+		terminal.sendInput("\x1b[<0;2;1m");
+		await terminal.waitForRender();
+		assert.deepStrictEqual(openedUrls, ["https://example.com/a/long/path"], "plain word is not a URL");
 		tui.stop();
 	});
 

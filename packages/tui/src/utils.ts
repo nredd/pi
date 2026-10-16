@@ -897,6 +897,50 @@ export function flattenLines(lines: readonly string[]): void {
 	for (const line of lines) Number(line);
 }
 
+/**
+ * Zero-width APC markers that describe how rendered rows map back to the text they came from. Fullscreen
+ * selection and URL clicks read them from the unstripped layout lines; the renderer removes them before
+ * anything reaches the terminal. They are only emitted after `setCopyMarkersEnabled(true)`.
+ */
+const COPY_JOIN_SPACE = "\x1b_pi:ws\x07";
+const COPY_JOIN_HARD = "\x1b_pi:wh\x07";
+const COPY_GUTTER_END = "\x1b_pi:ge\x07";
+const COPY_MARKER_PATTERN = /\x1b_pi:(?:ws|wh|ge)\x07/g;
+let copyMarkersEnabled = false;
+
+/** Turn copy-marker emission on or off. The fullscreen renderer enables it; regular mode never does. */
+export function setCopyMarkersEnabled(enabled: boolean): void {
+	copyMarkersEnabled = enabled;
+}
+
+/** Marker a decorative row prefix (e.g. the `│ ` rule) ends with, so copy can skip it. Empty when disabled. */
+export function copyGutterEndMarker(): string {
+	return copyMarkersEnabled ? COPY_GUTTER_END : "";
+}
+
+/** Remove copy markers from a rendered line before it is written to a terminal. */
+export function stripCopyMarkers(line: string): string {
+	return line.includes("\x1b_pi:") ? line.replace(COPY_MARKER_PATTERN, "") : line;
+}
+
+/** How a row continues the one above it: not at all, after a dropped space, or mid-word. */
+export type CopyRowJoin = "none" | "space" | "hard";
+
+export interface CopyRowInfo {
+	/** Visible columns taken by a decorative prefix; selection never copies them. */
+	gutterEnd: number;
+	join: CopyRowJoin;
+}
+
+/** Read the copy markers of one rendered row. */
+export function getCopyRowInfo(line: string): CopyRowInfo {
+	if (!line.includes("\x1b_pi:")) return { gutterEnd: 0, join: "none" };
+	const gutterIndex = line.lastIndexOf(COPY_GUTTER_END);
+	const gutterEnd = gutterIndex < 0 ? 0 : visibleWidth(line.slice(0, gutterIndex));
+	const join: CopyRowJoin = line.includes(COPY_JOIN_HARD) ? "hard" : line.includes(COPY_JOIN_SPACE) ? "space" : "none";
+	return { gutterEnd, join };
+}
+
 export function wrapTextWithAnsi(text: string, width: number): string[] {
 	if (!text) {
 		return [""];
@@ -933,6 +977,9 @@ function wrapSingleLine(line: string, width: number): string[] {
 	}
 
 	const wrapped: string[] = [];
+	// How each wrapped row continues the previous one; only read when copy markers are enabled.
+	const joins: CopyRowJoin[] = [];
+	let pendingJoin: CopyRowJoin = "none";
 	const tracker = new AnsiCodeTracker();
 	const tokens = splitIntoTokensWithAnsi(line);
 
@@ -952,6 +999,8 @@ function wrapSingleLine(line: string, width: number): string[] {
 					currentLine += lineEndReset;
 				}
 				wrapped.push(currentLine);
+				joins.push(pendingJoin);
+				pendingJoin = "space";
 				currentLine = "";
 				currentVisibleLength = 0;
 			}
@@ -960,6 +1009,8 @@ function wrapSingleLine(line: string, width: number): string[] {
 			const broken = breakLongWord(token, width, tracker);
 			for (let i = 0; i < broken.length - 1; i++) {
 				wrapped.push(broken[i]!);
+				joins.push(pendingJoin);
+				pendingJoin = "hard";
 			}
 			currentLine = broken[broken.length - 1];
 			currentVisibleLength = visibleWidth(currentLine);
@@ -977,6 +1028,8 @@ function wrapSingleLine(line: string, width: number): string[] {
 				lineToWrap += lineEndReset;
 			}
 			wrapped.push(lineToWrap);
+			joins.push(pendingJoin);
+			pendingJoin = "space";
 			if (isWhitespace) {
 				// Don't start new line with whitespace
 				currentLine = tracker.getActiveCodes();
@@ -997,10 +1050,16 @@ function wrapSingleLine(line: string, width: number): string[] {
 	if (currentLine) {
 		// No reset at end of final line - let caller handle it
 		wrapped.push(currentLine);
+		joins.push(pendingJoin);
 	}
 
 	// Trailing whitespace can cause lines to exceed the requested width
-	return wrapped.length > 0 ? wrapped.map((line) => line.trimEnd()) : [""];
+	if (wrapped.length === 0) return [""];
+	return wrapped.map((row, index) => {
+		const join = copyMarkersEnabled ? joins[index] : "none";
+		const marker = join === "space" ? COPY_JOIN_SPACE : join === "hard" ? COPY_JOIN_HARD : "";
+		return marker + row.trimEnd();
+	});
 }
 
 export const PUNCTUATION_REGEX = /[(){}[\]<>.,;:'"!?+\-=*/\\|&%^$#@~`]/;

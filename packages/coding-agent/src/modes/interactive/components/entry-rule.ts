@@ -28,10 +28,6 @@ export function entryRule(): Rule {
 	return new Rule(ENTRY_RULE_GLYPH);
 }
 
-export function turnRule(): Rule {
-	return new Rule(TURN_RULE_GLYPH);
-}
-
 /** True when a rendered row (ANSI stripped or not) is an entry rule. */
 export function isEntryRule(line: string): boolean {
 	const plain = line.replace(/\x1b\[[0-9;:]*m/g, "").trim();

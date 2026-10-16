@@ -146,7 +146,7 @@ import { CustomMessageComponent } from "./components/custom-message.ts";
 import { DynamicBorder } from "./components/dynamic-border.ts";
 import { EarendilAnnouncementComponent } from "./components/earendil-announcement.ts";
 import { playArmin3d, playPiLogo3d } from "./components/easter-egg-3d.lazy.ts";
-import { entryRule, turnRule } from "./components/entry-rule.ts";
+import { entryRule, Rule, TURN_RULE_GLYPH } from "./components/entry-rule.ts";
 import { ExtensionEditorComponent } from "./components/extension-editor.ts";
 import { ExtensionInputComponent } from "./components/extension-input.ts";
 import { ExtensionSelectorComponent } from "./components/extension-selector.ts";
@@ -3947,7 +3947,7 @@ export class InteractiveMode {
 				if (textContent) {
 					// A solid rule, not a blank line, opens every turn after the first.
 					if (this.chatContainer.children.length > 0) {
-						this.chatContainer.addChild(turnRule());
+						this.chatContainer.addChild(new Rule(TURN_RULE_GLYPH));
 					}
 					const skillBlock = parseSkillBlock(textContent);
 					if (skillBlock) {

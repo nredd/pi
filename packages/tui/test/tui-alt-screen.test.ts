@@ -1462,6 +1462,42 @@ describe("TuiAltScreen", () => {
 		tui.stop();
 	});
 
+	it("does not invent spaces in wrapped CJK text or indented URL continuations", async () => {
+		const terminal = new RecordingTerminal(12, 6);
+		const copied: string[] = [];
+		const openedUrls: string[] = [];
+		const tui = new TuiAltScreen(terminal, undefined, undefined, {
+			copySelection: async (text) => {
+				copied.push(text);
+				return true;
+			},
+			openUrl: (url) => openedUrls.push(url),
+		});
+		tui.addChild({
+			render: (width: number) => [
+				...new Text("日本語のテキストです", 0, 0).render(width),
+				...new Text("https://example.com/a/long/path", 0, 0)
+					.render(width - 2)
+					.map((line, i) => (i ? `  ${line}` : line)),
+			],
+			invalidate: () => {},
+		});
+		tui.start();
+		await terminal.waitForRender();
+
+		terminal.sendInput("\x1b[<0;1;1M");
+		terminal.sendInput("\x1b[<32;12;2M");
+		terminal.sendInput("\x1b[<0;12;2m");
+		await terminal.waitForRender();
+		assert.deepStrictEqual(copied, ["日本語のテキストです"]);
+
+		terminal.sendInput("\x1b[<0;5;5M");
+		terminal.sendInput("\x1b[<0;5;5m");
+		await terminal.waitForRender();
+		assert.deepStrictEqual(openedUrls, ["https://example.com/a/long/path"]);
+		tui.stop();
+	});
+
 	it("opens a plain-text URL that wraps across rows from any row", async () => {
 		const terminal = new RecordingTerminal(12, 4);
 		const openedUrls: string[] = [];

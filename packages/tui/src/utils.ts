@@ -966,6 +966,12 @@ export function wrapTextWithAnsi(text: string, width: number): string[] {
 	return result.length > 0 ? result : [""];
 }
 
+/** Whether a wrapped row ended in whitespace, i.e. the wrap consumed a real space. */
+function droppedWhitespace(row: string): boolean {
+	const text = stripTerminalSequences(row);
+	return text.length > 0 && text.trimEnd().length !== text.length;
+}
+
 function wrapSingleLine(line: string, width: number): string[] {
 	if (!line) {
 		return [""];
@@ -1000,7 +1006,7 @@ function wrapSingleLine(line: string, width: number): string[] {
 				}
 				wrapped.push(currentLine);
 				joins.push(pendingJoin);
-				pendingJoin = "space";
+				pendingJoin = droppedWhitespace(currentLine) ? "space" : "hard";
 				currentLine = "";
 				currentVisibleLength = 0;
 			}
@@ -1029,7 +1035,7 @@ function wrapSingleLine(line: string, width: number): string[] {
 			}
 			wrapped.push(lineToWrap);
 			joins.push(pendingJoin);
-			pendingJoin = "space";
+			pendingJoin = isWhitespace || droppedWhitespace(currentLine) ? "space" : "hard";
 			if (isWhitespace) {
 				// Don't start new line with whitespace
 				currentLine = tracker.getActiveCodes();

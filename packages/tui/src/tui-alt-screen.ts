@@ -209,6 +209,8 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 	readonly mode = "fullscreen" as const;
 	readonly [VIEWPORT_TUI] = true as const;
 	private previousScreen: string[] = [];
+	/** Unstripped layout rows (copy markers intact) for selection outside a ScrollView. */
+	private previousCopyLines: readonly string[] = [];
 	private lastDocument: string[] = [];
 	private previousScreenWidth = 0;
 	private previousScreenHeight = 0;
@@ -267,8 +269,6 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		options: TuiAltScreenOptions = {},
 	) {
 		super(terminal, showHardwareCursor, logDirectory);
-		// Selection and URL clicks need to know which rows are soft wraps and gutters; markers are stripped on output.
-		setCopyMarkersEnabled(true);
 		this.implicitDocument = {
 			render: (width) => super.render(width),
 			handleMouse: (event) => super.handleMouse(event),
@@ -354,6 +354,8 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 	}
 
 	protected override beforeTerminalStart(): void {
+		// Selection and URL clicks need to know which rows are soft wraps and gutters; markers are stripped on output.
+		setCopyMarkersEnabled(true);
 		this.stopSelectionAutoScroll();
 		this.selectionPressActive = false;
 		this.stopScrollbarHover();
@@ -396,6 +398,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 	}
 
 	protected override beforeTerminalStop(_options: TuiStopOptions): void {
+		setCopyMarkersEnabled(false);
 		this.closeSearch();
 		this.stopSelectionAutoScroll();
 		this.selectionPressActive = false;
@@ -493,6 +496,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 
 	protected override resetRenderState(): void {
 		this.previousScreen = [];
+		this.previousCopyLines = [];
 		this.previousScreenWidth = 0;
 		this.previousScreenHeight = 0;
 		this.currentLayout = undefined;
@@ -1183,7 +1187,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 			const lines = getScrollViewBox(this.currentLayout, point.scrollView)?.scrollContentLines;
 			if (lines) return lines[point.row] ?? "";
 		}
-		return this.previousScreen[point.row] ?? "";
+		return this.previousCopyLines[point.row] ?? this.previousScreen[point.row] ?? "";
 	}
 
 	/**
@@ -1196,7 +1200,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		const rowCount =
 			point.scrollView && this.currentLayout
 				? (getScrollViewBox(this.currentLayout, point.scrollView)?.scrollContentLines?.length ?? 0)
-				: this.previousScreen.length;
+				: this.previousCopyLines.length;
 		let first = point.row;
 		while (first > 0 && getCopyRowInfo(rowAt(first)).join !== "none") first--;
 		let text = "";
@@ -1214,7 +1218,10 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 				const before = Math.max(0, point.col - info.gutterEnd);
 				clickIndex = text.length + visible(info.gutterEnd, before).length;
 			}
-			text += visible(info.gutterEnd, Math.max(0, visibleWidth(line) - info.gutterEnd)).trimEnd();
+			const rowText = visible(info.gutterEnd, Math.max(0, visibleWidth(line) - info.gutterEnd)).trimEnd();
+			const indent = row > first && info.join !== "none" ? rowText.length - rowText.trimStart().length : 0;
+			if (row === point.row) clickIndex = Math.max(text.length, clickIndex - indent);
+			text += rowText.slice(indent);
 		}
 		if (clickIndex < 0) return undefined;
 		for (const match of text.matchAll(PLAIN_URL_PATTERN)) {
@@ -1490,7 +1497,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 	private getActiveSelectionText(): string | undefined {
 		const selection = this.getSelectionBounds();
 		if (!selection) return undefined;
-		let sourceLines: readonly string[] = this.previousScreen;
+		let sourceLines: readonly string[] = this.previousCopyLines;
 		if (selection.start.scrollView) {
 			if (!this.currentLayout) return undefined;
 			const box = getScrollViewBox(this.currentLayout, selection.start.scrollView);
@@ -1509,7 +1516,8 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 			).trimEnd();
 			if (row > selection.start.row) {
 				text += info.join === "none" ? "\n" : info.join === "space" ? " " : "";
-				if (info.join === "space") rowText = rowText.trimStart();
+				// Continuation rows may carry list indentation; wrapped tokens never start with whitespace.
+				if (info.join !== "none") rowText = rowText.trimStart();
 			}
 			text += rowText;
 		}
@@ -1747,7 +1755,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		);
 		screen = this.applySearchHighlights(screen, nextLayout);
 		screen = this.compositeScrollToEndIndicator(screen, nextLayout, width);
-		screen = this.compositeOverlays(screen, width, height);
+		screen = this.compositeOverlays(screen, width, height).map(stripCopyMarkers);
 		if (screen.length > height) screen = screen.slice(screen.length - height);
 		screen = this.applySelection(screen, nextLayout);
 		screen = this.compositeFlashes(screen, width, height);
@@ -1837,6 +1845,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		this.terminal.write(buffer);
 
 		this.previousScreen = screen;
+		this.previousCopyLines = nextLayout.lines;
 		this.previousScreenWidth = width;
 		this.previousScreenHeight = height;
 		this.currentLayout = nextLayout;

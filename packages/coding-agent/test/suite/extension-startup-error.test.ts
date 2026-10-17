@@ -1301,6 +1301,166 @@ describe("ExtensionStartupError", () => {
 			).toEqual(["first"]);
 		});
 
+		it("never dispatches a request aborted by a fatal bind, even after recovery", async () => {
+			// Paused in the header transform across fatal + recovery: the latch is clear again, so
+			// only the request's own aborted signal can stop it.
+			const state = { fatal: false };
+			let releaseTransform: (() => void) | undefined;
+			let transformStarted: (() => void) | undefined;
+			const transformPending = new Promise<void>((resolve) => {
+				transformStarted = resolve;
+			});
+			const harness = await harnessWith({
+				useModelRuntimeStream: true,
+				extensionFactories: [
+					(pi) => {
+						pi.on("session_start", () => {
+							if (state.fatal) throw new ExtensionStartupError("fatal mid-transform");
+						});
+					},
+				],
+			});
+			await harness.session.bindExtensions({ mode: "print" });
+			const stream = harness.session.agent.streamFunction;
+			harness.session.agent.streamFunction = (model, context, options) =>
+				stream(model, context, {
+					...options,
+					transformHeaders: async (headers: ProviderHeaders) => {
+						transformStarted?.();
+						await new Promise<void>((resolve) => {
+							releaseTransform = resolve;
+						});
+						return headers;
+					},
+				} satisfies ModelsSimpleStreamOptions as typeof options);
+			harness.setResponses([fauxAssistantMessage("must not stream")]);
+
+			const prompt = harness.session.prompt("start").then(
+				() => undefined,
+				(error) => error,
+			);
+			await transformPending;
+			state.fatal = true;
+			await expect(harness.session.bindExtensions({ mode: "print" })).rejects.toThrow("fatal mid-transform");
+			state.fatal = false;
+			await harness.session.bindExtensions({ mode: "print" });
+			releaseTransform?.();
+			await prompt;
+			await harness.session.waitForIdle();
+
+			expect(harness.faux.state.callCount).toBe(0);
+		});
+
+		it("holds a nextTurn custom message and discards it on a fatal startup", async () => {
+			const state = { fatal: false };
+			const errors: Array<{ event: string; error: string }> = [];
+			const harness = await harnessWith({
+				extensionFactories: [
+					(pi) => {
+						pi.on("session_start", async () => {
+							pi.sendMessage(
+								{ customType: "note", content: "queued for next turn", display: false },
+								{ triggerTurn: true, deliverAs: "nextTurn" },
+							);
+							await Promise.resolve();
+							if (state.fatal) throw new ExtensionStartupError("fatal after queueing");
+						});
+					},
+				],
+			});
+			const onError = (error: { event: string; error: string }) =>
+				errors.push({ event: error.event, error: error.error });
+			harness.setResponses([fauxAssistantMessage("reply")]);
+
+			state.fatal = true;
+			await expect(harness.session.bindExtensions({ mode: "print", onError })).rejects.toThrow(
+				"fatal after queueing",
+			);
+			expect(errors.filter((entry) => entry.event === "send_message")).toHaveLength(1);
+			state.fatal = false;
+			await harness.session.bindExtensions({ mode: "print", onError });
+			await harness.session.prompt("after recovery");
+
+			expect(harness.faux.state.callCount).toBe(1);
+			// The second bind queued its own nextTurn note, the fatal one's never arrives.
+			const custom = harness.session.messages.filter((message) => message.role === "custom");
+			expect(custom).toHaveLength(1);
+		});
+
+		it("starts a run for a replayed message whose turn ended while startup was pending", async () => {
+			// The replay resumes after the turn it would have been queued against finished; it
+			// must start its own run rather than sit in an idle agent's follow-up queue.
+			let emission = 0;
+			const gates: { releaseInput?: () => void; releaseSecond?: () => void } = {};
+			let inputStarted: (() => void) | undefined;
+			const inputPaused = new Promise<void>((resolve) => {
+				inputStarted = resolve;
+			});
+			let secondStarted: (() => void) | undefined;
+			const secondPending = new Promise<void>((resolve) => {
+				secondStarted = resolve;
+			});
+			const errors: string[] = [];
+			const harness = await harnessWith({
+				extensionFactories: [
+					(pi) => {
+						pi.on("input", async (event) => {
+							if (event.text !== "held follow-up") return { action: "continue" as const };
+							inputStarted?.();
+							await new Promise<void>((resolve) => {
+								gates.releaseInput = resolve;
+							});
+							return { action: "continue" as const };
+						});
+						pi.on("session_start", async () => {
+							emission++;
+							if (emission === 1) {
+								pi.sendUserMessage("held follow-up", { deliverAs: "followUp" });
+								return;
+							}
+							secondStarted?.();
+							await new Promise<void>((resolve) => {
+								gates.releaseSecond = resolve;
+							});
+						});
+					},
+				],
+			});
+			let releaseTurn: (() => void) | undefined;
+			harness.setResponses([
+				async () => {
+					await new Promise<void>((resolve) => {
+						releaseTurn = resolve;
+					});
+					return fauxAssistantMessage("first reply");
+				},
+				fauxAssistantMessage("held reply"),
+			]);
+
+			await harness.session.bindExtensions({ mode: "print", onError: (error) => errors.push(error.error) });
+			await inputPaused;
+			const first = harness.session.prompt("first", { streamingBehavior: "followUp" });
+			await vi.waitFor(() => expect(harness.session.isStreaming).toBe(true));
+			const secondBind = harness.session.bindExtensions({ mode: "print" });
+			await secondPending;
+			gates.releaseInput?.();
+			// The turn ends while the replay is still waiting on the pending startup.
+			releaseTurn?.();
+			await first;
+			await vi.waitFor(() => expect(harness.session.isStreaming).toBe(false));
+			gates.releaseSecond?.();
+			await secondBind;
+			await vi.waitFor(() => expect(harness.faux.state.callCount).toBe(2));
+			await harness.session.waitForIdle();
+
+			expect(errors).toEqual([]);
+			expect(
+				harness.session.messages
+					.filter((message) => message.role === "user")
+					.map((message) => contentText(message.content)),
+			).toEqual(["first", "held follow-up"]);
+		});
+
 		it("discards a startup message from a failed reload", async () => {
 			const state = { fatal: false };
 			const harness = await harnessWith({

@@ -2205,13 +2205,16 @@ export class AgentSession {
 			expandedText = expandPromptTemplate(expandedText, [...this.promptTemplates]);
 		}
 
+		// A replayed message resuming here after the input handlers must still belong to a live
+		// replay, and the wait has to come before the streaming decision: the turn it would have
+		// queued against may have ended while startup was pending.
+		if (replay) {
+			const wait = this._awaitReplayableState(replay);
+			if (wait) await wait;
+		}
+
 		// If streaming, queue via steer() or followUp() based on option
 		if (this.isStreaming) {
-			// A replayed message resuming here after a pause must still belong to a live replay.
-			if (replay) {
-				const wait = this._awaitReplayableState(replay);
-				if (wait) await wait;
-			}
 			if (!options?.streamingBehavior) {
 				throw new Error(
 					"Agent is already processing. Specify streamingBehavior ('steer' or 'followUp') to queue the message.",
@@ -3740,9 +3743,10 @@ export class AgentSession {
 						});
 					};
 					const send = (replay?: StartupReplay) => this._sendCustomMessage(message, options, replay).catch(report);
-					// Only a message that triggers a turn reaches the provider; the rest append now.
-					const startsTurn = options?.triggerTurn === true && options.deliverAs !== "nextTurn";
-					if (startsTurn && this._deferWhileStarting(send, report)) return;
+					// A message that asks for a turn is held, whichever turn it is delivered on: a
+					// `nextTurn` one would otherwise sit outside the held queue, survive a fatal
+					// startup, and ride the first prompt after a recovery. Plain appends go now.
+					if (options?.triggerTurn === true && this._deferWhileStarting(send, report)) return;
 					void send();
 				},
 				sendUserMessage: (content, options) => {

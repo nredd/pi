@@ -752,6 +752,9 @@ export class ModelRuntime implements Models {
 				options as (StreamOptions & ModelsRequestTransforms) | undefined,
 			);
 			const recheck = await options?.beforeProviderRequest?.();
+			// A request cancelled while it was being prepared (a fatal startup aborts in-flight
+			// work) must not dispatch once its transforms resume, recovery or not.
+			options?.signal?.throwIfAborted();
 			recheck?.();
 			return prepared.provider.stream(prepared.model, transcript, prepared.options as ApiStreamOptions<TApi>);
 		});
@@ -794,6 +797,9 @@ export class ModelRuntime implements Models {
 			assertChatModel(model);
 			const prepared = await this.prepareRequest(model, options);
 			const recheck = await options?.beforeProviderRequest?.();
+			// A request cancelled while it was being prepared (a fatal startup aborts in-flight
+			// work) must not dispatch once its transforms resume, recovery or not.
+			options?.signal?.throwIfAborted();
 			recheck?.();
 			return prepared.provider.streamSimple(prepared.model, transcript, prepared.options as SimpleStreamOptions);
 		});
@@ -819,6 +825,9 @@ export class ModelRuntime implements Models {
 				throw new ModelsError("provider", `Provider ${model.provider} does not support deferred responses`);
 			}
 			const recheck = await options?.beforeProviderRequest?.();
+			// A request cancelled while it was being prepared (a fatal startup aborts in-flight
+			// work) must not dispatch once its transforms resume, recovery or not.
+			options?.signal?.throwIfAborted();
 			recheck?.();
 			return prepared.provider.fetchDeferred(prepared.model, handle, prepared.options as DeferredFetchOptions);
 		});
@@ -843,6 +852,7 @@ export class ModelRuntime implements Models {
 			throw new ModelsError("provider", `Provider ${model.provider} does not support deferred responses`);
 		}
 		const recheck = await options?.beforeProviderRequest?.();
+		options?.signal?.throwIfAborted();
 		recheck?.();
 		return prepared.provider.cancelDeferred(prepared.model, handle, prepared.options as DeferredCancelOptions);
 	}
@@ -859,6 +869,9 @@ export class ModelRuntime implements Models {
 				throw new ModelsError("provider", `Provider ${model.provider} does not support image generation`);
 			}
 			const recheck = await options?.beforeProviderRequest?.();
+			// A request cancelled while it was being prepared (a fatal startup aborts in-flight
+			// work) must not dispatch once its transforms resume, recovery or not.
+			options?.signal?.throwIfAborted();
 			recheck?.();
 			return await prepared.provider.generateImages(prepared.model, context, prepared.options as ImagesOptions);
 		} catch (error) {
@@ -879,6 +892,9 @@ export class ModelRuntime implements Models {
 				throw new ModelsError("provider", `Provider ${model.provider} does not support classification`);
 			}
 			const recheck = await options?.beforeProviderRequest?.();
+			// A request cancelled while it was being prepared (a fatal startup aborts in-flight
+			// work) must not dispatch once its transforms resume, recovery or not.
+			options?.signal?.throwIfAborted();
 			recheck?.();
 			return await prepared.provider.classify(prepared.model, context, prepared.options as ClassifierOptions);
 		} catch (error) {

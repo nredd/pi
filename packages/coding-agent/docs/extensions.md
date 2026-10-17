@@ -291,7 +291,7 @@ Scope:
 
 While `session_start` handlers run, nothing reaches a provider:
 
-- `pi.sendUserMessage()` and `pi.sendMessage(..., { triggerTurn: true })` are held and replayed in order once every handler completes. If startup then fails fatally they are discarded, never run, and reported through the error listener (`send_user_message` / `send_message`). Ordinary handler errors do not discard them.
+- `pi.sendUserMessage()` and `pi.sendMessage(..., { triggerTurn: true })` are held and replayed in order once every handler completes. If startup then fails fatally they are discarded, never run, and reported through the error listener (`send_user_message` / `send_message`). Ordinary handler errors do not discard them. A `session.prompt()` issued after the bind (print mode's initial message, for example) runs after the replayed turn finishes, unless it passes `streamingBehavior`, in which case it is queued against that turn as usual.
 - `ctx.compact()` is not held, since a handler may await `onComplete`. It calls `onError` right away.
 - Direct SDK calls (`session.prompt()`, `compact()`, summarizing `navigateTree()`) reject with a plain `Error` until `bindExtensions()` or `reload()` settles. Await the bind first.
 - `reload()` after any `bindExtensions()` call, even mode-only or empty bindings, re-emits `session_start`. Before the first bind it does not.

@@ -473,7 +473,14 @@ export class AgentSession {
 	/** Increments per session_start emission; only the latest emission may set or clear the latch. */
 	private _startupGeneration = 0;
 	/** Extension callbacks that would start provider work, held until session_start settles. */
-	private _deferredStartupActions: Array<{ run: () => void; discard: (failure: ExtensionStartupError) => void }> = [];
+	private _deferredStartupActions: Array<{
+		run: () => Promise<void>;
+		discard: (failure: ExtensionStartupError) => void;
+	}> = [];
+	/** Settles once every replayed startup action has finished; a direct prompt waits for it first. */
+	private _startupReplay: Promise<void> | undefined;
+	/** True while replayed startup actions are being dispatched, so they do not wait on themselves. */
+	private _replayingStartup = false;
 	private _extensionErrorListener?: ExtensionErrorListener;
 	private _extensionErrorUnsubscriber?: () => void;
 
@@ -2072,6 +2079,12 @@ export class AgentSession {
 	 */
 	async prompt(text: string, options?: PromptOptions): Promise<void> {
 		this._assertExtensionsStarted();
+		// A message replayed from session_start runs first: a prompt issued right after the bind
+		// (print mode's initial message, say) follows it instead of colliding with its turn. A
+		// caller that asked to steer or follow up keeps that behaviour.
+		if (this._startupReplay && !this._replayingStartup && !options?.streamingBehavior) {
+			await this._startupReplay;
+		}
 		if (this._isEmittingAgentSettled) {
 			this._deferredSettledActions.push(async () => await this.prompt(text, options));
 			return;
@@ -3358,11 +3371,23 @@ export class AgentSession {
 	private _settleDeferredStartupActions(): void {
 		if (this._startupPending > 0) return;
 		const actions = this._deferredStartupActions.splice(0);
+		if (actions.length === 0) return;
 		const failure = this._extensionStartupFailure;
-		for (const action of actions) {
-			if (failure) action.discard(failure);
-			else action.run();
+		if (failure) {
+			for (const action of actions) action.discard(failure);
+			return;
 		}
+		this._replayingStartup = true;
+		let runs: Promise<void>[];
+		try {
+			runs = actions.map((action) => action.run());
+		} finally {
+			this._replayingStartup = false;
+		}
+		const replay = Promise.allSettled(runs).then(() => {
+			if (this._startupReplay === replay) this._startupReplay = undefined;
+		});
+		this._startupReplay = replay;
 	}
 
 	/**
@@ -3389,7 +3414,7 @@ export class AgentSession {
 	 * Hold `run` until session_start settles when one is pending. Returns false when the caller
 	 * should run it now. `discard` runs instead if startup then fails fatally.
 	 */
-	private _deferWhileStarting(run: () => void, discard: (failure: ExtensionStartupError) => void): boolean {
+	private _deferWhileStarting(run: () => Promise<void>, discard: (failure: ExtensionStartupError) => void): boolean {
 		if (this._startupPending === 0) return false;
 		this._deferredStartupActions.push({ run, discard });
 		return true;
@@ -3507,11 +3532,11 @@ export class AgentSession {
 							error: error instanceof Error ? error.message : String(error),
 						});
 					};
-					const send = () => void this.sendCustomMessage(message, options).catch(report);
+					const send = () => this.sendCustomMessage(message, options).catch(report);
 					// Only a message that triggers a turn reaches the provider; the rest append now.
 					const startsTurn = options?.triggerTurn === true && options.deliverAs !== "nextTurn";
 					if (startsTurn && this._deferWhileStarting(send, report)) return;
-					send();
+					void send();
 				},
 				sendUserMessage: (content, options) => {
 					const report = (error: unknown) => {
@@ -3521,9 +3546,9 @@ export class AgentSession {
 							error: error instanceof Error ? error.message : String(error),
 						});
 					};
-					const send = () => void this.sendUserMessage(content, options).catch(report);
+					const send = () => this.sendUserMessage(content, options).catch(report);
 					if (this._deferWhileStarting(send, report)) return;
-					send();
+					void send();
 				},
 				appendEntry: (customType, data) => {
 					const entryId = this.sessionManager.appendCustomEntry(customType, data);

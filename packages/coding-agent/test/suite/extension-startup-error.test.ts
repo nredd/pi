@@ -1,4 +1,4 @@
-import { fauxAssistantMessage } from "@earendil-works/pi-ai";
+import { contentText, fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { registerFauxProvider } from "@earendil-works/pi-ai/compat";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentSessionRuntime } from "../../src/core/agent-session-runtime.ts";
@@ -345,6 +345,36 @@ describe("ExtensionStartupError", () => {
 			expect(harness.session.messages.map((message) => message.role).filter((role) => role !== "system")).toEqual([
 				"user",
 				"assistant",
+			]);
+		});
+
+		it("runs a prompt issued right after the bind behind the replayed startup message", async () => {
+			// Print mode prompts immediately after bindExtensions(). Before the replay existed that
+			// raced the startup turn; now the prompt waits for it instead of "already processing".
+			const harness = await harnessWith({
+				extensionFactories: [
+					(pi) => {
+						pi.on("session_start", () => {
+							pi.sendUserMessage("queued during startup");
+						});
+					},
+					later({ fatal: false }),
+				],
+			});
+			harness.setResponses([fauxAssistantMessage("startup reply"), fauxAssistantMessage("prompt reply")]);
+
+			await harness.session.bindExtensions({ mode: "print" });
+			await harness.session.prompt("from the caller");
+
+			expect(harness.faux.state.callCount).toBe(2);
+			const conversation = harness.session.messages
+				.filter((message) => message.role === "user" || message.role === "assistant")
+				.map((message) => `${message.role}:${contentText(message.content)}`);
+			expect(conversation).toEqual([
+				"user:queued during startup",
+				"assistant:startup reply",
+				"user:from the caller",
+				"assistant:prompt reply",
 			]);
 		});
 

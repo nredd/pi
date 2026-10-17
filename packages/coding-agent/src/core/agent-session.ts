@@ -481,15 +481,17 @@ export class AgentSession {
 	private readonly _inSessionStartHandler = new AsyncLocalStorage<boolean>();
 	/** A success must start after this generation to clear the fatal startup latch. */
 	private _startupFailureRecoveryGeneration = 0;
-	/** Extension callbacks that would start provider work, held until session_start settles. */
+	/**
+	 * Extension callbacks that would start provider work, held until session_start settles. This
+	 * queue is the only place unplayed actions live: replay `shift()`s one at a time, so a fatal
+	 * emission settling mid-replay discards and reports everything still queued.
+	 */
 	private _deferredStartupActions: Array<{
 		run: () => Promise<void>;
 		discard: (failure: ExtensionStartupError) => void;
 	}> = [];
 	/** Settles once every replayed startup action has finished; a direct prompt waits for it first. */
 	private _startupReplay: Promise<void> | undefined;
-	/** True while replayed startup actions are being dispatched, so they do not wait on themselves. */
-	private _replayingStartup = false;
 	private _extensionErrorListener?: ExtensionErrorListener;
 	private _extensionErrorUnsubscriber?: () => void;
 
@@ -1888,7 +1890,14 @@ export class AgentSession {
 	 * starting another, and an abort requested meanwhile aborts the run as soon as it exists.
 	 * @param onStarted Called once the run's messages are prepared, before the first request.
 	 */
-	private async _startRun(trigger: BeforeAgentStartTrigger, onStarted?: () => void): Promise<void> {
+	private async _startRun(
+		trigger: BeforeAgentStartTrigger,
+		onStarted?: () => void,
+		awaitStartup = false,
+	): Promise<void> {
+		// A replayed startup action may have been paused (an input handler, say) while another
+		// session_start began. It waits for that startup, then fails only if it latched fatally.
+		if (awaitStartup && this._startupPending > 0) await this._waitForExtensionsStarted();
 		this._assertExtensionsStarted();
 		this._isAgentRunActive = true;
 		this._agentRunAbortRequested = false;
@@ -2111,15 +2120,24 @@ export class AgentSession {
 	 * @throws Error if no model selected or no API key available (when not streaming)
 	 */
 	async prompt(text: string, options?: PromptOptions): Promise<void> {
+		await this._prompt(text, options, false);
+	}
+
+	/**
+	 * `prompt()` body. A replayed startup action passes `awaitStartup` to wait for a pending
+	 * session_start instead of failing on it, and to skip the wait on its own replay.
+	 */
+	private async _prompt(text: string, options: PromptOptions | undefined, awaitStartup: boolean): Promise<void> {
+		if (awaitStartup && this._startupPending > 0) await this._waitForExtensionsStarted();
 		this._assertExtensionsStarted();
 		// A message replayed from session_start runs first: a prompt issued right after the bind
 		// (print mode's initial message, say) follows it instead of colliding with its turn. A
 		// caller that asked to steer or follow up keeps that behaviour.
-		if (this._startupReplay && !this._replayingStartup && !options?.streamingBehavior) {
+		if (this._startupReplay && !awaitStartup && !options?.streamingBehavior) {
 			await this._startupReplay;
 		}
 		if (this._isEmittingAgentSettled) {
-			this._deferredSettledActions.push(async () => await this.prompt(text, options));
+			this._deferredSettledActions.push(async () => await this._prompt(text, options, awaitStartup));
 			return;
 		}
 		const expandPromptTemplates = options?.expandPromptTemplates ?? true;
@@ -2197,8 +2215,10 @@ export class AgentSession {
 			throw new Error(formatNoApiKeyFoundMessage(this.model.provider));
 		}
 
-		await this._startRun({ messageType: "user", prompt: expandedText, images: currentImages }, () =>
-			preflightResult?.("started"),
+		await this._startRun(
+			{ messageType: "user", prompt: expandedText, images: currentImages },
+			() => preflightResult?.("started"),
+			awaitStartup,
 		);
 	}
 
@@ -2386,6 +2406,15 @@ export class AgentSession {
 		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details">,
 		options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" },
 	): Promise<void> {
+		await this._sendCustomMessage(message, options, false);
+	}
+
+	/** `sendCustomMessage()` body; `awaitStartup` is set for replayed startup actions. */
+	private async _sendCustomMessage<T = unknown>(
+		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details">,
+		options: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" } | undefined,
+		awaitStartup: boolean,
+	): Promise<void> {
 		const appMessage = {
 			role: "custom" as const,
 			customType: message.customType,
@@ -2405,10 +2434,12 @@ export class AgentSession {
 			}
 		} else if (options?.triggerTurn) {
 			if (this._isEmittingAgentSettled) {
-				this._deferredSettledActions.push(async () => await this.sendCustomMessage(message, options));
+				this._deferredSettledActions.push(
+					async () => await this._sendCustomMessage(message, options, awaitStartup),
+				);
 				return;
 			}
-			await this._startRun({ messageType: "custom", message: appMessage });
+			await this._startRun({ messageType: "custom", message: appMessage }, undefined, awaitStartup);
 		} else if (this.isStreaming) {
 			// Appending now would put the message between an assistant tool call and its
 			// result, which providers that validate message order reject on replay. Defer
@@ -2458,6 +2489,15 @@ export class AgentSession {
 		content: string | (TextContent | ImageContent)[],
 		options?: { deliverAs?: "steer" | "followUp"; expandPromptTemplates?: boolean },
 	): Promise<void> {
+		await this._sendUserMessage(content, options, false);
+	}
+
+	/** `sendUserMessage()` body; `awaitStartup` is set for replayed startup actions. */
+	private async _sendUserMessage(
+		content: string | (TextContent | ImageContent)[],
+		options: { deliverAs?: "steer" | "followUp"; expandPromptTemplates?: boolean } | undefined,
+		awaitStartup: boolean,
+	): Promise<void> {
 		// Normalize content to text string + optional images
 		let text: string;
 		let images: ImageContent[] | undefined;
@@ -2478,12 +2518,16 @@ export class AgentSession {
 			if (images.length === 0) images = undefined;
 		}
 
-		await this.prompt(text, {
-			expandPromptTemplates: options?.expandPromptTemplates ?? false,
-			streamingBehavior: options?.deliverAs,
-			images,
-			source: "extension",
-		});
+		await this._prompt(
+			text,
+			{
+				expandPromptTemplates: options?.expandPromptTemplates ?? false,
+				streamingBehavior: options?.deliverAs,
+				images,
+				source: "extension",
+			},
+			awaitStartup,
+		);
 	}
 
 	/**
@@ -3440,35 +3484,28 @@ export class AgentSession {
 
 	/** Replay or discard deferred startup actions once no session_start is pending. */
 	private _settleDeferredStartupActions(): void {
-		if (this._startupPending > 0) return;
-		const actions = this._deferredStartupActions.splice(0);
-		if (actions.length === 0) return;
+		if (this._startupPending > 0 || this._deferredStartupActions.length === 0) return;
 		const failure = this._extensionStartupFailure;
 		if (failure) {
-			for (const action of actions) action.discard(failure);
+			this._discardDeferredStartupActions(failure);
 			return;
 		}
 		const previousReplay = this._startupReplay;
 		const replay = (async () => {
 			await previousReplay;
-			for (const action of actions) {
+			// One action at a time, taken from the shared queue only after the latch check, so a
+			// fatal emission settling during an action's run still finds the rest and discards it.
+			while (this._deferredStartupActions.length > 0) {
 				await this._waitForExtensionsStarted();
 				const failure = this._extensionStartupFailure;
 				if (failure) {
-					action.discard(failure);
 					this._discardDeferredStartupActions(failure);
 					return;
 				}
-				let run: Promise<void>;
-				this._replayingStartup = true;
+				const action = this._deferredStartupActions.shift();
+				if (!action) return;
 				try {
-					run = action.run();
-				} finally {
-					// Only the action's synchronous entry needs to bypass its own replay wait.
-					this._replayingStartup = false;
-				}
-				try {
-					await run;
+					await action.run();
 				} catch {
 					// The action reports its own failure; continue with the ordered replay.
 				}
@@ -3629,11 +3666,11 @@ export class AgentSession {
 							error: error instanceof Error ? error.message : String(error),
 						});
 					};
-					const send = () => this.sendCustomMessage(message, options).catch(report);
+					const send = (replayed: boolean) => this._sendCustomMessage(message, options, replayed).catch(report);
 					// Only a message that triggers a turn reaches the provider; the rest append now.
 					const startsTurn = options?.triggerTurn === true && options.deliverAs !== "nextTurn";
-					if (startsTurn && this._deferWhileStarting(send, report)) return;
-					void send();
+					if (startsTurn && this._deferWhileStarting(() => send(true), report)) return;
+					void send(false);
 				},
 				sendUserMessage: (content, options) => {
 					const report = (error: unknown) => {
@@ -3643,9 +3680,9 @@ export class AgentSession {
 							error: error instanceof Error ? error.message : String(error),
 						});
 					};
-					const send = () => this.sendUserMessage(content, options).catch(report);
-					if (this._deferWhileStarting(send, report)) return;
-					void send();
+					const send = (replayed: boolean) => this._sendUserMessage(content, options, replayed).catch(report);
+					if (this._deferWhileStarting(() => send(true), report)) return;
+					void send(false);
 				},
 				appendEntry: (customType, data) => {
 					const entryId = this.sessionManager.appendCustomEntry(customType, data);

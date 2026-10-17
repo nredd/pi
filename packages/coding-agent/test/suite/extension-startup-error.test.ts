@@ -1078,6 +1078,64 @@ describe("ExtensionStartupError", () => {
 			).toEqual(["first", "second"]);
 		});
 
+		it("delivers a replayed message whose input handler outlasts a new bind's session_start", async () => {
+			let emission = 0;
+			const gates: { releaseInput?: () => void; releaseSecond?: () => void } = {};
+			let inputStarted: (() => void) | undefined;
+			const inputPaused = new Promise<void>((resolve) => {
+				inputStarted = resolve;
+			});
+			let secondStarted: (() => void) | undefined;
+			const secondPending = new Promise<void>((resolve) => {
+				secondStarted = resolve;
+			});
+			const errors: string[] = [];
+			const harness = await harnessWith({
+				extensionFactories: [
+					(pi) => {
+						pi.on("input", async () => {
+							inputStarted?.();
+							await new Promise<void>((resolve) => {
+								gates.releaseInput = resolve;
+							});
+							return { action: "continue" as const };
+						});
+						pi.on("session_start", async () => {
+							emission++;
+							if (emission === 1) {
+								pi.sendUserMessage("held");
+								return;
+							}
+							secondStarted?.();
+							await new Promise<void>((resolve) => {
+								gates.releaseSecond = resolve;
+							});
+						});
+					},
+				],
+			});
+			harness.setResponses([fauxAssistantMessage("held reply")]);
+
+			await harness.session.bindExtensions({ mode: "print", onError: (error) => errors.push(error.error) });
+			await inputPaused;
+			const secondBind = harness.session.bindExtensions({ mode: "print" });
+			await secondPending;
+			gates.releaseInput?.();
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			expect(harness.faux.state.callCount).toBe(0);
+
+			gates.releaseSecond?.();
+			await secondBind;
+			await vi.waitFor(() => expect(harness.faux.state.callCount).toBe(1));
+			await harness.session.waitForIdle();
+			expect(errors).toEqual([]);
+			expect(
+				harness.session.messages
+					.filter((message) => message.role === "user")
+					.map((message) => contentText(message.content)),
+			).toEqual(["held"]);
+		});
+
 		it("discards a startup message from a failed reload", async () => {
 			const state = { fatal: false };
 			const harness = await harnessWith({
@@ -1200,6 +1258,99 @@ describe("ExtensionStartupError", () => {
 			releaseSuccess?.();
 			await successfulBind;
 			expect(harness.faux.state.callCount).toBe(0);
+		});
+
+		/** A is in flight with B and C held; a second bind is pending and ends fatally when `failure` is released. */
+		async function startFatalDuringReplay(emissionThree?: (pi: ExtensionAPI) => void) {
+			let emission = 0;
+			const gates: { releaseFailure?: () => void; releaseA?: () => void } = {};
+			let failureStarted: (() => void) | undefined;
+			const failurePending = new Promise<void>((resolve) => {
+				failureStarted = resolve;
+			});
+			let aStarted: (() => void) | undefined;
+			const aInFlight = new Promise<void>((resolve) => {
+				aStarted = resolve;
+			});
+			const errors: string[] = [];
+			const harness = await harnessWith({
+				extensionFactories: [
+					(pi) => {
+						pi.on("session_start", async () => {
+							emission++;
+							if (emission === 1) {
+								pi.sendUserMessage("A");
+								pi.sendUserMessage("B");
+								pi.sendUserMessage("C");
+							} else if (emission === 2) {
+								failureStarted?.();
+								await new Promise<void>((resolve) => {
+									gates.releaseFailure = resolve;
+								});
+								throw new ExtensionStartupError("late failure");
+							} else {
+								emissionThree?.(pi);
+							}
+						});
+					},
+				],
+			});
+			harness.setResponses([
+				async () => {
+					aStarted?.();
+					await new Promise<void>((resolve) => {
+						gates.releaseA = resolve;
+					});
+					return fauxAssistantMessage("A reply");
+				},
+				fauxAssistantMessage("D reply"),
+			]);
+			await harness.session.bindExtensions({ mode: "print", onError: (error) => errors.push(error.event) });
+			await aInFlight;
+			const failedBind = harness.session.bindExtensions({ mode: "print" });
+			await failurePending;
+			return { harness, gates, errors, failedBind };
+		}
+
+		it("discards every held action when a fatal bind settles during a replayed one", async () => {
+			const { harness, gates, errors, failedBind } = await startFatalDuringReplay();
+
+			gates.releaseFailure?.();
+			await expect(failedBind).rejects.toThrow("late failure");
+			// B and C were still held when the fatal settled, so both are reported now.
+			expect(errors).toEqual(["send_user_message", "send_user_message"]);
+			const discarded = errors.length;
+
+			gates.releaseA?.();
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			await harness.session.waitForIdle();
+			expect(errors.length).toBe(discarded);
+			expect(harness.faux.state.callCount).toBe(1);
+			expect(
+				harness.session.messages
+					.filter((message) => message.role === "user")
+					.map((message) => contentText(message.content)),
+			).toEqual(["A"]);
+		});
+
+		it("does not replay actions discarded by a fatal bind after a successful recovery", async () => {
+			const { harness, gates, errors, failedBind } = await startFatalDuringReplay((pi) => {
+				pi.sendUserMessage("D");
+			});
+
+			gates.releaseFailure?.();
+			await expect(failedBind).rejects.toThrow("late failure");
+			expect(errors).toEqual(["send_user_message", "send_user_message"]);
+
+			await harness.session.bindExtensions({ mode: "print" });
+			gates.releaseA?.();
+			await vi.waitFor(() => expect(harness.faux.state.callCount).toBe(2));
+			await harness.session.waitForIdle();
+			expect(
+				harness.session.messages
+					.filter((message) => message.role === "user")
+					.map((message) => contentText(message.content)),
+			).toEqual(["A", "D"]);
 		});
 
 		it("keeps a late fatal bind latched until a later bind succeeds", async () => {

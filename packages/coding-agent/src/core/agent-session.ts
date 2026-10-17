@@ -470,8 +470,13 @@ export class AgentSession {
 	private _extensionsBound = false;
 	/** Number of session_start emissions in flight. Provider-bound work waits for zero. */
 	private _startupPending = 0;
-	/** Increments per session_start emission; only the latest emission may set or clear the latch. */
+	/** Resolves when the current group of concurrent session_start emissions settles. */
+	private _startupSettled: Promise<void> | undefined;
+	private _resolveStartupSettled: (() => void) | undefined;
+	/** Increments per session_start emission. */
 	private _startupGeneration = 0;
+	/** A success must start after this generation to clear the fatal startup latch. */
+	private _startupFailureRecoveryGeneration = 0;
 	/** Extension callbacks that would start provider work, held until session_start settles. */
 	private _deferredStartupActions: Array<{
 		run: () => Promise<void>;
@@ -485,6 +490,9 @@ export class AgentSession {
 	private _extensionErrorUnsubscriber?: () => void;
 
 	private _modelRuntime: ModelRuntime;
+	/** The unwrapped and startup-gated stream functions, retained for streamSimple-specific auth behavior. */
+	private _baseAgentStreamFunction: AgentSession["agent"]["streamFunction"] | undefined;
+	private _startupGatedStreamFunction: AgentSession["agent"]["streamFunction"] | undefined;
 	private _cacheWarmer?: Pick<CacheWarmer, "cancel" | "status" | "onAgentSettled" | "onModeChanged" | "onWarmed">;
 
 	// Tool registry for extension getTools/setTools
@@ -533,6 +541,7 @@ export class AgentSession {
 		this._installAgentToolHooks();
 		this._installAgentNextTurnRefresh();
 		this._installAgentRequestProjection();
+		this._installAgentStartupGate();
 		this._installAgentBoundaryHooks();
 		this._installHiddenDeclarationsProjection();
 		this._installAgentForcedPromptProjection();
@@ -607,7 +616,11 @@ export class AgentSession {
 					signal,
 				})
 			: { model: selectedModel, thinkingLevel: this.thinkingLevel };
-		if (this.agent.streamFunction === streamSimple) {
+		const streamFunction =
+			this.agent.streamFunction === this._startupGatedStreamFunction
+				? this._baseAgentStreamFunction
+				: this.agent.streamFunction;
+		if (streamFunction === streamSimple) {
 			return { ...(await this._getRequiredRequestAuth(model, signal)), thinkingLevel };
 		}
 
@@ -807,8 +820,10 @@ export class AgentSession {
 	private _installAgentRequestProjection(): void {
 		const previousPrepareRequest = this.agent.prepareRequest;
 		this.agent.prepareRequest = async (request, signal) => {
-			// A run already in flight when a reload fails fatally must not reach the provider again.
-			this._assertExtensionsStarted({ allowPending: true });
+			// A run already in flight when reload begins waits for startup to settle, then either
+			// continues or observes its fatal latch before it can prepare another provider request.
+			await this._waitForExtensionsStarted();
+			this._assertExtensionsStarted();
 			const failed = this._failedResponse;
 			this._failedResponse = undefined;
 			const prepare = async () => {
@@ -863,6 +878,18 @@ export class AgentSession {
 			}
 			return { ...previous, context, model: route.model, thinkingLevel: route.thinkingLevel };
 		};
+	}
+
+	/** Recheck startup after every async request transform, immediately before streamFunction sends. */
+	private _installAgentStartupGate(): void {
+		const streamFunction = this.agent.streamFunction;
+		this._baseAgentStreamFunction = streamFunction;
+		this._startupGatedStreamFunction = async (...args: Parameters<typeof streamFunction>) => {
+			await this._waitForExtensionsStarted();
+			this._assertExtensionsStarted();
+			return await streamFunction(...args);
+		};
+		this.agent.streamFunction = this._startupGatedStreamFunction;
 	}
 
 	private async _dispatchTurnEndBoundary(
@@ -3346,13 +3373,17 @@ export class AgentSession {
 	 * Emit session_start. While it runs, provider-bound work is refused (SDK calls) or deferred
 	 * (extension callbacks such as `pi.sendUserMessage()`). A fatal `ExtensionStartupError` latches
 	 * the session so it sends no requests, discards the deferred work, then rethrows. A completed
-	 * session_start clears the latch and replays the deferred work in order. Only the latest of
-	 * overlapping emissions decides the latch.
+	 * session_start clears the latch and replays the deferred work in order. A fatal overlapping
+	 * emission always latches; only a successful emission started after that failure settled clears it.
 	 * @param before Runs inside the pending window, ahead of the handlers.
 	 */
 	private async _emitSessionStart(event: SessionStartEvent, before?: () => void | Promise<void>): Promise<void> {
 		const generation = ++this._startupGeneration;
-		this._startupPending++;
+		if (this._startupPending++ === 0) {
+			this._startupSettled = new Promise((resolve) => {
+				this._resolveStartupSettled = resolve;
+			});
+		}
 		let failure: ExtensionStartupError | undefined;
 		try {
 			await before?.();
@@ -3362,7 +3393,20 @@ export class AgentSession {
 			throw error;
 		} finally {
 			this._startupPending--;
-			if (generation === this._startupGeneration) this._extensionStartupFailure = failure;
+			if (failure) {
+				// An overlapping success that started before this fatal emission settled cannot
+				// recover it. Only a future bind or reload may clear the latch.
+				this._extensionStartupFailure = failure;
+				this._startupFailureRecoveryGeneration = this._startupGeneration;
+			} else if (generation > this._startupFailureRecoveryGeneration) {
+				this._extensionStartupFailure = undefined;
+			}
+			if (this._startupPending === 0) {
+				const resolve = this._resolveStartupSettled;
+				this._startupSettled = undefined;
+				this._resolveStartupSettled = undefined;
+				resolve?.();
+			}
 			this._settleDeferredStartupActions();
 		}
 	}
@@ -3377,25 +3421,35 @@ export class AgentSession {
 			for (const action of actions) action.discard(failure);
 			return;
 		}
-		this._replayingStartup = true;
-		let runs: Promise<void>[];
-		try {
-			runs = actions.map((action) => action.run());
-		} finally {
-			this._replayingStartup = false;
-		}
-		const replay = Promise.allSettled(runs).then(() => {
-			if (this._startupReplay === replay) this._startupReplay = undefined;
+		const replay = (async () => {
+			for (const action of actions) {
+				let run: Promise<void>;
+				this._replayingStartup = true;
+				try {
+					run = action.run();
+				} finally {
+					// Only the action's synchronous entry needs to bypass its own replay wait.
+					this._replayingStartup = false;
+				}
+				try {
+					await run;
+				} catch {
+					// The action reports its own failure; continue with the ordered replay.
+				}
+			}
+		})();
+		const settledReplay = replay.finally(() => {
+			if (this._startupReplay === settledReplay) this._startupReplay = undefined;
 		});
-		this._startupReplay = replay;
+		this._startupReplay = settledReplay;
 	}
 
 	/**
 	 * Refuse to reach a provider while session_start is pending or failed fatally. A failure
 	 * throws `ExtensionStartupError`; a pending startup throws a plain `Error`, so callers that
-	 * treat the former as fatal do not. `allowPending` is for runs already in flight.
+	 * treat the former as fatal do not.
 	 */
-	private _assertExtensionsStarted(options?: { allowPending?: boolean }): void {
+	private _assertExtensionsStarted(): void {
 		const failure = this._extensionStartupFailure;
 		if (failure) {
 			throw new ExtensionStartupError(
@@ -3403,10 +3457,17 @@ export class AgentSession {
 				{ cause: failure },
 			);
 		}
-		if (this._startupPending > 0 && !options?.allowPending) {
+		if (this._startupPending > 0) {
 			throw new Error(
 				"Session extensions are still starting. Await bindExtensions() or reload() before sending requests.",
 			);
+		}
+	}
+
+	/** Wait for the current startup group, including every overlapping emission, to settle. */
+	private async _waitForExtensionsStarted(): Promise<void> {
+		while (this._startupPending > 0) {
+			await this._startupSettled;
 		}
 	}
 

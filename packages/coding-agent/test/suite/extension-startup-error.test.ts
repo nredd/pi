@@ -1,5 +1,7 @@
-import { contentText, fauxAssistantMessage } from "@earendil-works/pi-ai";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
+import { contentText, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { registerFauxProvider } from "@earendil-works/pi-ai/compat";
+import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentSessionRuntime } from "../../src/core/agent-session-runtime.ts";
 import type { ExtensionAPI } from "../../src/core/extensions/types.ts";
@@ -348,6 +350,36 @@ describe("ExtensionStartupError", () => {
 			]);
 		});
 
+		it("replays multiple startup messages sequentially", async () => {
+			const harness = await harnessWith({
+				extensionFactories: [
+					(pi) => {
+						pi.on("session_start", () => {
+							pi.sendUserMessage("first startup message");
+							pi.sendUserMessage("second startup message");
+						});
+					},
+				],
+			});
+			harness.setResponses([fauxAssistantMessage("first reply"), fauxAssistantMessage("second reply")]);
+
+			await harness.session.bindExtensions({ mode: "print" });
+			await vi.waitFor(() => expect(harness.faux.state.callCount).toBe(2));
+			await harness.session.waitForIdle();
+
+			expect(harness.faux.state.callCount).toBe(2);
+			expect(
+				harness.session.messages
+					.filter((message) => message.role === "user" || message.role === "assistant")
+					.map((message) => `${message.role}:${contentText(message.content)}`),
+			).toEqual([
+				"user:first startup message",
+				"assistant:first reply",
+				"user:second startup message",
+				"assistant:second reply",
+			]);
+		});
+
 		it("runs a prompt issued right after the bind behind the replayed startup message", async () => {
 			// Print mode prompts immediately after bindExtensions(). Before the replay existed that
 			// raced the startup turn; now the prompt waits for it instead of "already processing".
@@ -441,6 +473,125 @@ describe("ExtensionStartupError", () => {
 			expect(harness.faux.state.callCount).toBe(0);
 		});
 
+		it("waits for pending reload startup before an in-flight turn's next request", async () => {
+			let releaseTool: (() => void) | undefined;
+			let toolStarted: (() => void) | undefined;
+			const toolRan = new Promise<void>((resolve) => {
+				toolStarted = resolve;
+			});
+			let releaseStartup: (() => void) | undefined;
+			let reloadStarted: (() => void) | undefined;
+			const startupPending = new Promise<void>((resolve) => {
+				reloadStarted = resolve;
+			});
+			const waitTool: AgentTool = {
+				name: "wait",
+				label: "Wait",
+				description: "Waits for the test",
+				parameters: Type.Object({}),
+				execute: async () => {
+					toolStarted?.();
+					await new Promise<void>((resolve) => {
+						releaseTool = resolve;
+					});
+					return { content: [], details: {} };
+				},
+			};
+			const harness = await harnessWith({
+				tools: [waitTool],
+				extensionFactories: [
+					(pi) => {
+						pi.on("session_start", async (event) => {
+							if (event.reason !== "reload") return;
+							reloadStarted?.();
+							await new Promise<void>((resolve) => {
+								releaseStartup = resolve;
+							});
+						});
+					},
+				],
+			});
+			harness.setResponses([
+				fauxAssistantMessage(fauxToolCall("wait", {}), { stopReason: "toolUse" }),
+				fauxAssistantMessage("after reload"),
+			]);
+			await harness.session.bindExtensions({ mode: "print" });
+
+			const prompt = harness.session.prompt("start");
+			await toolRan;
+			const reload = harness.session.reload();
+			await startupPending;
+			const recoveredProvider = registerFauxProvider({ api: harness.faux.api });
+			try {
+				recoveredProvider.setResponses([fauxAssistantMessage("after reload")]);
+				releaseTool?.();
+				await new Promise((resolve) => setTimeout(resolve, 10));
+				expect(recoveredProvider.state.callCount).toBe(0);
+
+				releaseStartup?.();
+				await reload;
+				await prompt;
+				expect(recoveredProvider.state.callCount).toBe(1);
+			} finally {
+				recoveredProvider.unregister();
+			}
+		});
+
+		it("rechecks the startup latch after context handlers before streaming", async () => {
+			const state = { fatal: false };
+			let releaseContext: (() => void) | undefined;
+			let contextStarted: (() => void) | undefined;
+			const contextPending = new Promise<void>((resolve) => {
+				contextStarted = resolve;
+			});
+			let releaseStartup: (() => void) | undefined;
+			let reloadStarted: (() => void) | undefined;
+			const startupPending = new Promise<void>((resolve) => {
+				reloadStarted = resolve;
+			});
+			const harness = await harnessWith({
+				extensionFactories: [
+					(pi) => {
+						pi.on("session_start", async (event) => {
+							if (event.reason !== "reload") return;
+							reloadStarted?.();
+							await new Promise<void>((resolve) => {
+								releaseStartup = resolve;
+							});
+							if (state.fatal) throw new ExtensionStartupError("fatal reload");
+						});
+						pi.on("context", async () => {
+							contextStarted?.();
+							await new Promise<void>((resolve) => {
+								releaseContext = resolve;
+							});
+						});
+					},
+				],
+			});
+			harness.setResponses([fauxAssistantMessage("must not stream")]);
+			await harness.session.bindExtensions({ mode: "print" });
+
+			const prompt = harness.session.prompt("start");
+			await contextPending;
+			state.fatal = true;
+			const reload = harness.session.reload();
+			await startupPending;
+			const recoveredProvider = registerFauxProvider({ api: harness.faux.api });
+			try {
+				recoveredProvider.setResponses([fauxAssistantMessage("must not stream")]);
+				releaseContext?.();
+				await new Promise((resolve) => setTimeout(resolve, 10));
+				expect(recoveredProvider.state.callCount).toBe(0);
+				releaseStartup?.();
+				await expect(reload).rejects.toBeInstanceOf(ExtensionStartupError);
+				await prompt;
+				expect(recoveredProvider.state.callCount).toBe(0);
+			} finally {
+				recoveredProvider.unregister();
+			}
+		});
+
 		it("discards a startup message from a failed reload", async () => {
 			const state = { fatal: false };
 			const harness = await harnessWith({
@@ -461,6 +612,60 @@ describe("ExtensionStartupError", () => {
 
 			expect(harness.faux.state.callCount).toBe(0);
 			expect(harness.session.messages).toEqual([]);
+		});
+	});
+
+	describe("overlapping startup", () => {
+		it("keeps a late fatal bind latched until a later bind succeeds", async () => {
+			let emission = 0;
+			let releaseFailure: (() => void) | undefined;
+			let failureStarted: (() => void) | undefined;
+			const failurePending = new Promise<void>((resolve) => {
+				failureStarted = resolve;
+			});
+			let releaseSuccess: (() => void) | undefined;
+			let successStarted: (() => void) | undefined;
+			const successPending = new Promise<void>((resolve) => {
+				successStarted = resolve;
+			});
+			const harness = await harnessWith({
+				extensionFactories: [
+					(pi) => {
+						pi.on("session_start", async () => {
+							emission++;
+							if (emission === 2) {
+								failureStarted?.();
+								await new Promise<void>((resolve) => {
+									releaseFailure = resolve;
+								});
+								throw new ExtensionStartupError("late failure");
+							}
+							if (emission === 3) {
+								successStarted?.();
+								await new Promise<void>((resolve) => {
+									releaseSuccess = resolve;
+								});
+							}
+						});
+					},
+				],
+			});
+			await harness.session.bindExtensions({ mode: "print" });
+
+			const failedBind = harness.session.bindExtensions({ mode: "print" });
+			await failurePending;
+			const successfulBind = harness.session.bindExtensions({ mode: "print" });
+			await successPending;
+			releaseSuccess?.();
+			await successfulBind;
+			releaseFailure?.();
+			await expect(failedBind).rejects.toBeInstanceOf(ExtensionStartupError);
+
+			await expect(harness.session.prompt("still latched")).rejects.toThrow("late failure");
+			harness.setResponses([fauxAssistantMessage("recovered")]);
+			await harness.session.bindExtensions({ mode: "print" });
+			await harness.session.prompt("recovered");
+			expect(harness.faux.state.callCount).toBe(1);
 		});
 	});
 

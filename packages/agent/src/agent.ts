@@ -134,8 +134,8 @@ export interface AgentOptions {
 	steeringMode?: QueueMode;
 	followUpMode?: QueueMode;
 	sessionId?: string;
-	/** Awaited by the stream function immediately before each provider request; see `Agent.beforeProviderRequest`. */
-	beforeProviderRequest?: () => Promise<void>;
+	/** Resolves to the synchronous check run immediately before each provider dispatch; see `Agent.beforeProviderRequest`. */
+	beforeProviderRequest?: () => Promise<() => void>;
 	thinkingBudgets?: ThinkingBudgets;
 	transport?: Transport;
 	maxRetryDelayMs?: number;
@@ -222,10 +222,10 @@ export class Agent {
 	public sessionId?: string;
 	/**
 	 * Forwarded to the stream function with every request, like `sessionId`, so it survives a
-	 * replaced `streamFunction`. A session uses it to refuse provider dispatch while its
-	 * extensions are still starting or failed to start.
+	 * replaced `streamFunction`. It resolves to a synchronous final check so a session can refuse
+	 * provider dispatch while its extensions are still starting or failed to start.
 	 */
-	public beforeProviderRequest?: () => Promise<void>;
+	public beforeProviderRequest?: () => Promise<() => void>;
 	/** Optional per-level thinking token budgets forwarded to the stream function. */
 	public thinkingBudgets?: ThinkingBudgets;
 	/** Preferred transport forwarded to the stream function. */

@@ -505,12 +505,13 @@ export class AgentSession {
 	}
 	/** Session-owned model view, used for every extension-originated provider request. */
 	private _models!: Models;
-	/** Last-moment startup check the shared runtime runs before every provider request of this session. */
-	private readonly _providerRequestGate = async (): Promise<void> => {
+	/** Last-moment startup check and synchronous dispatch recheck for this session's provider requests. */
+	private readonly _providerRequestGate = async (): Promise<() => void> => {
 		// A handler awaiting its own request cannot wait for the handler to settle.
 		if (this._inSessionStartHandler.getStore()) this._assertExtensionsStarted();
 		await this._waitForExtensionsStarted();
 		this._assertExtensionsStarted();
+		return () => this._assertExtensionsStarted();
 	};
 	private _cacheWarmer?: Pick<CacheWarmer, "cancel" | "status" | "onAgentSettled" | "onModeChanged" | "onWarmed">;
 
@@ -3451,6 +3452,13 @@ export class AgentSession {
 		const replay = (async () => {
 			await previousReplay;
 			for (const action of actions) {
+				await this._waitForExtensionsStarted();
+				const failure = this._extensionStartupFailure;
+				if (failure) {
+					action.discard(failure);
+					this._discardDeferredStartupActions(failure);
+					return;
+				}
 				let run: Promise<void>;
 				this._replayingStartup = true;
 				try {

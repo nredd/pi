@@ -133,7 +133,8 @@ export interface ModelRuntimeAuthOverrides extends AuthOperationOptions {
 
 /** A session-local check made after request preparation, immediately before provider dispatch. */
 export interface BeforeProviderRequestOptions {
-	beforeProviderRequest?: () => Promise<void>;
+	/** Resolves to a synchronous final check that runs immediately before provider dispatch. */
+	beforeProviderRequest?: () => Promise<() => void>;
 }
 
 export type CredentialSynchronizationOperation = "login" | "logout" | "setRuntimeApiKey" | "removeRuntimeApiKey";
@@ -443,7 +444,7 @@ export class ModelRuntime implements Models {
 	}
 
 	/** A session-owned view that gates only its provider requests; raw runtime users remain ungated. */
-	withBeforeProviderRequest(beforeProviderRequest: () => Promise<void>): Models {
+	withBeforeProviderRequest(beforeProviderRequest: () => Promise<() => void>): Models {
 		const withGate = <T extends object | undefined>(options: T): T & BeforeProviderRequestOptions => ({
 			...options,
 			beforeProviderRequest,
@@ -750,7 +751,8 @@ export class ModelRuntime implements Models {
 				model,
 				options as (StreamOptions & ModelsRequestTransforms) | undefined,
 			);
-			await options?.beforeProviderRequest?.();
+			const recheck = await options?.beforeProviderRequest?.();
+			recheck?.();
 			return prepared.provider.stream(prepared.model, transcript, prepared.options as ApiStreamOptions<TApi>);
 		});
 	}
@@ -791,7 +793,8 @@ export class ModelRuntime implements Models {
 		return lazyStream(model, async () => {
 			assertChatModel(model);
 			const prepared = await this.prepareRequest(model, options);
-			await options?.beforeProviderRequest?.();
+			const recheck = await options?.beforeProviderRequest?.();
+			recheck?.();
 			return prepared.provider.streamSimple(prepared.model, transcript, prepared.options as SimpleStreamOptions);
 		});
 	}
@@ -815,7 +818,8 @@ export class ModelRuntime implements Models {
 			if (!prepared.provider.fetchDeferred) {
 				throw new ModelsError("provider", `Provider ${model.provider} does not support deferred responses`);
 			}
-			await options?.beforeProviderRequest?.();
+			const recheck = await options?.beforeProviderRequest?.();
+			recheck?.();
 			return prepared.provider.fetchDeferred(prepared.model, handle, prepared.options as DeferredFetchOptions);
 		});
 	}
@@ -838,8 +842,9 @@ export class ModelRuntime implements Models {
 		if (!prepared.provider.cancelDeferred) {
 			throw new ModelsError("provider", `Provider ${model.provider} does not support deferred responses`);
 		}
-		await options?.beforeProviderRequest?.();
-		await prepared.provider.cancelDeferred(prepared.model, handle, prepared.options as DeferredCancelOptions);
+		const recheck = await options?.beforeProviderRequest?.();
+		recheck?.();
+		return prepared.provider.cancelDeferred(prepared.model, handle, prepared.options as DeferredCancelOptions);
 	}
 
 	async generateImages(
@@ -853,7 +858,8 @@ export class ModelRuntime implements Models {
 			if (!prepared.provider.generateImages) {
 				throw new ModelsError("provider", `Provider ${model.provider} does not support image generation`);
 			}
-			await options?.beforeProviderRequest?.();
+			const recheck = await options?.beforeProviderRequest?.();
+			recheck?.();
 			return await prepared.provider.generateImages(prepared.model, context, prepared.options as ImagesOptions);
 		} catch (error) {
 			return imageErrorResult(model, error, options?.signal?.aborted);
@@ -872,7 +878,8 @@ export class ModelRuntime implements Models {
 			if (!prepared.provider.classify) {
 				throw new ModelsError("provider", `Provider ${model.provider} does not support classification`);
 			}
-			await options?.beforeProviderRequest?.();
+			const recheck = await options?.beforeProviderRequest?.();
+			recheck?.();
 			return await prepared.provider.classify(prepared.model, context, prepared.options as ClassifierOptions);
 		} catch (error) {
 			return classifierErrorResult(model, error, options?.signal?.aborted);

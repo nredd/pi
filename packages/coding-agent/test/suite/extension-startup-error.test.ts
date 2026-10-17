@@ -3,6 +3,7 @@ import {
 	contentText,
 	fauxAssistantMessage,
 	fauxToolCall,
+	type Model,
 	type ModelsSimpleStreamOptions,
 	type ProviderHeaders,
 } from "@earendil-works/pi-ai";
@@ -848,16 +849,21 @@ describe("ExtensionStartupError", () => {
 			expect(second.faux.state.callCount).toBe(1);
 		});
 
-		it("refuses model-registry requests from a session_start handler", async () => {
+		it("encodes model-registry startup refusal in its documented result types", async () => {
 			const results: Array<{ stopReason: string; errorMessage?: string }> = [];
+			let chatModel: Model<string> | undefined;
 			let providerCalls = 0;
 			const harness = await harnessWith({
 				extensionFactories: [
 					(pi) => {
 						pi.on("session_start", async (_event, ctx) => {
 							const classifier = ctx.modelRegistry.findOfType("classifier", "startup-operations", "classifier")!;
+							const chat = chatModel!;
 							const image = ctx.modelRegistry.findOfType("image", "startup-operations", "image")!;
 							results.push(
+								await ctx.modelRegistry.stream(chat, { messages: [] }).result(),
+								await ctx.modelRegistry.streamSimple(chat, { messages: [] }).result(),
+								await ctx.modelRegistry.complete(chat, { messages: [] }),
 								await ctx.modelRegistry.classify(classifier, {
 									state: {},
 									questions: {
@@ -871,6 +877,7 @@ describe("ExtensionStartupError", () => {
 					startupExtension({ armed: true }, () => new ExtensionStartupError("later failure")),
 				],
 			});
+			chatModel = harness.getModel();
 			harness.session.modelRuntime.registerProvider("startup-operations", {
 				apiKey: "secret",
 				baseUrl: "https://startup.test/v1",
@@ -913,7 +920,7 @@ describe("ExtensionStartupError", () => {
 			});
 
 			await expect(harness.session.bindExtensions({ mode: "print" })).rejects.toThrow("later failure");
-			expect(results).toHaveLength(2);
+			expect(results).toHaveLength(5);
 			for (const result of results) {
 				expect(result).toMatchObject({
 					stopReason: "error",
@@ -922,6 +929,110 @@ describe("ExtensionStartupError", () => {
 			}
 			expect(providerCalls).toBe(0);
 			expect(harness.faux.state.callCount).toBe(0);
+		});
+
+		it("waits for each held action when a new startup begins during replay", async () => {
+			let emission = 0;
+			let releaseFirst: (() => void) | undefined;
+			let firstRequest: (() => void) | undefined;
+			const firstInFlight = new Promise<void>((resolve) => {
+				firstRequest = resolve;
+			});
+			let releaseSecondStartup: (() => void) | undefined;
+			let secondStartupStarted: (() => void) | undefined;
+			const secondStartupPending = new Promise<void>((resolve) => {
+				secondStartupStarted = resolve;
+			});
+			const errors: string[] = [];
+			const harness = await harnessWith({
+				extensionFactories: [
+					(pi) => {
+						pi.on("session_start", async () => {
+							emission++;
+							if (emission === 1) {
+								pi.sendUserMessage("A");
+								pi.sendUserMessage("B");
+								return;
+							}
+							secondStartupStarted?.();
+							await new Promise<void>((resolve) => {
+								releaseSecondStartup = resolve;
+							});
+						});
+					},
+				],
+			});
+			harness.setResponses([
+				async () => {
+					firstRequest?.();
+					await new Promise<void>((resolve) => {
+						releaseFirst = resolve;
+					});
+					return fauxAssistantMessage("A reply");
+				},
+				fauxAssistantMessage("B reply"),
+			]);
+
+			await harness.session.bindExtensions({ mode: "print", onError: (error) => errors.push(error.error) });
+			await firstInFlight;
+			const secondBind = harness.session.bindExtensions({ mode: "print" });
+			await secondStartupPending;
+			releaseFirst?.();
+			await new Promise((resolve) => setTimeout(resolve, 10));
+			expect(harness.faux.state.callCount).toBe(1);
+
+			releaseSecondStartup?.();
+			await secondBind;
+			await vi.waitFor(() => expect(harness.faux.state.callCount).toBe(2));
+			await harness.session.waitForIdle();
+			expect(errors).not.toContain(expect.stringContaining("still starting"));
+			expect(
+				harness.session.messages
+					.filter((message) => message.role === "user")
+					.map((message) => contentText(message.content)),
+			).toEqual(["A", "B"]);
+		});
+
+		it("rechecks startup synchronously when a bind queues as the provider gate resolves", async () => {
+			const state = { slow: false };
+			let releaseStartup: (() => void) | undefined;
+			let startupStarted: (() => void) | undefined;
+			const startupPending = new Promise<void>((resolve) => {
+				startupStarted = resolve;
+			});
+			const harness = await harnessWith({
+				useModelRuntimeStream: true,
+				extensionFactories: [
+					(pi) => {
+						pi.on("session_start", async () => {
+							if (!state.slow) return;
+							startupStarted?.();
+							await new Promise<void>((resolve) => {
+								releaseStartup = resolve;
+							});
+						});
+					},
+				],
+			});
+			harness.setResponses([fauxAssistantMessage("must not dispatch")]);
+			await harness.session.bindExtensions({ mode: "print" });
+			state.slow = true;
+			const gate = harness.session.agent.beforeProviderRequest!;
+			let queuedBind: Promise<void> | undefined;
+			harness.session.agent.beforeProviderRequest = async () => {
+				const recheck = await gate();
+				queueMicrotask(() => {
+					queuedBind = harness.session.bindExtensions({ mode: "print" });
+				});
+				return recheck;
+			};
+
+			const prompt = harness.session.prompt("race startup");
+			await startupPending;
+			expect(harness.faux.state.callCount).toBe(0);
+			releaseStartup?.();
+			await queuedBind;
+			await prompt;
 		});
 
 		it("chains overlapping startup replay batches in order", async () => {

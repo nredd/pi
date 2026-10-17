@@ -1136,6 +1136,61 @@ describe("ExtensionStartupError", () => {
 			).toEqual(["held"]);
 		});
 
+		it("discards a replayed message held behind agent_settled when a fatal bind settles", async () => {
+			// A replay that lands while agent_settled handlers run must not escape into the settled
+			// deferral queue: a fatal bind in that window discards it, and a recovery never runs it.
+			let emission = 0;
+			const gates: { releaseSettled?: () => void } = {};
+			let settledStarted: (() => void) | undefined;
+			const settledPaused = new Promise<void>((resolve) => {
+				settledStarted = resolve;
+			});
+			const errors: Array<{ event: string; error: string }> = [];
+			const harness = await harnessWith({
+				extensionFactories: [
+					(pi) => {
+						pi.on("agent_settled", async () => {
+							if (emission !== 1) return;
+							settledStarted?.();
+							await new Promise<void>((resolve) => {
+								gates.releaseSettled = resolve;
+							});
+						});
+						pi.on("session_start", () => {
+							emission++;
+							if (emission === 2) pi.sendUserMessage("held behind settled");
+							if (emission === 3) throw new ExtensionStartupError("fatal while held");
+						});
+					},
+				],
+			});
+			const onError = (error: { event: string; error: string }) =>
+				errors.push({ event: error.event, error: error.error });
+			harness.setResponses([fauxAssistantMessage("first reply"), fauxAssistantMessage("must not be requested")]);
+
+			await harness.session.bindExtensions({ mode: "print", onError });
+			const first = harness.session.prompt("first");
+			await settledPaused;
+			// Replay lands while agent_settled is still emitting.
+			await harness.session.bindExtensions({ mode: "print", onError });
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			await expect(harness.session.bindExtensions({ mode: "print", onError })).rejects.toThrow("fatal while held");
+			// Recovery before agent_settled finishes.
+			await harness.session.bindExtensions({ mode: "print", onError });
+			gates.releaseSettled?.();
+			await first;
+			await harness.session.waitForIdle();
+			await new Promise((resolve) => setTimeout(resolve, 20));
+
+			expect(harness.faux.state.callCount).toBe(1);
+			expect(errors.filter((entry) => entry.event === "send_user_message")).toHaveLength(1);
+			expect(
+				harness.session.messages
+					.filter((message) => message.role === "user")
+					.map((message) => contentText(message.content)),
+			).toEqual(["first"]);
+		});
+
 		it("discards a startup message from a failed reload", async () => {
 			const state = { fatal: false };
 			const harness = await harnessWith({

@@ -435,6 +435,8 @@ export class AgentSession {
 	private _isBeforeSettle = false;
 	private _abortDuringBeforeSettle = false;
 	private _isEmittingAgentSettled = false;
+	/** Settles when the current agent_settled emission finishes; replayed startup actions wait on it. */
+	private _agentSettledEmission: Promise<void> | undefined;
 	private readonly _deferredSettledActions: Array<() => Promise<void>> = [];
 
 	private _resourceLoader: ResourceLoader;
@@ -481,6 +483,8 @@ export class AgentSession {
 	private readonly _inSessionStartHandler = new AsyncLocalStorage<boolean>();
 	/** A success must start after this generation to clear the fatal startup latch. */
 	private _startupFailureRecoveryGeneration = 0;
+	/** Counts fatal emissions; a replayed action dequeued before one is discarded, not delivered. */
+	private _startupFatalCount = 0;
 	/**
 	 * Extension callbacks that would start provider work, held until session_start settles. This
 	 * queue is the only place unplayed actions live: replay `shift()`s one at a time, so a fatal
@@ -1136,12 +1140,18 @@ export class AgentSession {
 		this._cacheWarmer?.onAgentSettled();
 		this._isAgentRunActive = false;
 		this._isEmittingAgentSettled = true;
+		let emissionDone: (() => void) | undefined;
+		this._agentSettledEmission = new Promise<void>((resolve) => {
+			emissionDone = resolve;
+		});
 		try {
 			const aborted = this._agentRunAbortRequested;
 			await this._extensionRunner.emit({ type: "agent_settled", aborted });
 			this._emit({ type: "agent_settled", aborted });
 		} finally {
 			this._isEmittingAgentSettled = false;
+			this._agentSettledEmission = undefined;
+			emissionDone?.();
 		}
 
 		const deferred = this._deferredSettledActions.splice(0);
@@ -1897,7 +1907,7 @@ export class AgentSession {
 	): Promise<void> {
 		// A replayed startup action may have been paused (an input handler, say) while another
 		// session_start began. It waits for that startup, then fails only if it latched fatally.
-		if (awaitStartup && this._startupPending > 0) await this._waitForExtensionsStarted();
+		if (awaitStartup && this._mustAwaitReplayableState()) await this._awaitReplayableState();
 		this._assertExtensionsStarted();
 		this._isAgentRunActive = true;
 		this._agentRunAbortRequested = false;
@@ -2128,7 +2138,7 @@ export class AgentSession {
 	 * session_start instead of failing on it, and to skip the wait on its own replay.
 	 */
 	private async _prompt(text: string, options: PromptOptions | undefined, awaitStartup: boolean): Promise<void> {
-		if (awaitStartup && this._startupPending > 0) await this._waitForExtensionsStarted();
+		if (awaitStartup && this._mustAwaitReplayableState()) await this._awaitReplayableState();
 		this._assertExtensionsStarted();
 		// A message replayed from session_start runs first: a prompt issued right after the bind
 		// (print mode's initial message, say) follows it instead of colliding with its turn. A
@@ -2433,6 +2443,7 @@ export class AgentSession {
 				this.agent.steer(appMessage);
 			}
 		} else if (options?.triggerTurn) {
+			if (awaitStartup && this._mustAwaitReplayableState()) await this._awaitReplayableState();
 			if (this._isEmittingAgentSettled) {
 				this._deferredSettledActions.push(
 					async () => await this._sendCustomMessage(message, options, awaitStartup),
@@ -3455,6 +3466,7 @@ export class AgentSession {
 				// recover it. Only a future bind or reload may clear the latch.
 				this._extensionStartupFailure = failure;
 				this._startupFailureRecoveryGeneration = this._startupGeneration;
+				this._startupFatalCount++;
 				this._discardDeferredStartupActions(failure);
 				// Nothing in flight may finish its provider call: the run, a compaction or a branch
 				// summary paused in auth or a transform all observe their abort signal.
@@ -3473,6 +3485,33 @@ export class AgentSession {
 				resolve?.();
 			}
 			this._settleDeferredStartupActions();
+		}
+	}
+
+	/**
+	 * Bring a replayed startup action to a state where it can run under the replay's control:
+	 * neither an agent_settled emission (which would re-defer it out of the startup queue) nor a
+	 * pending session_start is in progress. A fatal emission that settled while it waited means
+	 * the action belongs to the discarded set, so it fails like the rest instead of running.
+	 */
+	private _mustAwaitReplayableState(): boolean {
+		// Callers skip the await entirely when nothing is in progress: even `await undefined`
+		// costs a tick, which reorders a replay against a session_start notification an
+		// extension subscribed to in the same handler.
+		return this._isEmittingAgentSettled || this._startupPending > 0;
+	}
+
+	private async _awaitReplayableState(): Promise<void> {
+		const fatalCount = this._startupFatalCount;
+		while (this._isEmittingAgentSettled || this._startupPending > 0) {
+			if (this._isEmittingAgentSettled) await this._agentSettledEmission;
+			if (this._startupPending > 0) await this._waitForExtensionsStarted();
+		}
+		if (this._startupFatalCount !== fatalCount) {
+			throw new ExtensionStartupError(
+				"Session extensions failed to start while this startup message was held; it was discarded.",
+				{ cause: this._extensionStartupFailure },
+			);
 		}
 	}
 

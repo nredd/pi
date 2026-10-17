@@ -1461,6 +1461,62 @@ describe("ExtensionStartupError", () => {
 			).toEqual(["first", "held follow-up"]);
 		});
 
+		it("discards a replayed message paused in before_agent_start across a fatal bind and recovery", async () => {
+			// Run preparation runs before_agent_start after the replay's entry check; a fatal bind
+			// while paused there must still discard the message before it is committed.
+			let emission = 0;
+			const gates: { release?: () => void } = {};
+			let paused: (() => void) | undefined;
+			const pausedPromise = new Promise<void>((resolve) => {
+				paused = resolve;
+			});
+			const errors: Array<{ event: string; error: string }> = [];
+			const harness = await harnessWith({
+				extensionFactories: [
+					(pi) => {
+						pi.on("before_agent_start", async () => {
+							paused?.();
+							await new Promise<void>((resolve) => {
+								gates.release = resolve;
+							});
+						});
+						pi.on("session_start", () => {
+							emission++;
+							if (emission === 1) pi.sendUserMessage("held");
+							if (emission === 2) throw new ExtensionStartupError("fatal while preparing");
+						});
+					},
+				],
+			});
+			const onError = (error: { event: string; error: string }) =>
+				errors.push({ event: error.event, error: error.error });
+			harness.setResponses([fauxAssistantMessage("must not be requested"), fauxAssistantMessage("later reply")]);
+
+			await harness.session.bindExtensions({ mode: "print", onError });
+			await pausedPromise;
+			await expect(harness.session.bindExtensions({ mode: "print", onError })).rejects.toThrow(
+				"fatal while preparing",
+			);
+			await harness.session.bindExtensions({ mode: "print", onError });
+			gates.release?.();
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			await harness.session.waitForIdle();
+			expect(harness.faux.state.callCount).toBe(0);
+			expect(errors.filter((entry) => entry.event === "send_user_message")).toHaveLength(1);
+
+			// The discarded message was never committed, so a later prompt does not carry it.
+			gates.release = undefined;
+			const later = harness.session.prompt("later");
+			await vi.waitFor(() => expect(gates.release).toBeDefined());
+			(gates.release as (() => void) | undefined)?.();
+			await later;
+			expect(
+				harness.session.messages
+					.filter((message) => message.role === "user")
+					.map((message) => contentText(message.content)),
+			).toEqual(["later"]);
+		});
+
 		it("discards a startup message from a failed reload", async () => {
 			const state = { fatal: false };
 			const harness = await harnessWith({

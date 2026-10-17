@@ -1927,6 +1927,13 @@ export class AgentSession {
 		let messages: AgentMessage[];
 		try {
 			messages = await this._prepareRun(trigger);
+			// before_agent_start handlers ran inside _prepareRun; a replay that was paused there
+			// across a fatal bind must not commit its message, recovery or not.
+			if (replay) {
+				const wait = this._awaitReplayableState(replay);
+				if (wait) await wait;
+				this._assertExtensionsStarted();
+			}
 		} catch (error) {
 			this._isAgentRunActive = false;
 			this._flushPendingBashMessages();

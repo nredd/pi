@@ -195,6 +195,8 @@ export class ModelRuntime implements Models {
 	private readonly providerAvailabilitySeq = new Map<string, number>();
 	private availabilityError: string | undefined;
 	private readonly credentialOperations = new Map<string, Promise<unknown>>();
+	/** Session-owned gate run at the last synchronous point before a provider request. */
+	private beforeProviderRequest: (() => Promise<void>) | undefined;
 
 	private constructor(
 		credentials: RuntimeCredentials,
@@ -436,6 +438,20 @@ export class ModelRuntime implements Models {
 			}
 			throw error;
 		}
+	}
+
+	/**
+	 * Set the session-owned gate run immediately before each provider request. The runtime is
+	 * shared across the sessions of one host, so the newest session's gate wins; a disposed session
+	 * releases its own gate with `clearBeforeProviderRequest` without disturbing a successor's.
+	 */
+	setBeforeProviderRequest(beforeProviderRequest: () => Promise<void>): void {
+		this.beforeProviderRequest = beforeProviderRequest;
+	}
+
+	/** Remove `beforeProviderRequest` only if it is still the installed gate. */
+	clearBeforeProviderRequest(beforeProviderRequest: () => Promise<void>): void {
+		if (this.beforeProviderRequest === beforeProviderRequest) this.beforeProviderRequest = undefined;
 	}
 
 	getProviders(): readonly Provider[] {
@@ -708,6 +724,7 @@ export class ModelRuntime implements Models {
 				model,
 				options as (StreamOptions & ModelsRequestTransforms) | undefined,
 			);
+			await this.beforeProviderRequest?.();
 			return prepared.provider.stream(prepared.model, transcript, prepared.options as ApiStreamOptions<TApi>);
 		});
 	}
@@ -744,6 +761,7 @@ export class ModelRuntime implements Models {
 		return lazyStream(model, async () => {
 			assertChatModel(model);
 			const prepared = await this.prepareRequest(model, options);
+			await this.beforeProviderRequest?.();
 			return prepared.provider.streamSimple(prepared.model, transcript, prepared.options as SimpleStreamOptions);
 		});
 	}

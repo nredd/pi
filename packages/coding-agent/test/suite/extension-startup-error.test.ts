@@ -266,6 +266,26 @@ describe("ExtensionStartupError", () => {
 			expect(handler).not.toHaveBeenCalled();
 		});
 
+		it("keeps a fatal latch when reload setup throws before session_start", async () => {
+			const state = { armed: false };
+			const harness = await harnessWith({
+				extensionFactories: [startupExtension(state, () => new ExtensionStartupError("bad reload"))],
+			});
+			await harness.session.bindExtensions({ mode: "print" });
+
+			state.armed = true;
+			await expect(harness.session.reload()).rejects.toThrow("bad reload");
+			await expect(
+				harness.session.reload({
+					beforeSessionStart: () => {
+						throw new Error("reload setup failed");
+					},
+				}),
+			).rejects.toThrow("reload setup failed");
+
+			await expect(harness.session.prompt("still blocked")).rejects.toThrow("bad reload");
+		});
+
 		it("does not latch ordinary startup errors", async () => {
 			const harness = await harnessWith({
 				extensionFactories: [startupExtension({ armed: true }, () => new Error("ordinary"))],
@@ -550,6 +570,7 @@ describe("ExtensionStartupError", () => {
 				reloadStarted = resolve;
 			});
 			const harness = await harnessWith({
+				useModelRuntimeStream: true,
 				extensionFactories: [
 					(pi) => {
 						pi.on("session_start", async (event) => {
@@ -592,6 +613,46 @@ describe("ExtensionStartupError", () => {
 			}
 		});
 
+		it("does not send after auth resolution when a fatal bind settles", async () => {
+			const state = { fatal: false };
+			let releaseAuth: (() => void) | undefined;
+			let authStarted: (() => void) | undefined;
+			const authPending = new Promise<void>((resolve) => {
+				authStarted = resolve;
+			});
+			const harness = await harnessWith({
+				useModelRuntimeStream: true,
+				extensionFactories: [
+					(pi) => {
+						pi.on("session_start", () => {
+							if (state.fatal) {
+								throw new ExtensionStartupError("fatal reload");
+							}
+						});
+					},
+				],
+			});
+			await harness.session.bindExtensions({ mode: "print" });
+			const originalGetAuth = harness.session.modelRuntime.getAuth.bind(harness.session.modelRuntime);
+			vi.spyOn(harness.session.modelRuntime, "getAuth").mockImplementation(async (...args) => {
+				authStarted?.();
+				await new Promise<void>((resolve) => {
+					releaseAuth = resolve;
+				});
+				return originalGetAuth(...args);
+			});
+			harness.setResponses([fauxAssistantMessage("must not stream")]);
+
+			const prompt = harness.session.prompt("start");
+			await authPending;
+			state.fatal = true;
+			await expect(harness.session.bindExtensions({ mode: "print" })).rejects.toThrow("fatal reload");
+			releaseAuth?.();
+			await prompt;
+
+			expect(harness.faux.state.callCount).toBe(0);
+		});
+
 		it("discards a startup message from a failed reload", async () => {
 			const state = { fatal: false };
 			const harness = await harnessWith({
@@ -616,6 +677,106 @@ describe("ExtensionStartupError", () => {
 	});
 
 	describe("overlapping startup", () => {
+		it("does not let a reload entered before a fatal settles recover it", async () => {
+			let emission = 0;
+			let releaseFailure: (() => void) | undefined;
+			let failureStarted: (() => void) | undefined;
+			const failurePending = new Promise<void>((resolve) => {
+				failureStarted = resolve;
+			});
+			let releaseSettingsReload: (() => void) | undefined;
+			let settingsReloadStarted: (() => void) | undefined;
+			const settingsReloadPending = new Promise<void>((resolve) => {
+				settingsReloadStarted = resolve;
+			});
+			const harness = await harnessWith({
+				extensionFactories: [
+					(pi) => {
+						pi.on("session_start", async () => {
+							emission++;
+							if (emission !== 2) return;
+							failureStarted?.();
+							await new Promise<void>((resolve) => {
+								releaseFailure = resolve;
+							});
+							throw new ExtensionStartupError("late failure");
+						});
+					},
+				],
+			});
+			await harness.session.bindExtensions({ mode: "print" });
+			const originalReload = harness.settingsManager.reload.bind(harness.settingsManager);
+			vi.spyOn(harness.settingsManager, "reload").mockImplementation(async () => {
+				settingsReloadStarted?.();
+				await new Promise<void>((resolve) => {
+					releaseSettingsReload = resolve;
+				});
+				await originalReload();
+			});
+
+			const failedBind = harness.session.bindExtensions({ mode: "print" });
+			await failurePending;
+			const reload = harness.session.reload();
+			await settingsReloadPending;
+			releaseFailure?.();
+			await expect(failedBind).rejects.toThrow("late failure");
+			releaseSettingsReload?.();
+			await reload;
+
+			await expect(harness.session.prompt("still blocked")).rejects.toThrow("late failure");
+		});
+
+		it("discards a fatal emission's held messages before overlapping startup settles", async () => {
+			let emission = 0;
+			let releaseFailure: (() => void) | undefined;
+			let failureStarted: (() => void) | undefined;
+			const failurePending = new Promise<void>((resolve) => {
+				failureStarted = resolve;
+			});
+			let releaseSuccess: (() => void) | undefined;
+			let successStarted: (() => void) | undefined;
+			const successPending = new Promise<void>((resolve) => {
+				successStarted = resolve;
+			});
+			const errors: string[] = [];
+			const harness = await harnessWith({
+				extensionFactories: [
+					(pi) => {
+						pi.on("session_start", async () => {
+							emission++;
+							if (emission === 2) {
+								pi.sendUserMessage("discard me");
+								failureStarted?.();
+								await new Promise<void>((resolve) => {
+									releaseFailure = resolve;
+								});
+								throw new ExtensionStartupError("late failure");
+							}
+							if (emission === 3) {
+								successStarted?.();
+								await new Promise<void>((resolve) => {
+									releaseSuccess = resolve;
+								});
+							}
+						});
+					},
+				],
+			});
+			await harness.session.bindExtensions({ mode: "print", onError: (error) => errors.push(error.event) });
+
+			const failedBind = harness.session.bindExtensions({ mode: "print" });
+			await failurePending;
+			const successfulBind = harness.session.bindExtensions({ mode: "print" });
+			await successPending;
+			releaseFailure?.();
+			await expect(failedBind).rejects.toThrow("late failure");
+
+			expect(errors).toEqual(["send_user_message"]);
+			releaseSuccess?.();
+			await successfulBind;
+			expect(harness.faux.state.callCount).toBe(0);
+		});
+
 		it("keeps a late fatal bind latched until a later bind succeeds", async () => {
 			let emission = 0;
 			let releaseFailure: (() => void) | undefined;

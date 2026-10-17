@@ -118,6 +118,8 @@ export interface HarnessOptions {
 	resourceLoader?: ResourceLoader;
 	extensionFactories?: Array<InlineExtension | CreateTestExtensionsResultInput>;
 	withConfiguredAuth?: boolean;
+	/** Route agent requests through ModelRuntime rather than the faux provider directly. */
+	useModelRuntimeStream?: boolean;
 	modelsJson?: Record<string, unknown>;
 	/** Session to continue, for example to test a resume. Default: a new in-memory session. */
 	sessionManager?: SessionManager;
@@ -190,9 +192,12 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 		});
 	}
 
+	const modelRuntime = getModelRuntime(modelRegistry);
 	const agent = new Agent({
 		getApiKey: () => (withConfiguredAuth ? "faux-key" : undefined),
-		streamFn: streamSimple,
+		streamFn: options.useModelRuntimeStream
+			? (requestModel, context, requestOptions) => modelRuntime.streamSimple(requestModel, context, requestOptions)
+			: streamSimple,
 		initialState: {
 			model,
 			systemPrompt: "",
@@ -234,7 +239,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 		sessionManager,
 		settingsManager,
 		cwd: tempDir,
-		modelRuntime: getModelRuntime(modelRegistry),
+		modelRuntime,
 		resourceLoader,
 		baseToolsOverride: toolMap,
 		initialActiveToolNames: options.initialActiveToolNames,

@@ -490,9 +490,11 @@ export class AgentSession {
 	private _extensionErrorUnsubscriber?: () => void;
 
 	private _modelRuntime: ModelRuntime;
-	/** The unwrapped and startup-gated stream functions, retained for streamSimple-specific auth behavior. */
-	private _baseAgentStreamFunction: AgentSession["agent"]["streamFunction"] | undefined;
-	private _startupGatedStreamFunction: AgentSession["agent"]["streamFunction"] | undefined;
+	/** Last-moment startup check the shared runtime runs before every provider request of this session. */
+	private readonly _providerRequestGate = async (): Promise<void> => {
+		await this._waitForExtensionsStarted();
+		this._assertExtensionsStarted();
+	};
 	private _cacheWarmer?: Pick<CacheWarmer, "cancel" | "status" | "onAgentSettled" | "onModeChanged" | "onWarmed">;
 
 	// Tool registry for extension getTools/setTools
@@ -518,6 +520,7 @@ export class AgentSession {
 		this._customTools = config.customTools ?? [];
 		this._cwd = config.cwd;
 		this._modelRuntime = config.modelRuntime;
+		this._modelRuntime.setBeforeProviderRequest(this._providerRequestGate);
 		this._cacheWarmer = config.cacheWarmer;
 		if (this._cacheWarmer) {
 			this._cacheWarmer.onWarmed = (entry) => this._emit({ type: "entry_appended", entry });
@@ -541,7 +544,6 @@ export class AgentSession {
 		this._installAgentToolHooks();
 		this._installAgentNextTurnRefresh();
 		this._installAgentRequestProjection();
-		this._installAgentStartupGate();
 		this._installAgentBoundaryHooks();
 		this._installHiddenDeclarationsProjection();
 		this._installAgentForcedPromptProjection();
@@ -616,11 +618,7 @@ export class AgentSession {
 					signal,
 				})
 			: { model: selectedModel, thinkingLevel: this.thinkingLevel };
-		const streamFunction =
-			this.agent.streamFunction === this._startupGatedStreamFunction
-				? this._baseAgentStreamFunction
-				: this.agent.streamFunction;
-		if (streamFunction === streamSimple) {
+		if (this.agent.streamFunction === streamSimple) {
 			return { ...(await this._getRequiredRequestAuth(model, signal)), thinkingLevel };
 		}
 
@@ -878,18 +876,6 @@ export class AgentSession {
 			}
 			return { ...previous, context, model: route.model, thinkingLevel: route.thinkingLevel };
 		};
-	}
-
-	/** Recheck startup after every async request transform, immediately before streamFunction sends. */
-	private _installAgentStartupGate(): void {
-		const streamFunction = this.agent.streamFunction;
-		this._baseAgentStreamFunction = streamFunction;
-		this._startupGatedStreamFunction = async (...args: Parameters<typeof streamFunction>) => {
-			await this._waitForExtensionsStarted();
-			this._assertExtensionsStarted();
-			return await streamFunction(...args);
-		};
-		this.agent.streamFunction = this._startupGatedStreamFunction;
 	}
 
 	private async _dispatchTurnEndBoundary(
@@ -1443,6 +1429,7 @@ export class AgentSession {
 	 * Call this when completely done with the session.
 	 */
 	dispose(): void {
+		this._modelRuntime.clearBeforeProviderRequest(this._providerRequestGate);
 		try {
 			this.abortRetry();
 			this.abortCompaction();
@@ -3343,6 +3330,7 @@ export class AgentSession {
 	}
 
 	async bindExtensions(bindings: ExtensionBindings): Promise<void> {
+		const generation = ++this._startupGeneration;
 		this._extensionsBound = true;
 		if (bindings.uiContext !== undefined) {
 			this._extensionUIContext = bindings.uiContext;
@@ -3364,7 +3352,7 @@ export class AgentSession {
 		}
 
 		this._applyExtensionBindings(this._extensionRunner);
-		await this._emitSessionStart(this._sessionStartEvent);
+		await this._emitSessionStart(this._sessionStartEvent, generation);
 		this._extensionRunner.reportUnhandledMcpServers();
 		await this.extendResourcesFromExtensions(this._sessionStartEvent.reason === "reload" ? "reload" : "startup");
 	}
@@ -3375,21 +3363,27 @@ export class AgentSession {
 	 * the session so it sends no requests, discards the deferred work, then rethrows. A completed
 	 * session_start clears the latch and replays the deferred work in order. A fatal overlapping
 	 * emission always latches; only a successful emission started after that failure settled clears it.
+	 * @param generation Captured when the bind or reload operation begins.
 	 * @param before Runs inside the pending window, ahead of the handlers.
 	 */
-	private async _emitSessionStart(event: SessionStartEvent, before?: () => void | Promise<void>): Promise<void> {
-		const generation = ++this._startupGeneration;
+	private async _emitSessionStart(
+		event: SessionStartEvent,
+		generation: number,
+		before?: () => void | Promise<void>,
+	): Promise<void> {
 		if (this._startupPending++ === 0) {
 			this._startupSettled = new Promise((resolve) => {
 				this._resolveStartupSettled = resolve;
 			});
 		}
 		let failure: ExtensionStartupError | undefined;
+		let emitted = false;
 		try {
 			await before?.();
+			emitted = true;
 			await this._extensionRunner.emit(event);
 		} catch (error) {
-			if (isExtensionStartupError(error)) failure = error;
+			if (emitted && isExtensionStartupError(error)) failure = error;
 			throw error;
 		} finally {
 			this._startupPending--;
@@ -3398,7 +3392,10 @@ export class AgentSession {
 				// recover it. Only a future bind or reload may clear the latch.
 				this._extensionStartupFailure = failure;
 				this._startupFailureRecoveryGeneration = this._startupGeneration;
-			} else if (generation > this._startupFailureRecoveryGeneration) {
+				this._discardDeferredStartupActions(failure);
+				this._agentRunAbortRequested = this._isAgentRunActive;
+				this.agent.abort();
+			} else if (emitted && generation > this._startupFailureRecoveryGeneration) {
 				this._extensionStartupFailure = undefined;
 			}
 			if (this._startupPending === 0) {
@@ -3409,6 +3406,12 @@ export class AgentSession {
 			}
 			this._settleDeferredStartupActions();
 		}
+	}
+
+	/** Discard held actions immediately when a fatal session_start emission settles. */
+	private _discardDeferredStartupActions(failure: ExtensionStartupError): void {
+		const actions = this._deferredStartupActions.splice(0);
+		for (const action of actions) action.discard(failure);
 	}
 
 	/** Replay or discard deferred startup actions once no session_start is pending. */
@@ -3876,6 +3879,7 @@ export class AgentSession {
 	}
 
 	async reload(options?: { beforeSessionStart?: () => void | Promise<void> }): Promise<void> {
+		const generation = ++this._startupGeneration;
 		const oldRunner = this._extensionRunner;
 		const previousFlagValues = oldRunner.getFlagValues();
 		await emitSessionShutdownEvent(oldRunner, { type: "session_shutdown", reason: "reload" });
@@ -3904,7 +3908,11 @@ export class AgentSession {
 		});
 
 		if (this._extensionsBound) {
-			await this._emitSessionStart({ type: "session_start", reason: "reload" }, options?.beforeSessionStart);
+			await this._emitSessionStart(
+				{ type: "session_start", reason: "reload" },
+				generation,
+				options?.beforeSessionStart,
+			);
 			this._extensionRunner.reportUnhandledMcpServers();
 			await this.extendResourcesFromExtensions("reload");
 		}

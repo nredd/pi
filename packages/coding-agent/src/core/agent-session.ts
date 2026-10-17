@@ -466,6 +466,14 @@ export class AgentSession {
 	private _extensionShutdownHandler?: ShutdownHandler;
 	/** Set when session_start failed fatally; cleared only by a later successful bind or reload. */
 	private _extensionStartupFailure: ExtensionStartupError | undefined;
+	/** Whether `bindExtensions()` has run, with any bindings, including mode-only or empty. */
+	private _extensionsBound = false;
+	/** Number of session_start emissions in flight. Provider-bound work waits for zero. */
+	private _startupPending = 0;
+	/** Increments per session_start emission; only the latest emission may set or clear the latch. */
+	private _startupGeneration = 0;
+	/** Extension callbacks that would start provider work, held until session_start settles. */
+	private _deferredStartupActions: Array<{ run: () => void; discard: (failure: ExtensionStartupError) => void }> = [];
 	private _extensionErrorListener?: ExtensionErrorListener;
 	private _extensionErrorUnsubscriber?: () => void;
 
@@ -583,6 +591,7 @@ export class AgentSession {
 		env?: Record<string, string>;
 		thinkingLevel: ThinkingLevel;
 	}> {
+		this._assertExtensionsStarted();
 		// Route a virtual model first: summaries size their input and output from the model they get.
 		const { model, thinkingLevel } = isVirtualModel(selectedModel)
 			? await this._modelRuntime.resolveModel(selectedModel, convertToLlm(this.messages), {
@@ -791,6 +800,8 @@ export class AgentSession {
 	private _installAgentRequestProjection(): void {
 		const previousPrepareRequest = this.agent.prepareRequest;
 		this.agent.prepareRequest = async (request, signal) => {
+			// A run already in flight when a reload fails fatally must not reach the provider again.
+			this._assertExtensionsStarted({ allowPending: true });
 			const failed = this._failedResponse;
 			this._failedResponse = undefined;
 			const prepare = async () => {
@@ -3292,6 +3303,7 @@ export class AgentSession {
 	}
 
 	async bindExtensions(bindings: ExtensionBindings): Promise<void> {
+		this._extensionsBound = true;
 		if (bindings.uiContext !== undefined) {
 			this._extensionUIContext = bindings.uiContext;
 		}
@@ -3318,23 +3330,47 @@ export class AgentSession {
 	}
 
 	/**
-	 * Emit session_start. A fatal `ExtensionStartupError` latches the session so it sends no
-	 * requests, then rethrows. Only a session_start that completes clears the latch.
+	 * Emit session_start. While it runs, provider-bound work is refused (SDK calls) or deferred
+	 * (extension callbacks such as `pi.sendUserMessage()`). A fatal `ExtensionStartupError` latches
+	 * the session so it sends no requests, discards the deferred work, then rethrows. A completed
+	 * session_start clears the latch and replays the deferred work in order. Only the latest of
+	 * overlapping emissions decides the latch.
+	 * @param before Runs inside the pending window, ahead of the handlers.
 	 */
-	private async _emitSessionStart(event: SessionStartEvent): Promise<void> {
+	private async _emitSessionStart(event: SessionStartEvent, before?: () => void | Promise<void>): Promise<void> {
+		const generation = ++this._startupGeneration;
+		this._startupPending++;
+		let failure: ExtensionStartupError | undefined;
 		try {
+			await before?.();
 			await this._extensionRunner.emit(event);
 		} catch (error) {
-			if (isExtensionStartupError(error)) {
-				this._extensionStartupFailure = error;
-			}
+			if (isExtensionStartupError(error)) failure = error;
 			throw error;
+		} finally {
+			this._startupPending--;
+			if (generation === this._startupGeneration) this._extensionStartupFailure = failure;
+			this._settleDeferredStartupActions();
 		}
-		this._extensionStartupFailure = undefined;
 	}
 
-	/** Refuse to reach a provider while a fatal session_start failure is unresolved. */
-	private _assertExtensionsStarted(): void {
+	/** Replay or discard deferred startup actions once no session_start is pending. */
+	private _settleDeferredStartupActions(): void {
+		if (this._startupPending > 0) return;
+		const actions = this._deferredStartupActions.splice(0);
+		const failure = this._extensionStartupFailure;
+		for (const action of actions) {
+			if (failure) action.discard(failure);
+			else action.run();
+		}
+	}
+
+	/**
+	 * Refuse to reach a provider while session_start is pending or failed fatally. A failure
+	 * throws `ExtensionStartupError`; a pending startup throws a plain `Error`, so callers that
+	 * treat the former as fatal do not. `allowPending` is for runs already in flight.
+	 */
+	private _assertExtensionsStarted(options?: { allowPending?: boolean }): void {
 		const failure = this._extensionStartupFailure;
 		if (failure) {
 			throw new ExtensionStartupError(
@@ -3342,6 +3378,21 @@ export class AgentSession {
 				{ cause: failure },
 			);
 		}
+		if (this._startupPending > 0 && !options?.allowPending) {
+			throw new Error(
+				"Session extensions are still starting. Await bindExtensions() or reload() before sending requests.",
+			);
+		}
+	}
+
+	/**
+	 * Hold `run` until session_start settles when one is pending. Returns false when the caller
+	 * should run it now. `discard` runs instead if startup then fails fatally.
+	 */
+	private _deferWhileStarting(run: () => void, discard: (failure: ExtensionStartupError) => void): boolean {
+		if (this._startupPending === 0) return false;
+		this._deferredStartupActions.push({ run, discard });
+		return true;
 	}
 
 	private async extendResourcesFromExtensions(reason: "startup" | "reload"): Promise<void> {
@@ -3449,22 +3500,30 @@ export class AgentSession {
 		runner.bindCore(
 			{
 				sendMessage: (message, options) => {
-					this.sendCustomMessage(message, options).catch((err) => {
+					const report = (error: unknown) => {
 						runner.emitError({
 							extensionPath: "<runtime>",
 							event: "send_message",
-							error: err instanceof Error ? err.message : String(err),
+							error: error instanceof Error ? error.message : String(error),
 						});
-					});
+					};
+					const send = () => void this.sendCustomMessage(message, options).catch(report);
+					// Only a message that triggers a turn reaches the provider; the rest append now.
+					const startsTurn = options?.triggerTurn === true && options.deliverAs !== "nextTurn";
+					if (startsTurn && this._deferWhileStarting(send, report)) return;
+					send();
 				},
 				sendUserMessage: (content, options) => {
-					this.sendUserMessage(content, options).catch((err) => {
+					const report = (error: unknown) => {
 						runner.emitError({
 							extensionPath: "<runtime>",
 							event: "send_user_message",
-							error: err instanceof Error ? err.message : String(err),
+							error: error instanceof Error ? error.message : String(error),
 						});
-					});
+					};
+					const send = () => void this.sendUserMessage(content, options).catch(report);
+					if (this._deferWhileStarting(send, report)) return;
+					send();
 				},
 				appendEntry: (customType, data) => {
 					const entryId = this.sessionManager.appendCustomEntry(customType, data);
@@ -3515,15 +3574,25 @@ export class AgentSession {
 				},
 				getContextUsage: () => this.getContextUsage(),
 				compact: (options) => {
-					void (async () => {
-						try {
-							const result = await this.compact(options?.customInstructions);
-							options?.onComplete?.(result);
-						} catch (error) {
-							const err = error instanceof Error ? error : new Error(String(error));
-							options?.onError?.(err);
-						}
-					})();
+					const run = () => {
+						void (async () => {
+							try {
+								const result = await this.compact(options?.customInstructions);
+								options?.onComplete?.(result);
+							} catch (error) {
+								const err = error instanceof Error ? error : new Error(String(error));
+								options?.onError?.(err);
+							}
+						})();
+					};
+					// Not deferred: a handler may await onComplete, which would then never fire. Refuse instead.
+					if (this._startupPending > 0) {
+						const error = new Error("ctx.compact() is unavailable while session_start handlers run.");
+						if (options?.onError) options.onError(error);
+						else runner.emitError({ extensionPath: "<runtime>", event: "compact", error: error.message });
+						return;
+					}
+					run();
 				},
 				getSystemPrompt: () => this.systemPrompt,
 				getSystemPromptOptions: () => this._baseSystemPromptOptions,
@@ -3748,15 +3817,8 @@ export class AgentSession {
 			includeAllExtensionTools: true,
 		});
 
-		const hasBindings =
-			this._extensionStartupFailure ||
-			this._extensionUIContext ||
-			this._extensionCommandContextActions ||
-			this._extensionShutdownHandler ||
-			this._extensionErrorListener;
-		if (hasBindings) {
-			await options?.beforeSessionStart?.();
-			await this._emitSessionStart({ type: "session_start", reason: "reload" });
+		if (this._extensionsBound) {
+			await this._emitSessionStart({ type: "session_start", reason: "reload" }, options?.beforeSessionStart);
 			this._extensionRunner.reportUnhandledMcpServers();
 			await this.extendResourcesFromExtensions("reload");
 		}

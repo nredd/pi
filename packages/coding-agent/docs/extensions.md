@@ -289,6 +289,13 @@ Scope:
 - Print mode exits nonzero, RPC mode disposes the runtime and exits before reading commands, and the TUI restores the terminal and exits. None of them send a provider request.
 - `ctx.shutdown()` is not a substitute: print mode has no shutdown handler, so it cannot fail closed.
 
+While `session_start` handlers run, nothing reaches a provider:
+
+- `pi.sendUserMessage()` and `pi.sendMessage(..., { triggerTurn: true })` are held and replayed in order once every handler completes. If startup then fails fatally they are discarded, never run, and reported through the error listener (`send_user_message` / `send_message`). Ordinary handler errors do not discard them.
+- `ctx.compact()` is not held, since a handler may await `onComplete`. It calls `onError` right away.
+- Direct SDK calls (`session.prompt()`, `compact()`, summarizing `navigateTree()`) reject with a plain `Error` until `bindExtensions()` or `reload()` settles. Await the bind first.
+- `reload()` after any `bindExtensions()` call, even mode-only or empty bindings, re-emits `session_start`. Before the first bind it does not.
+
 Recovery: a failed `session_start` leaves the `AgentSession` refusing `prompt()`, `sendUserMessage()`, triggered custom messages, `compact()`, and summarizing `navigateTree()` with an `ExtensionStartupError`. Fix the cause, then call `bindExtensions()` or `reload()` again (`/reload` in the TUI). The refusal clears only when `session_start` completes. SDK callers should `dispose()` a session whose binding failed.
 
 Hosts older than this feature log the error like any other and keep running. An extension that must not run there should feature-detect the export (`import * as sdk from "@earendil-works/pi-coding-agent"`, then check `"ExtensionStartupError" in sdk`) and refuse to continue without it. See [`fatal-startup.ts`](../examples/extensions/fatal-startup.ts).

@@ -2,6 +2,7 @@ import { fauxAssistantMessage } from "@earendil-works/pi-ai";
 import { registerFauxProvider } from "@earendil-works/pi-ai/compat";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentSessionRuntime } from "../../src/core/agent-session-runtime.ts";
+import type { ExtensionAPI } from "../../src/core/extensions/types.ts";
 import { VIRTUAL_MODULES } from "../../src/core/extensions/virtual-modules.ts";
 import { ExtensionStartupError } from "../../src/index.ts";
 import { runPrintMode } from "../../src/modes/print-mode.ts";
@@ -221,6 +222,48 @@ describe("ExtensionStartupError", () => {
 			}
 		});
 
+		it.each([
+			["mode-only", { mode: "print" as const }],
+			["empty", {}],
+		])("latches a fatal reload after %s bindings and recovers on the next reload", async (_name, bindings) => {
+			const state = { armed: false };
+			const harness = await harnessWith({
+				extensionFactories: [startupExtension(state, () => new ExtensionStartupError("bad reload"))],
+			});
+			await harness.session.bindExtensions(bindings);
+
+			state.armed = true;
+			await expect(harness.session.reload()).rejects.toBeInstanceOf(ExtensionStartupError);
+			await expect(harness.session.prompt("hi")).rejects.toBeInstanceOf(ExtensionStartupError);
+			expect(harness.faux.state.callCount).toBe(0);
+
+			state.armed = false;
+			await harness.session.reload();
+			const recoveredProvider = registerFauxProvider({ api: harness.faux.api });
+			try {
+				recoveredProvider.setResponses([fauxAssistantMessage("after reload")]);
+				await harness.session.prompt("hi");
+				expect(recoveredProvider.state.callCount).toBe(1);
+			} finally {
+				recoveredProvider.unregister();
+			}
+		});
+
+		it("does not emit session_start on reload before any bindExtensions call", async () => {
+			const handler = vi.fn();
+			const harness = await harnessWith({
+				extensionFactories: [
+					(pi) => {
+						pi.on("session_start", handler);
+					},
+				],
+			});
+
+			await harness.session.reload();
+
+			expect(handler).not.toHaveBeenCalled();
+		});
+
 		it("does not latch ordinary startup errors", async () => {
 			const harness = await harnessWith({
 				extensionFactories: [startupExtension({ armed: true }, () => new Error("ordinary"))],
@@ -231,6 +274,163 @@ describe("ExtensionStartupError", () => {
 			await harness.session.prompt("hi");
 
 			expect(harness.faux.state.callCount).toBe(1);
+		});
+	});
+
+	describe("pending startup", () => {
+		const later = (state: { fatal: boolean }) => (pi: ExtensionAPI) => {
+			pi.on("session_start", async () => {
+				await new Promise((resolve) => setTimeout(resolve, 5));
+				if (state.fatal) throw new ExtensionStartupError("late async failure");
+			});
+		};
+
+		it("never contacts the provider for a startup message when a later async handler is fatal", async () => {
+			const state = { fatal: true };
+			let sent = false;
+			const harness = await harnessWith({
+				extensionFactories: [
+					(pi) => {
+						pi.on("session_start", () => {
+							if (sent) return;
+							sent = true;
+							pi.sendUserMessage("queued during startup");
+							pi.sendMessage(
+								{ customType: "note", content: "queued note", display: true },
+								{ triggerTurn: true },
+							);
+						});
+					},
+					later(state),
+				],
+			});
+			harness.setResponses([fauxAssistantMessage("must not be requested")]);
+			const errors: string[] = [];
+
+			await expect(
+				harness.session.bindExtensions({ mode: "print", onError: (error) => errors.push(error.event) }),
+			).rejects.toBeInstanceOf(ExtensionStartupError);
+			await new Promise((resolve) => setTimeout(resolve, 20));
+
+			expect(harness.faux.state.callCount).toBe(0);
+			expect(harness.session.messages).toEqual([]);
+			expect(harness.session.isStreaming).toBe(false);
+			expect(errors).toEqual(["send_user_message", "send_message"]);
+
+			// Recovery does not resurrect the discarded messages.
+			state.fatal = false;
+			await harness.session.bindExtensions({ mode: "print" });
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			expect(harness.faux.state.callCount).toBe(0);
+		});
+
+		it("runs a startup message once session_start completes", async () => {
+			const harness = await harnessWith({
+				extensionFactories: [
+					(pi) => {
+						pi.on("session_start", () => {
+							pi.sendUserMessage("queued during startup");
+						});
+					},
+					later({ fatal: false }),
+				],
+			});
+			harness.setResponses([fauxAssistantMessage("startup reply")]);
+
+			await harness.session.bindExtensions({ mode: "print" });
+			// Deferred until the handlers finish, so nothing was requested before bind returned.
+			await vi.waitFor(() => expect(harness.faux.state.callCount).toBe(1));
+			await harness.session.waitForIdle();
+
+			expect(harness.session.messages.map((message) => message.role).filter((role) => role !== "system")).toEqual([
+				"user",
+				"assistant",
+			]);
+		});
+
+		it("still delivers a startup message after an ordinary later error", async () => {
+			const harness = await harnessWith({
+				extensionFactories: [
+					(pi) => {
+						pi.on("session_start", () => {
+							pi.sendUserMessage("queued during startup");
+						});
+					},
+					startupExtension({ armed: true }, () => new Error("ordinary")),
+				],
+			});
+			harness.setResponses([fauxAssistantMessage("startup reply")]);
+
+			await harness.session.bindExtensions({ mode: "print", onError: () => {} });
+			await vi.waitFor(() => expect(harness.faux.state.callCount).toBe(1));
+		});
+
+		it("refuses direct SDK requests while session_start is pending", async () => {
+			let release: (() => void) | undefined;
+			const harness = await harnessWith({
+				extensionFactories: [
+					(pi) => {
+						pi.on("session_start", () => {
+							return new Promise<void>((resolve) => {
+								release = resolve;
+							});
+						});
+					},
+				],
+			});
+			harness.setResponses([fauxAssistantMessage("after startup")]);
+
+			const binding = harness.session.bindExtensions({ mode: "print" });
+			await expect(harness.session.prompt("early")).rejects.toThrow("still starting");
+			await expect(harness.session.compact()).rejects.toThrow("still starting");
+			expect(harness.faux.state.callCount).toBe(0);
+
+			release?.();
+			await binding;
+			await harness.session.prompt("later");
+			expect(harness.faux.state.callCount).toBe(1);
+		});
+
+		it("refuses ctx.compact() during session_start through onError", async () => {
+			const onError = vi.fn();
+			const harness = await harnessWith({
+				extensionFactories: [
+					(pi) => {
+						pi.on("session_start", (_event, ctx) => {
+							ctx.compact({ onError });
+						});
+					},
+				],
+			});
+
+			await harness.session.bindExtensions({ mode: "print" });
+
+			expect(onError).toHaveBeenCalledWith(
+				expect.objectContaining({ message: expect.stringContaining("session_start") }),
+			);
+			expect(harness.faux.state.callCount).toBe(0);
+		});
+
+		it("discards a startup message from a failed reload", async () => {
+			const state = { fatal: false };
+			const harness = await harnessWith({
+				extensionFactories: [
+					(pi) => {
+						pi.on("session_start", (event) => {
+							if (event.reason === "reload") pi.sendUserMessage("queued during reload");
+						});
+					},
+					later(state),
+				],
+			});
+			await harness.session.bindExtensions({ mode: "print", onError: () => {} });
+
+			state.fatal = true;
+			await expect(harness.session.reload()).rejects.toBeInstanceOf(ExtensionStartupError);
+			await new Promise((resolve) => setTimeout(resolve, 20));
+
+			expect(harness.faux.state.callCount).toBe(0);
+			expect(harness.session.messages).toEqual([]);
 		});
 	});
 

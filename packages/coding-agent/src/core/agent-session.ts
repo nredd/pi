@@ -113,6 +113,7 @@ import {
 	wrapRegisteredTools,
 } from "./extensions/index.ts";
 import { type BeforeAgentStartTrigger, emitSessionShutdownEvent } from "./extensions/runner.ts";
+import { ExtensionStartupError, isExtensionStartupError } from "./extensions/startup-error.ts";
 import { createToolNameMatcher, isMcpToolName } from "./mcp-servers.ts";
 import { type BashExecutionMessage, type CustomMessage, convertToLlm } from "./messages.ts";
 import { ModelRegistry } from "./model-registry.ts";
@@ -463,6 +464,8 @@ export class AgentSession {
 	private _extensionCommandContextActions?: ExtensionCommandContextActions;
 	private _extensionAbortHandler?: () => void;
 	private _extensionShutdownHandler?: ShutdownHandler;
+	/** Set when session_start failed fatally; cleared only by a later successful bind or reload. */
+	private _extensionStartupFailure: ExtensionStartupError | undefined;
 	private _extensionErrorListener?: ExtensionErrorListener;
 	private _extensionErrorUnsubscriber?: () => void;
 
@@ -1835,6 +1838,7 @@ export class AgentSession {
 	 * @param onStarted Called once the run's messages are prepared, before the first request.
 	 */
 	private async _startRun(trigger: BeforeAgentStartTrigger, onStarted?: () => void): Promise<void> {
+		this._assertExtensionsStarted();
 		this._isAgentRunActive = true;
 		this._agentRunAbortRequested = false;
 		let messages: AgentMessage[];
@@ -2056,6 +2060,7 @@ export class AgentSession {
 	 * @throws Error if no model selected or no API key available (when not streaming)
 	 */
 	async prompt(text: string, options?: PromptOptions): Promise<void> {
+		this._assertExtensionsStarted();
 		if (this._isEmittingAgentSettled) {
 			this._deferredSettledActions.push(async () => await this.prompt(text, options));
 			return;
@@ -2792,6 +2797,7 @@ export class AgentSession {
 	 * @param customInstructions Optional instructions for the compaction summary
 	 */
 	async compact(customInstructions?: string): Promise<CompactionResult> {
+		this._assertExtensionsStarted();
 		await this.abort();
 		this._compactionAbortController = new AbortController();
 		this._emit({ type: "compaction_start", reason: "manual" });
@@ -3306,9 +3312,36 @@ export class AgentSession {
 		}
 
 		this._applyExtensionBindings(this._extensionRunner);
-		await this._extensionRunner.emit(this._sessionStartEvent);
+		await this._emitSessionStart(this._sessionStartEvent);
 		this._extensionRunner.reportUnhandledMcpServers();
 		await this.extendResourcesFromExtensions(this._sessionStartEvent.reason === "reload" ? "reload" : "startup");
+	}
+
+	/**
+	 * Emit session_start. A fatal `ExtensionStartupError` latches the session so it sends no
+	 * requests, then rethrows. Only a session_start that completes clears the latch.
+	 */
+	private async _emitSessionStart(event: SessionStartEvent): Promise<void> {
+		try {
+			await this._extensionRunner.emit(event);
+		} catch (error) {
+			if (isExtensionStartupError(error)) {
+				this._extensionStartupFailure = error;
+			}
+			throw error;
+		}
+		this._extensionStartupFailure = undefined;
+	}
+
+	/** Refuse to reach a provider while a fatal session_start failure is unresolved. */
+	private _assertExtensionsStarted(): void {
+		const failure = this._extensionStartupFailure;
+		if (failure) {
+			throw new ExtensionStartupError(
+				`Session extensions failed to start and the session cannot send requests until bindExtensions() or reload() succeeds: ${failure.message}`,
+				{ cause: failure },
+			);
+		}
 	}
 
 	private async extendResourcesFromExtensions(reason: "startup" | "reload"): Promise<void> {
@@ -3716,13 +3749,14 @@ export class AgentSession {
 		});
 
 		const hasBindings =
+			this._extensionStartupFailure ||
 			this._extensionUIContext ||
 			this._extensionCommandContextActions ||
 			this._extensionShutdownHandler ||
 			this._extensionErrorListener;
 		if (hasBindings) {
 			await options?.beforeSessionStart?.();
-			await this._extensionRunner.emit({ type: "session_start", reason: "reload" });
+			await this._emitSessionStart({ type: "session_start", reason: "reload" });
 			this._extensionRunner.reportUnhandledMcpServers();
 			await this.extendResourcesFromExtensions("reload");
 		}
@@ -4012,6 +4046,7 @@ export class AgentSession {
 		}
 
 		// Model required for summarization
+		if (options.summarize) this._assertExtensionsStarted();
 		if (options.summarize && !this.model) {
 			throw new Error("No model available for summarization");
 		}

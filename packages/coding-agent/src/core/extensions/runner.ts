@@ -25,6 +25,7 @@ import {
 	normalizeBuildSystemPromptOptions,
 } from "../system-prompt.ts";
 import type { VirtualModelDefinition } from "../virtual-models.ts";
+import { ExtensionStartupError, isExtensionStartupError } from "./startup-error.ts";
 import type {
 	AgentBeforeSettleEvent,
 	BeforeAgentStartCustomEvent,
@@ -1109,6 +1110,12 @@ export class ExtensionRunner {
 						}
 					}
 				} catch (err) {
+					// The one fatal case: a session_start handler asked to fail startup.
+					if (event.type === "session_start" && isExtensionStartupError(err)) {
+						throw new ExtensionStartupError(`Extension startup failed (${ext.path}): ${err.message}`, {
+							cause: err,
+						});
+					}
 					const message = err instanceof Error ? err.message : String(err);
 					const stack = err instanceof Error ? err.stack : undefined;
 					this.emitError({

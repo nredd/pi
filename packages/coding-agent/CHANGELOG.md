@@ -22,6 +22,7 @@
 
 ### Added
 
+- `ExtensionStartupError`: a `session_start` handler that throws it fails session startup instead of being logged. `bindExtensions()` and `reload()` reject, print mode exits nonzero, RPC mode and the TUI exit before accepting input, and the session refuses `prompt()`, `compact()` and other provider-bound calls until a later bind or reload succeeds. Other errors thrown from `session_start` handlers stay logged and nonfatal. See `docs/extensions.md` and `examples/extensions/fatal-startup.ts`.
 - `ToolRenderContext.probe` marks a throwaway render: no timers or I/O. `docs/tui.md` now states that a renderer whose output changes after the final result must call `context.invalidate()`, since settled rows are cached.
 
 ## [1.3.0] - 2026-10-15

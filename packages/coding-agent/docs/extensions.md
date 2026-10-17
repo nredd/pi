@@ -262,6 +262,37 @@ Keep tool and event behavior independent from rendering so non-interactive modes
 
 Pi reports handler errors and continues where possible. A `tool_call` handler failure blocks the tool as a fail-safe; a tool execution failure becomes an error result for the model.
 
+<a id="fatal-startup"></a>
+
+#### Fail startup on purpose
+
+One exception to "report and continue": a `session_start` handler that throws `ExtensionStartupError` (exported by `@earendil-works/pi-coding-agent`) fails session startup. Use it when continuing would be unsafe, for example when a file that decides what the session may read or run failed validation.
+
+```typescript
+import { type ExtensionAPI, ExtensionStartupError } from "@earendil-works/pi-coding-agent";
+
+export default function (pi: ExtensionAPI) {
+  pi.on("session_start", async (_event, ctx) => {
+    try {
+      await loadPolicy(ctx.cwd);
+    } catch (error) {
+      throw new ExtensionStartupError("Invalid project policy", { cause: error });
+    }
+  });
+}
+```
+
+Scope:
+
+- Only `session_start` (startup, `reload`, `new`, `resume`, `fork`). Thrown from any other event it is an ordinary error: logged, nothing aborts.
+- Remaining `session_start` handlers do not run. The error rethrown to the caller names the extension path, keeps your error as `cause`, and is itself an `ExtensionStartupError`.
+- Print mode exits nonzero, RPC mode disposes the runtime and exits before reading commands, and the TUI restores the terminal and exits. None of them send a provider request.
+- `ctx.shutdown()` is not a substitute: print mode has no shutdown handler, so it cannot fail closed.
+
+Recovery: a failed `session_start` leaves the `AgentSession` refusing `prompt()`, `sendUserMessage()`, triggered custom messages, `compact()`, and summarizing `navigateTree()` with an `ExtensionStartupError`. Fix the cause, then call `bindExtensions()` or `reload()` again (`/reload` in the TUI). The refusal clears only when `session_start` completes. SDK callers should `dispose()` a session whose binding failed.
+
+Hosts older than this feature log the error like any other and keep running. An extension that must not run there should feature-detect the export (`import * as sdk from "@earendil-works/pi-coding-agent"`, then check `"ExtensionStartupError" in sdk`) and refuse to continue without it. See [`fatal-startup.ts`](../examples/extensions/fatal-startup.ts).
+
 Release resources in `session_shutdown` even when normal operation attempted cleanup.
 Keep cleanup idempotent because cancellation, reload, session replacement, and process exit can converge on the same path.
 Use `ctx.shutdown()` to request an orderly process shutdown.

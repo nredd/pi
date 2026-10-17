@@ -43,6 +43,7 @@ import {
 import { formatNoModelsAvailableMessage } from "./core/auth-guidance.ts";
 import { AuthStorage, ReadOnlyAuthStorage } from "./core/auth-storage.ts";
 import { exportFromFile } from "./core/export-html/index.ts";
+import { isExtensionStartupError } from "./core/extensions/startup-error.ts";
 import type { InlineExtension } from "./core/extensions/types.ts";
 import { applyHttpProxySettings, configureHttpDispatcher } from "./core/http-dispatcher.ts";
 import { resolveCliModel, resolveModelScope, type ScopedModel } from "./core/model-resolver.ts";
@@ -571,6 +572,17 @@ export interface MainOptions {
 	extensionFactories?: InlineExtension[];
 }
 
+/**
+ * A fatal `session_start` failure already disposed its runtime in the mode. Report it and exit
+ * nonzero; no provider was reached. Any other error keeps its existing path.
+ */
+function reportExtensionStartupFailure(error: unknown): void {
+	if (!isExtensionStartupError(error)) throw error;
+	stopThemeWatcher();
+	console.error(chalk.red(error.message));
+	process.exitCode = 1;
+}
+
 export async function main(args: string[], options?: MainOptions) {
 	resetTimings();
 	// Commands and startup selectors can load user-authored themes before runtime creation.
@@ -948,7 +960,7 @@ export async function main(args: string[], options?: MainOptions) {
 
 	if (appMode === "rpc") {
 		printTimings();
-		await runRpcMode(runtime);
+		await runRpcMode(runtime).catch(reportExtensionStartupFailure);
 	} else if (appMode === "interactive") {
 		const interactiveMode = new InteractiveMode(runtime, {
 			migratedProviders,
@@ -981,7 +993,7 @@ export async function main(args: string[], options?: MainOptions) {
 		}
 
 		printTimings();
-		await interactiveMode.run();
+		await interactiveMode.run().catch(reportExtensionStartupFailure);
 	} else {
 		printTimings();
 		const exitCode = await runPrintMode(runtime, {

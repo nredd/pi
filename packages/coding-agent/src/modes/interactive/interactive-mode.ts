@@ -92,6 +92,7 @@ import type {
 	UserBashEventResult,
 	WorkingIndicatorOptions,
 } from "../../core/extensions/index.ts";
+import { isExtensionStartupError } from "../../core/extensions/startup-error.ts";
 import { FooterDataProvider, type ReadonlyFooterDataProvider } from "../../core/footer-data-provider.ts";
 import { configureHttpDispatcher, formatHttpIdleTimeoutMs } from "../../core/http-dispatcher.ts";
 import { type AppKeybinding, KeybindingsManager } from "../../core/keybindings.ts";
@@ -1101,7 +1102,20 @@ export class InteractiveMode {
 		this.ui.requestRender();
 
 		// Initialize extensions first so resources are shown before messages
-		await this.rebindCurrentSession();
+		try {
+			await this.rebindCurrentSession();
+		} catch (error) {
+			// A fatal session_start failure ends startup: restore the terminal and dispose the
+			// runtime before the caller reports it, so nothing outlives the failed session.
+			if (isExtensionStartupError(error)) {
+				try {
+					this.stop();
+				} finally {
+					await this.runtimeHost.dispose();
+				}
+			}
+			throw error;
+		}
 
 		// Render initial messages AFTER showing loaded resources
 		this.renderInitialMessages();

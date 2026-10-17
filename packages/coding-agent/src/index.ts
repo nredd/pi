@@ -203,6 +203,7 @@ export {
 	defineTool,
 	discoverAndLoadExtensions,
 	ExtensionRunner,
+	ExtensionStartupError,
 	isBashToolResult,
 	isEditToolResult,
 	isFindToolResult,

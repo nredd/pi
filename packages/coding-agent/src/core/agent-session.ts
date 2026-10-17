@@ -13,6 +13,7 @@
  * Modes use this class and add their own I/O layer on top.
  */
 
+import { AsyncLocalStorage } from "node:async_hooks";
 import { readFileSync } from "node:fs";
 import { basename, dirname } from "node:path";
 import {
@@ -37,6 +38,7 @@ import type {
 	AuthResult,
 	ImageContent,
 	Model,
+	Models,
 	ProviderHeaders,
 	SystemMessage,
 	TextContent,
@@ -475,6 +477,8 @@ export class AgentSession {
 	private _resolveStartupSettled: (() => void) | undefined;
 	/** Increments per session_start emission. */
 	private _startupGeneration = 0;
+	/** Marks provider calls made by the currently executing session_start handler. */
+	private readonly _inSessionStartHandler = new AsyncLocalStorage<boolean>();
 	/** A success must start after this generation to clear the fatal startup latch. */
 	private _startupFailureRecoveryGeneration = 0;
 	/** Extension callbacks that would start provider work, held until session_start settles. */
@@ -490,8 +494,12 @@ export class AgentSession {
 	private _extensionErrorUnsubscriber?: () => void;
 
 	private _modelRuntime: ModelRuntime;
+	/** Session-owned model view, used for every extension-originated provider request. */
+	private _models!: Models;
 	/** Last-moment startup check the shared runtime runs before every provider request of this session. */
 	private readonly _providerRequestGate = async (): Promise<void> => {
+		// A handler awaiting its own request cannot wait for the handler to settle.
+		if (this._inSessionStartHandler.getStore()) this._assertExtensionsStarted();
 		await this._waitForExtensionsStarted();
 		this._assertExtensionsStarted();
 	};
@@ -520,7 +528,8 @@ export class AgentSession {
 		this._customTools = config.customTools ?? [];
 		this._cwd = config.cwd;
 		this._modelRuntime = config.modelRuntime;
-		this._modelRuntime.setBeforeProviderRequest(this._providerRequestGate);
+		this._models = this._modelRuntime.withBeforeProviderRequest(this._providerRequestGate);
+		this._installAgentProviderRequestGate();
 		this._cacheWarmer = config.cacheWarmer;
 		if (this._cacheWarmer) {
 			this._cacheWarmer.onWarmed = (entry) => this._emit({ type: "entry_appended", entry });
@@ -557,6 +566,14 @@ export class AgentSession {
 
 	get modelRuntime(): ModelRuntime {
 		return this._modelRuntime;
+	}
+
+	/**
+	 * Hand this session's last-moment startup check to the agent loop. It rides on the request
+	 * options like `sessionId`, so a replaced `streamFunction` still receives it.
+	 */
+	private _installAgentProviderRequestGate(): void {
+		this.agent.beforeProviderRequest = this._providerRequestGate;
 	}
 
 	private async _getRequiredRequestAuth(
@@ -1429,7 +1446,6 @@ export class AgentSession {
 	 * Call this when completely done with the session.
 	 */
 	dispose(): void {
-		this._modelRuntime.clearBeforeProviderRequest(this._providerRequestGate);
 		try {
 			this.abortRetry();
 			this.abortCompaction();
@@ -3381,7 +3397,7 @@ export class AgentSession {
 		try {
 			await before?.();
 			emitted = true;
-			await this._extensionRunner.emit(event);
+			await this._inSessionStartHandler.run(true, async () => await this._extensionRunner.emit(event));
 		} catch (error) {
 			if (emitted && isExtensionStartupError(error)) failure = error;
 			throw error;
@@ -3393,8 +3409,13 @@ export class AgentSession {
 				this._extensionStartupFailure = failure;
 				this._startupFailureRecoveryGeneration = this._startupGeneration;
 				this._discardDeferredStartupActions(failure);
+				// Nothing in flight may finish its provider call: the run, a compaction or a branch
+				// summary paused in auth or a transform all observe their abort signal.
 				this._agentRunAbortRequested = this._isAgentRunActive;
 				this.agent.abort();
+				this.abortRetry();
+				this.abortCompaction();
+				this.abortBranchSummary();
 			} else if (emitted && generation > this._startupFailureRecoveryGeneration) {
 				this._extensionStartupFailure = undefined;
 			}
@@ -3424,7 +3445,9 @@ export class AgentSession {
 			for (const action of actions) action.discard(failure);
 			return;
 		}
+		const previousReplay = this._startupReplay;
 		const replay = (async () => {
+			await previousReplay;
 			for (const action of actions) {
 				let run: Promise<void>;
 				this._replayingStartup = true;
@@ -3860,7 +3883,7 @@ export class AgentSession {
 			extensionsResult.runtime,
 			this._cwd,
 			this.sessionManager,
-			new ModelRegistry(this._modelRuntime),
+			new ModelRegistry(this._modelRuntime, this._models),
 		);
 		if (this._extensionRunnerRef) {
 			this._extensionRunnerRef.current = this._extensionRunner;

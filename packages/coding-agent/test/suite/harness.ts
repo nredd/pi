@@ -20,6 +20,7 @@ import { AgentSession, type AgentSessionEvent } from "../../src/core/agent-sessi
 import { AuthStorage } from "../../src/core/auth-storage.ts";
 import type { ExtensionRunner, ExtensionUIContext } from "../../src/core/extensions/index.ts";
 import { convertToLlm } from "../../src/core/messages.ts";
+import type { ModelRuntime } from "../../src/core/model-runtime.ts";
 import { SessionManager } from "../../src/core/session-manager.ts";
 import type { Settings } from "../../src/core/settings-manager.ts";
 import { SettingsManager } from "../../src/core/settings-manager.ts";
@@ -116,6 +117,8 @@ export interface HarnessOptions {
 	allowedToolNames?: string[];
 	excludedToolNames?: string[];
 	resourceLoader?: ResourceLoader;
+	/** Reuse a runtime across sessions to test host-level isolation. */
+	modelRuntime?: ModelRuntime;
 	extensionFactories?: Array<InlineExtension | CreateTestExtensionsResultInput>;
 	withConfiguredAuth?: boolean;
 	/** Route agent requests through ModelRuntime rather than the faux provider directly. */
@@ -192,7 +195,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 		});
 	}
 
-	const modelRuntime = getModelRuntime(modelRegistry);
+	const modelRuntime = options.modelRuntime ?? getModelRuntime(modelRegistry);
 	const agent = new Agent({
 		getApiKey: () => (withConfiguredAuth ? "faux-key" : undefined),
 		streamFn: options.useModelRuntimeStream

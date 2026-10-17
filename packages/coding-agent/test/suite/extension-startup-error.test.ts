@@ -653,6 +653,161 @@ describe("ExtensionStartupError", () => {
 			expect(harness.faux.state.callCount).toBe(0);
 		});
 
+		it("binds the last-moment gate to the requesting session", async () => {
+			const state = { armed: false };
+			const first = await harnessWith({
+				useModelRuntimeStream: true,
+				extensionFactories: [startupExtension(state, () => new ExtensionStartupError("fatal reload"))],
+			});
+			await first.session.bindExtensions({ mode: "print" });
+			const second = await harnessWith({ modelRuntime: first.session.modelRuntime, useModelRuntimeStream: true });
+			await second.session.bindExtensions({ mode: "print" });
+			let releaseAuth: (() => void) | undefined;
+			let authStarted: (() => void) | undefined;
+			const authPending = new Promise<void>((resolve) => {
+				authStarted = resolve;
+			});
+			const originalGetAuth = first.session.modelRuntime.getAuth.bind(first.session.modelRuntime);
+			const getAuth = vi.spyOn(first.session.modelRuntime, "getAuth").mockImplementation(async (...args) => {
+				authStarted?.();
+				await new Promise<void>((resolve) => {
+					releaseAuth = resolve;
+				});
+				return originalGetAuth(...args);
+			});
+			const firstPrompt = first.session.prompt("A");
+			await authPending;
+			state.armed = true;
+			await expect(first.session.bindExtensions({ mode: "print" })).rejects.toThrow("fatal reload");
+			releaseAuth?.();
+			await firstPrompt;
+			getAuth.mockRestore();
+			expect(second.faux.state.callCount).toBe(0);
+
+			second.setResponses([fauxAssistantMessage("B")]);
+			await second.session.prompt("B");
+			expect(second.faux.state.callCount).toBe(1);
+		});
+
+		it("refuses model-registry requests from a session_start handler", async () => {
+			const results: Array<{ stopReason: string; errorMessage?: string }> = [];
+			let providerCalls = 0;
+			const harness = await harnessWith({
+				extensionFactories: [
+					(pi) => {
+						pi.on("session_start", async (_event, ctx) => {
+							const classifier = ctx.modelRegistry.findOfType("classifier", "startup-operations", "classifier")!;
+							const image = ctx.modelRegistry.findOfType("image", "startup-operations", "image")!;
+							results.push(
+								await ctx.modelRegistry.classify(classifier, {
+									state: {},
+									questions: {
+										allowed: { type: "bool", instructions: "Allowed?", criteria: { true: "", false: "" } },
+									},
+								}),
+								await ctx.modelRegistry.generateImages(image, { input: [{ type: "text", text: "test" }] }),
+							);
+						});
+					},
+					startupExtension({ armed: true }, () => new ExtensionStartupError("later failure")),
+				],
+			});
+			harness.session.modelRuntime.registerProvider("startup-operations", {
+				apiKey: "secret",
+				baseUrl: "https://startup.test/v1",
+				models: [
+					{
+						id: "classifier",
+						name: "Classifier",
+						type: "classifier",
+						api: "test-classifier",
+						input: ["text"],
+						contextWindow: 1000,
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					},
+					{
+						id: "image",
+						name: "Image",
+						type: "image",
+						api: "test-images",
+						input: ["text"],
+						output: ["image"],
+						cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+					},
+				],
+				classifiers: {
+					"test-classifier": {
+						classify: async () => {
+							providerCalls++;
+							throw new Error("provider must not be called");
+						},
+					},
+				},
+				images: {
+					"test-images": {
+						generateImages: async () => {
+							providerCalls++;
+							throw new Error("provider must not be called");
+						},
+					},
+				},
+			});
+
+			await expect(harness.session.bindExtensions({ mode: "print" })).rejects.toThrow("later failure");
+			expect(results).toHaveLength(2);
+			for (const result of results) {
+				expect(result).toMatchObject({
+					stopReason: "error",
+					errorMessage: expect.stringContaining("still starting"),
+				});
+			}
+			expect(providerCalls).toBe(0);
+			expect(harness.faux.state.callCount).toBe(0);
+		});
+
+		it("chains overlapping startup replay batches in order", async () => {
+			let emission = 0;
+			let releaseFirst: (() => void) | undefined;
+			let firstRequest: (() => void) | undefined;
+			const firstInFlight = new Promise<void>((resolve) => {
+				firstRequest = resolve;
+			});
+			const errors: string[] = [];
+			const harness = await harnessWith({
+				extensionFactories: [
+					(pi) => {
+						pi.on("session_start", () => {
+							emission++;
+							pi.sendUserMessage(emission === 1 ? "first" : "second");
+						});
+					},
+				],
+			});
+			harness.setResponses([
+				async () => {
+					firstRequest?.();
+					await new Promise<void>((resolve) => {
+						releaseFirst = resolve;
+					});
+					return fauxAssistantMessage("first reply");
+				},
+				fauxAssistantMessage("second reply"),
+			]);
+
+			await harness.session.bindExtensions({ mode: "print", onError: (error) => errors.push(error.event) });
+			await firstInFlight;
+			await harness.session.bindExtensions({ mode: "print" });
+			releaseFirst?.();
+			await vi.waitFor(() => expect(harness.faux.state.callCount).toBe(2));
+			await harness.session.waitForIdle();
+			expect(errors).not.toContain("send_user_message");
+			expect(
+				harness.session.messages
+					.filter((message) => message.role === "user")
+					.map((message) => contentText(message.content)),
+			).toEqual(["first", "second"]);
+		});
+
 		it("discards a startup message from a failed reload", async () => {
 			const state = { fatal: false };
 			const harness = await harnessWith({

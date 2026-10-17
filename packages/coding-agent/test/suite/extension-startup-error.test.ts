@@ -1136,6 +1136,116 @@ describe("ExtensionStartupError", () => {
 			).toEqual(["held"]);
 		});
 
+		it("discards a replayed message paused in its input handler across a fatal bind and recovery", async () => {
+			// The replay's identity is fixed when it is dequeued: a fatal emission while it is paused
+			// in an input handler discards it even though a later recovery cleared the latch.
+			let emission = 0;
+			const gates: { releaseInput?: () => void } = {};
+			let inputStarted: (() => void) | undefined;
+			const inputPaused = new Promise<void>((resolve) => {
+				inputStarted = resolve;
+			});
+			const errors: Array<{ event: string; error: string }> = [];
+			const harness = await harnessWith({
+				extensionFactories: [
+					(pi) => {
+						pi.on("input", async () => {
+							inputStarted?.();
+							await new Promise<void>((resolve) => {
+								gates.releaseInput = resolve;
+							});
+							return { action: "continue" as const };
+						});
+						pi.on("session_start", () => {
+							emission++;
+							if (emission === 1) pi.sendUserMessage("held");
+							if (emission === 2) throw new ExtensionStartupError("fatal while paused");
+						});
+					},
+				],
+			});
+			const onError = (error: { event: string; error: string }) =>
+				errors.push({ event: error.event, error: error.error });
+			harness.setResponses([fauxAssistantMessage("must not be requested")]);
+
+			await harness.session.bindExtensions({ mode: "print", onError });
+			await inputPaused;
+			await expect(harness.session.bindExtensions({ mode: "print", onError })).rejects.toThrow("fatal while paused");
+			await harness.session.bindExtensions({ mode: "print", onError });
+			gates.releaseInput?.();
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			await harness.session.waitForIdle();
+
+			expect(harness.faux.state.callCount).toBe(0);
+			expect(errors.filter((entry) => entry.event === "send_user_message")).toHaveLength(1);
+			expect(harness.session.messages.filter((message) => message.role === "user")).toEqual([]);
+		});
+
+		it("discards a replayed message that would be queued against a turn after a fatal bind", async () => {
+			// The streaming branch queues a follow-up without starting a run; it must still honour
+			// the replay's identity rather than hand the message to the agent's queue.
+			let emission = 0;
+			const gates: { releaseInput?: () => void } = {};
+			let inputStarted: (() => void) | undefined;
+			const inputPaused = new Promise<void>((resolve) => {
+				inputStarted = resolve;
+			});
+			const errors: Array<{ event: string; error: string }> = [];
+			const harness = await harnessWith({
+				extensionFactories: [
+					(pi) => {
+						pi.on("input", async (event) => {
+							if (event.text !== "held follow-up") return { action: "continue" as const };
+							inputStarted?.();
+							await new Promise<void>((resolve) => {
+								gates.releaseInput = resolve;
+							});
+							return { action: "continue" as const };
+						});
+						pi.on("session_start", () => {
+							emission++;
+							if (emission === 1) pi.sendUserMessage("held follow-up", { deliverAs: "followUp" });
+							if (emission === 2) throw new ExtensionStartupError("fatal while queued");
+						});
+					},
+				],
+			});
+			const onError = (error: { event: string; error: string }) =>
+				errors.push({ event: error.event, error: error.error });
+			// A slow first turn keeps the session streaming while the replay resumes.
+			let releaseTurn: (() => void) | undefined;
+			harness.setResponses([
+				async () => {
+					await new Promise<void>((resolve) => {
+						releaseTurn = resolve;
+					});
+					return fauxAssistantMessage("first reply");
+				},
+				fauxAssistantMessage("must not be requested"),
+			]);
+
+			await harness.session.bindExtensions({ mode: "print", onError });
+			await inputPaused;
+			// streamingBehavior skips the wait on the paused replay, so this turn starts now.
+			const first = harness.session.prompt("first", { streamingBehavior: "followUp" });
+			await vi.waitFor(() => expect(harness.session.isStreaming).toBe(true));
+			await expect(harness.session.bindExtensions({ mode: "print", onError })).rejects.toThrow("fatal while queued");
+			await harness.session.bindExtensions({ mode: "print", onError });
+			gates.releaseInput?.();
+			await new Promise((resolve) => setTimeout(resolve, 20));
+			releaseTurn?.();
+			await first;
+			await harness.session.waitForIdle();
+
+			expect(harness.faux.state.callCount).toBe(1);
+			expect(errors.filter((entry) => entry.event === "send_user_message")).toHaveLength(1);
+			expect(
+				harness.session.messages
+					.filter((message) => message.role === "user")
+					.map((message) => contentText(message.content)),
+			).toEqual(["first"]);
+		});
+
 		it("discards a replayed message held behind agent_settled when a fatal bind settles", async () => {
 			// A replay that lands while agent_settled handlers run must not escape into the settled
 			// deferral queue: a fatal bind in that window discards it, and a recovery never runs it.

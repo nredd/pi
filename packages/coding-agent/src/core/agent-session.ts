@@ -494,6 +494,15 @@ export class AgentSession {
 	private _extensionErrorUnsubscriber?: () => void;
 
 	private _modelRuntime: ModelRuntime;
+	/**
+	 * The agent's stream function with this session's startup gate on the request options.
+	 * Summaries build their own options outside the agent loop, so they get the gate here.
+	 */
+	private _gatedSummarizationStream(): AgentSession["agent"]["streamFunction"] {
+		const stream = this.agent.streamFunction;
+		return (model, context, options) =>
+			stream(model, context, { ...options, beforeProviderRequest: this._providerRequestGate } as typeof options);
+	}
 	/** Session-owned model view, used for every extension-originated provider request. */
 	private _models!: Models;
 	/** Last-moment startup check the shared runtime runs before every provider request of this session. */
@@ -529,7 +538,8 @@ export class AgentSession {
 		this._cwd = config.cwd;
 		this._modelRuntime = config.modelRuntime;
 		this._models = this._modelRuntime.withBeforeProviderRequest(this._providerRequestGate);
-		this._installAgentProviderRequestGate();
+		// Rides on the agent loop's request options like `sessionId`, so a replaced `streamFunction` keeps it.
+		this.agent.beforeProviderRequest = this._providerRequestGate;
 		this._cacheWarmer = config.cacheWarmer;
 		if (this._cacheWarmer) {
 			this._cacheWarmer.onWarmed = (entry) => this._emit({ type: "entry_appended", entry });
@@ -566,14 +576,6 @@ export class AgentSession {
 
 	get modelRuntime(): ModelRuntime {
 		return this._modelRuntime;
-	}
-
-	/**
-	 * Hand this session's last-moment startup check to the agent loop. It rides on the request
-	 * options like `sessionId`, so a replaced `streamFunction` still receives it.
-	 */
-	private _installAgentProviderRequestGate(): void {
-		this.agent.beforeProviderRequest = this._providerRequestGate;
 	}
 
 	private async _getRequiredRequestAuth(
@@ -2822,7 +2824,7 @@ export class AgentSession {
 			customInstructions,
 			signal,
 			request.thinkingLevel,
-			this.agent.streamFunction,
+			this._gatedSummarizationStream(),
 			request.env,
 			this.settingsManager.getRetrySettings(),
 			this._summarizationRetryCallbacks({ source: "compaction", reason }),
@@ -4307,7 +4309,7 @@ export class AgentSession {
 					customInstructions,
 					replaceInstructions,
 					reserveTokens: branchSummarySettings.reserveTokens,
-					streamFn: this.agent.streamFunction,
+					streamFn: this._gatedSummarizationStream(),
 					retry: this.settingsManager.getRetrySettings(),
 					callbacks: this._summarizationRetryCallbacks({ source: "branchSummary" }),
 				});
@@ -4573,7 +4575,7 @@ export class AgentSession {
 			messages: this.messages,
 			hint: options.hint,
 			signal: options.signal,
-			streamFn: this.agent.streamFunction,
+			streamFn: this._gatedSummarizationStream(),
 			retry: this.settingsManager.getRetrySettings(),
 			sessionId: this.sessionId,
 		});

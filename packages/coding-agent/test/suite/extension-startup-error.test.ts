@@ -1,5 +1,11 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
-import { contentText, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
+import {
+	contentText,
+	fauxAssistantMessage,
+	fauxToolCall,
+	type ModelsSimpleStreamOptions,
+	type ProviderHeaders,
+} from "@earendil-works/pi-ai";
 import { registerFauxProvider } from "@earendil-works/pi-ai/compat";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -651,6 +657,159 @@ describe("ExtensionStartupError", () => {
 			await prompt;
 
 			expect(harness.faux.state.callCount).toBe(0);
+		});
+
+		it("does not send a compaction summary paused in auth when a fatal reload settles", async () => {
+			// Summaries build their own request options outside the agent loop; they must carry
+			// the same last-moment gate as a conversational request.
+			const state = { fatal: false };
+			let releaseAuth: (() => void) | undefined;
+			let authStarted: (() => void) | undefined;
+			const authPending = new Promise<void>((resolve) => {
+				authStarted = resolve;
+			});
+			const harness = await harnessWith({
+				useModelRuntimeStream: true,
+				extensionFactories: [
+					(pi) => {
+						pi.on("session_start", () => {
+							if (state.fatal) throw new ExtensionStartupError("fatal reload");
+						});
+					},
+				],
+			});
+			await harness.session.bindExtensions({ uiContext: createTestUiContext(), mode: "tui" });
+			harness.settingsManager.applyOverrides({ compaction: { keepRecentTokens: 1 } });
+			const now = Date.now();
+			harness.sessionManager.appendMessage({
+				role: "user",
+				content: [{ type: "text", text: "message to compact" }],
+				timestamp: now - 1000,
+			});
+			harness.sessionManager.appendMessage({
+				...fauxAssistantMessage("assistant response to compact", { timestamp: now - 500 }),
+				model: harness.getModel().id,
+				provider: harness.getModel().provider,
+				usage: {
+					input: 50,
+					output: 50,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 100,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+			});
+			harness.session.agent.state.messages = harness.sessionManager.buildSessionContext().messages;
+			// Pause inside the request-header transform, after auth resolved, like the SDK's
+			// before_provider_headers hook would.
+			const stream = harness.session.agent.streamFunction;
+			harness.session.agent.streamFunction = (model, context, options) =>
+				stream(model, context, {
+					...options,
+					transformHeaders: async (headers: ProviderHeaders) => {
+						authStarted?.();
+						await new Promise<void>((resolve) => {
+							releaseAuth = resolve;
+						});
+						return headers;
+					},
+				} satisfies ModelsSimpleStreamOptions as typeof options);
+			harness.setResponses([fauxAssistantMessage("summary that must not stream")]);
+
+			const compaction = harness.session.compact().then(
+				() => undefined,
+				(error) => error,
+			);
+			await authPending;
+			state.fatal = true;
+			await expect(harness.session.reload()).rejects.toThrow("fatal reload");
+			releaseAuth?.();
+			await compaction;
+
+			expect(harness.faux.state.callCount).toBe(0);
+		});
+
+		it("holds a compaction summary paused in the header transform while a reload is pending", async () => {
+			// No abort fires for a reload that merely takes time, so only the request's own gate
+			// keeps the summary from dispatching before the handlers finish.
+			let finishStartup: (() => void) | undefined;
+			const state = { slow: false };
+			let releaseTransform: (() => void) | undefined;
+			let transformStarted: (() => void) | undefined;
+			const transformPending = new Promise<void>((resolve) => {
+				transformStarted = resolve;
+			});
+			const harness = await harnessWith({
+				useModelRuntimeStream: true,
+				extensionFactories: [
+					(pi) => {
+						pi.on("session_start", async () => {
+							if (!state.slow) return;
+							await new Promise<void>((resolve) => {
+								finishStartup = resolve;
+							});
+						});
+					},
+				],
+			});
+			await harness.session.bindExtensions({ uiContext: createTestUiContext(), mode: "tui" });
+			harness.settingsManager.applyOverrides({ compaction: { keepRecentTokens: 1 } });
+			const now = Date.now();
+			harness.sessionManager.appendMessage({
+				role: "user",
+				content: [{ type: "text", text: "message to compact" }],
+				timestamp: now - 1000,
+			});
+			harness.sessionManager.appendMessage({
+				...fauxAssistantMessage("assistant response to compact", { timestamp: now - 500 }),
+				model: harness.getModel().id,
+				provider: harness.getModel().provider,
+				usage: {
+					input: 50,
+					output: 50,
+					cacheRead: 0,
+					cacheWrite: 0,
+					totalTokens: 100,
+					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+				},
+			});
+			harness.session.agent.state.messages = harness.sessionManager.buildSessionContext().messages;
+			const stream = harness.session.agent.streamFunction;
+			harness.session.agent.streamFunction = (model, context, options) =>
+				stream(model, context, {
+					...options,
+					transformHeaders: async (headers: ProviderHeaders) => {
+						transformStarted?.();
+						await new Promise<void>((resolve) => {
+							releaseTransform = resolve;
+						});
+						return headers;
+					},
+				} satisfies ModelsSimpleStreamOptions as typeof options);
+			harness.setResponses([fauxAssistantMessage("summary")]);
+
+			const compaction = harness.session.compact();
+			await transformPending;
+			state.slow = true;
+			const reload = harness.session.reload();
+			await vi.waitFor(() => expect(finishStartup).toBeDefined());
+			// reload() reset the API providers; the summary needs a transport to reach once allowed.
+			const recoveredProvider = registerFauxProvider({ api: harness.faux.api });
+			try {
+				recoveredProvider.setResponses([fauxAssistantMessage("summary")]);
+				releaseTransform?.();
+				// Give the summary every chance to dispatch while the handler is still running.
+				await new Promise((resolve) => setTimeout(resolve, 50));
+				expect(recoveredProvider.state.callCount).toBe(0);
+				expect(harness.faux.state.callCount).toBe(0);
+
+				finishStartup?.();
+				await reload;
+				await compaction;
+				expect(recoveredProvider.state.callCount).toBe(1);
+			} finally {
+				recoveredProvider.unregister();
+			}
 		});
 
 		it("binds the last-moment gate to the requesting session", async () => {

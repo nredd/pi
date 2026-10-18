@@ -131,6 +131,12 @@ export interface ModelRuntimeAuthOverrides extends AuthOperationOptions {
 	minOAuthValidityMs?: number;
 }
 
+/** A session-local check made after request preparation, immediately before provider dispatch. */
+export interface BeforeProviderRequestOptions {
+	/** Resolves to a synchronous final check that runs immediately before provider dispatch. */
+	beforeProviderRequest?: () => Promise<() => void>;
+}
+
 export type CredentialSynchronizationOperation = "login" | "logout" | "setRuntimeApiKey" | "removeRuntimeApiKey";
 
 /** Credentials changed successfully, but the local model/auth snapshot could not be synchronized. */
@@ -195,7 +201,6 @@ export class ModelRuntime implements Models {
 	private readonly providerAvailabilitySeq = new Map<string, number>();
 	private availabilityError: string | undefined;
 	private readonly credentialOperations = new Map<string, Promise<unknown>>();
-
 	private constructor(
 		credentials: RuntimeCredentials,
 		config: ModelConfig,
@@ -438,6 +443,40 @@ export class ModelRuntime implements Models {
 		}
 	}
 
+	/** A session-owned view that gates only its provider requests; raw runtime users remain ungated. */
+	withBeforeProviderRequest(beforeProviderRequest: () => Promise<() => void>): Models {
+		const withGate = <T extends object | undefined>(options: T): T & BeforeProviderRequestOptions => ({
+			...options,
+			beforeProviderRequest,
+		});
+		return {
+			getProviders: () => this.getProviders(),
+			getProvider: (id) => this.getProvider(id),
+			getModels: (provider) => this.getModels(provider),
+			getModel: (provider, id) => this.getModel(provider, id),
+			getModelsOfType: (type, provider) => this.getModelsOfType(type, provider),
+			getModelOfType: (type, provider, id) => this.getModelOfType(type, provider, id),
+			getAllModels: (provider) => this.getAllModels(provider),
+			refresh: (options) => this.refresh(options),
+			checkAuth: (provider, options) => this.checkAuth(provider, options),
+			getAvailable: (provider, options) => this.getAvailable(provider, options),
+			getAvailableOfType: (type, provider, options) => this.getAvailableOfType(type, provider, options),
+			getAllAvailable: (provider, options) => this.getAllAvailable(provider, options),
+			getAuth: this.getAuth.bind(this),
+			login: (provider, type, interaction, options) => this.login(provider, type, interaction, options),
+			logout: (provider, options) => this.logout(provider, options),
+			stream: (model, context, options) => this.stream(model, context, withGate(options)),
+			complete: (model, context, options) => this.complete(model, context, withGate(options)),
+			streamSimple: (model, context, options) => this.streamSimple(model, context, withGate(options)),
+			completeSimple: (model, context, options) => this.completeSimple(model, context, withGate(options)),
+			streamDeferred: (model, handle, options) => this.streamDeferred(model, handle, withGate(options)),
+			fetchDeferred: (model, handle, options) => this.fetchDeferred(model, handle, withGate(options)),
+			cancelDeferred: (model, handle, options) => this.cancelDeferred(model, handle, withGate(options)),
+			generateImages: (model, context, options) => this.generateImages(model, context, withGate(options)),
+			classify: (model, context, options) => this.classify(model, context, withGate(options)),
+		} satisfies Models;
+	}
+
 	getProviders(): readonly Provider[] {
 		return this.models.getProviders();
 	}
@@ -675,7 +714,11 @@ export class ModelRuntime implements Models {
 		});
 		if (!resolution) throw new ModelsError("auth", `Provider is not configured: ${model.provider}`);
 
-		const { transformHeaders, ...rawProviderOptions } = options ?? {};
+		const {
+			transformHeaders,
+			beforeProviderRequest: _beforeProviderRequest,
+			...rawProviderOptions
+		} = (options ?? {}) as TOptions & BeforeProviderRequestOptions;
 		const providerOptions = rawProviderOptions as Omit<TOptions, "transformHeaders"> & ProviderRequestOptions<TModel>;
 		let headers = mergeHeaders(resolution.auth.headers, providerOptions.headers);
 		if (transformHeaders) headers = await transformHeaders(headers ?? {});
@@ -699,7 +742,7 @@ export class ModelRuntime implements Models {
 	stream<TApi extends Api>(
 		model: Model<TApi>,
 		context: Context,
-		options?: ModelsApiStreamOptions<TApi>,
+		options?: ModelsApiStreamOptions<TApi> & BeforeProviderRequestOptions,
 	): AssistantMessageEventStream {
 		const transcript = normalizeContext(context);
 		return lazyStream(model, async () => {
@@ -708,6 +751,11 @@ export class ModelRuntime implements Models {
 				model,
 				options as (StreamOptions & ModelsRequestTransforms) | undefined,
 			);
+			const recheck = await options?.beforeProviderRequest?.();
+			// A request cancelled while it was being prepared (a fatal startup aborts in-flight
+			// work) must not dispatch once its transforms resume, recovery or not.
+			options?.signal?.throwIfAborted();
+			recheck?.();
 			return prepared.provider.stream(prepared.model, transcript, prepared.options as ApiStreamOptions<TApi>);
 		});
 	}
@@ -715,12 +763,16 @@ export class ModelRuntime implements Models {
 	complete<TApi extends Api>(
 		model: Model<TApi>,
 		context: Context,
-		options?: ModelsApiStreamOptions<TApi>,
+		options?: ModelsApiStreamOptions<TApi> & BeforeProviderRequestOptions,
 	): Promise<AssistantMessage> {
 		return this.stream(model, context, options).result();
 	}
 
-	streamSimple(model: Model<Api>, context: Context, options?: ModelsSimpleStreamOptions): AssistantMessageEventStream {
+	streamSimple(
+		model: Model<Api>,
+		context: Context,
+		options?: ModelsSimpleStreamOptions & BeforeProviderRequestOptions,
+	): AssistantMessageEventStream {
 		const transcript = normalizeContext(context);
 		if (isVirtualModel(model)) {
 			// Requests outside the agent loop are routed here. Callers sized them before routing, so
@@ -744,18 +796,27 @@ export class ModelRuntime implements Models {
 		return lazyStream(model, async () => {
 			assertChatModel(model);
 			const prepared = await this.prepareRequest(model, options);
+			const recheck = await options?.beforeProviderRequest?.();
+			// A request cancelled while it was being prepared (a fatal startup aborts in-flight
+			// work) must not dispatch once its transforms resume, recovery or not.
+			options?.signal?.throwIfAborted();
+			recheck?.();
 			return prepared.provider.streamSimple(prepared.model, transcript, prepared.options as SimpleStreamOptions);
 		});
 	}
 
-	completeSimple(model: Model<Api>, context: Context, options?: ModelsSimpleStreamOptions): Promise<AssistantMessage> {
+	completeSimple(
+		model: Model<Api>,
+		context: Context,
+		options?: ModelsSimpleStreamOptions & BeforeProviderRequestOptions,
+	): Promise<AssistantMessage> {
 		return this.streamSimple(model, context, options).result();
 	}
 
 	streamDeferred(
 		model: Model<Api>,
 		handle: DeferredHandle,
-		options?: ModelsDeferredFetchOptions,
+		options?: ModelsDeferredFetchOptions & BeforeProviderRequestOptions,
 	): AssistantMessageEventStream {
 		return lazyStream(model, async () => {
 			assertChatModel(model);
@@ -763,6 +824,11 @@ export class ModelRuntime implements Models {
 			if (!prepared.provider.fetchDeferred) {
 				throw new ModelsError("provider", `Provider ${model.provider} does not support deferred responses`);
 			}
+			const recheck = await options?.beforeProviderRequest?.();
+			// A request cancelled while it was being prepared (a fatal startup aborts in-flight
+			// work) must not dispatch once its transforms resume, recovery or not.
+			options?.signal?.throwIfAborted();
+			recheck?.();
 			return prepared.provider.fetchDeferred(prepared.model, handle, prepared.options as DeferredFetchOptions);
 		});
 	}
@@ -770,7 +836,7 @@ export class ModelRuntime implements Models {
 	async fetchDeferred(
 		model: Model<Api>,
 		handle: DeferredHandle,
-		options?: ModelsDeferredFetchOptions,
+		options?: ModelsDeferredFetchOptions & BeforeProviderRequestOptions,
 	): Promise<AssistantMessage> {
 		return this.streamDeferred(model, handle, options).result();
 	}
@@ -778,20 +844,23 @@ export class ModelRuntime implements Models {
 	async cancelDeferred(
 		model: Model<Api>,
 		handle: DeferredHandle,
-		options?: ModelsDeferredCancelOptions,
+		options?: ModelsDeferredCancelOptions & BeforeProviderRequestOptions,
 	): Promise<void> {
 		assertChatModel(model);
 		const prepared = await this.prepareRequest(model, options);
 		if (!prepared.provider.cancelDeferred) {
 			throw new ModelsError("provider", `Provider ${model.provider} does not support deferred responses`);
 		}
-		await prepared.provider.cancelDeferred(prepared.model, handle, prepared.options as DeferredCancelOptions);
+		const recheck = await options?.beforeProviderRequest?.();
+		options?.signal?.throwIfAborted();
+		recheck?.();
+		return prepared.provider.cancelDeferred(prepared.model, handle, prepared.options as DeferredCancelOptions);
 	}
 
 	async generateImages(
 		model: ImageModel<ImageApi>,
 		context: ImagesContext,
-		options?: ModelsImagesOptions,
+		options?: ModelsImagesOptions & BeforeProviderRequestOptions,
 	): Promise<AssistantImages> {
 		try {
 			assertImageModel(model);
@@ -799,6 +868,11 @@ export class ModelRuntime implements Models {
 			if (!prepared.provider.generateImages) {
 				throw new ModelsError("provider", `Provider ${model.provider} does not support image generation`);
 			}
+			const recheck = await options?.beforeProviderRequest?.();
+			// A request cancelled while it was being prepared (a fatal startup aborts in-flight
+			// work) must not dispatch once its transforms resume, recovery or not.
+			options?.signal?.throwIfAborted();
+			recheck?.();
 			return await prepared.provider.generateImages(prepared.model, context, prepared.options as ImagesOptions);
 		} catch (error) {
 			return imageErrorResult(model, error, options?.signal?.aborted);
@@ -808,7 +882,7 @@ export class ModelRuntime implements Models {
 	async classify(
 		model: ClassifierModel<ClassifierApi>,
 		context: ClassifierContext,
-		options?: ModelsClassifierOptions,
+		options?: ModelsClassifierOptions & BeforeProviderRequestOptions,
 	): Promise<ClassifierResult> {
 		try {
 			assertClassifierModel(model);
@@ -817,6 +891,11 @@ export class ModelRuntime implements Models {
 			if (!prepared.provider.classify) {
 				throw new ModelsError("provider", `Provider ${model.provider} does not support classification`);
 			}
+			const recheck = await options?.beforeProviderRequest?.();
+			// A request cancelled while it was being prepared (a fatal startup aborts in-flight
+			// work) must not dispatch once its transforms resume, recovery or not.
+			options?.signal?.throwIfAborted();
+			recheck?.();
 			return await prepared.provider.classify(prepared.model, context, prepared.options as ClassifierOptions);
 		} catch (error) {
 			return classifierErrorResult(model, error, options?.signal?.aborted);

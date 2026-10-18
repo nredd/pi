@@ -262,6 +262,44 @@ Keep tool and event behavior independent from rendering so non-interactive modes
 
 Pi reports handler errors and continues where possible. A `tool_call` handler failure blocks the tool as a fail-safe; a tool execution failure becomes an error result for the model.
 
+<a id="fatal-startup"></a>
+
+#### Fail startup on purpose
+
+One exception to "report and continue": a `session_start` handler that throws `ExtensionStartupError` (exported by `@earendil-works/pi-coding-agent`) fails session startup. Use it when continuing would be unsafe, for example when a file that decides what the session may read or run failed validation.
+
+```typescript
+import { type ExtensionAPI, ExtensionStartupError } from "@earendil-works/pi-coding-agent";
+
+export default function (pi: ExtensionAPI) {
+  pi.on("session_start", async (_event, ctx) => {
+    try {
+      await loadPolicy(ctx.cwd);
+    } catch (error) {
+      throw new ExtensionStartupError("Invalid project policy", { cause: error });
+    }
+  });
+}
+```
+
+Scope:
+
+- Only `session_start` (startup, `reload`, `new`, `resume`, `fork`). Thrown from any other event it is an ordinary error: logged, nothing aborts.
+- Remaining `session_start` handlers do not run. The error rethrown to the caller names the extension path, keeps your error as `cause`, and is itself an `ExtensionStartupError`.
+- Print mode exits nonzero, RPC mode disposes the runtime and exits before reading commands, and the TUI restores the terminal and exits. None of them send a provider request.
+- `ctx.shutdown()` is not a substitute: print mode has no shutdown handler, so it cannot fail closed.
+
+While `session_start` handlers run, nothing reaches a provider:
+
+- `pi.sendUserMessage()` and `pi.sendMessage(..., { triggerTurn: true })` (any `deliverAs`, including `nextTurn`) are held and replayed one at a time, in call order, once every handler completes. A failed replay is reported and does not prevent later held messages from running. If one emission fails fatally, the messages it already held are discarded and reported through the error listener (`send_user_message` / `send_message`) immediately, even while overlapping emissions still run; only messages deferred after that failure may be replayed by a later successful recovery. The held queue is the only place unplayed messages live, so this holds even when the fatal settles while an earlier replayed message is still running: everything not yet started is discarded and never replayed by a later recovery. A replayed message whose `input` handlers outlast a new `session_start` waits for that startup before it reaches the provider instead of failing with "still starting"; it fails only if the new startup is fatal. The same applies to a replay that lands while `agent_settled` handlers are still running: it waits for them under the replay's control rather than being deferred out of the held queue, and a fatal emission in that window discards it. A replayed message keeps the identity it was dequeued with: however long it is paused (an `input` handler, a turn it would be queued against), a fatal emission that settled meanwhile discards and reports it, even if a later recovery has already cleared the latch. Ordinary handler errors do not discard them. A `session.prompt()` issued after the bind (print mode's initial message, for example) runs after the whole replay finishes, unless it passes `streamingBehavior`, in which case it is queued against that turn as usual.
+- `ctx.compact()` is not held, since a handler may await `onComplete`. It calls `onError` right away. The `ModelRegistry` facade exposes `stream`, `streamSimple`, `complete`, `classify`, and `generateImages`: startup refusal reaches `stream`/`streamSimple` as their normal error event and final assistant result, and `complete` resolves that final assistant result; `classify` and `generateImages` resolve their normal error results (`stopReason: "error"`). None of these methods reject just because startup is pending, so awaiting one from a startup handler would otherwise deadlock startup. They are available after startup settles.
+- Direct SDK calls (`session.prompt()`, `compact()`, summarizing `navigateTree()`) reject with a plain `Error` until `bindExtensions()` or `reload()` settles. Pi checks again immediately before invoking the provider, after authentication and request-header transforms, and a fatal failure aborts an in-flight agent run, compaction or branch summary; a request whose signal was aborted while it was being prepared never dispatches, even after a later recovery. The check rides on the agent loop's request options (like `sessionId`), so it survives a replaced `agent.streamFunction`; a custom stream function that bypasses `ModelRuntime` bypasses it too. This protection is session-scoped: calls made on a raw `ModelRuntime` supplied to the SDK are outside a session and are not gated. Await the bind first.
+- `reload()` after any `bindExtensions()` call, even mode-only or empty bindings, re-emits `session_start`. Before the first bind it does not.
+
+Recovery: a failed `session_start` leaves the `AgentSession` refusing `prompt()`, `sendUserMessage()`, triggered custom messages, `compact()`, and summarizing `navigateTree()` with an `ExtensionStartupError`. A fatal overlapping bind or reload also latches, even if another emission that began earlier succeeds; only a successful bind or reload operation that started after the fatal emission settles clears it. If `reload({ beforeSessionStart })` throws before `session_start` is emitted, that reload does not change the latch. Fix the cause, then call `bindExtensions()` or `reload()` again (`/reload` in the TUI). SDK callers should `dispose()` a session whose binding failed.
+
+Hosts older than this feature log the error like any other and keep running. An extension that must not run there should feature-detect the export (`import * as sdk from "@earendil-works/pi-coding-agent"`, then check `"ExtensionStartupError" in sdk`) and refuse to continue without it. See [`fatal-startup.ts`](../examples/extensions/fatal-startup.ts).
+
 Release resources in `session_shutdown` even when normal operation attempted cleanup.
 Keep cleanup idempotent because cancellation, reload, session replacement, and process exit can converge on the same path.
 Use `ctx.shutdown()` to request an orderly process shutdown.

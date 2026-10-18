@@ -134,6 +134,8 @@ export interface AgentOptions {
 	steeringMode?: QueueMode;
 	followUpMode?: QueueMode;
 	sessionId?: string;
+	/** Resolves to the synchronous check run immediately before each provider dispatch; see `Agent.beforeProviderRequest`. */
+	beforeProviderRequest?: () => Promise<() => void>;
 	thinkingBudgets?: ThinkingBudgets;
 	transport?: Transport;
 	maxRetryDelayMs?: number;
@@ -218,6 +220,12 @@ export class Agent {
 	private activeRun?: ActiveRun;
 	/** Session identifier forwarded to providers for cache-aware backends. */
 	public sessionId?: string;
+	/**
+	 * Forwarded to the stream function with every request, like `sessionId`, so it survives a
+	 * replaced `streamFunction`. It resolves to a synchronous final check so a session can refuse
+	 * provider dispatch while its extensions are still starting or failed to start.
+	 */
+	public beforeProviderRequest?: () => Promise<() => void>;
 	/** Optional per-level thinking token budgets forwarded to the stream function. */
 	public thinkingBudgets?: ThinkingBudgets;
 	/** Preferred transport forwarded to the stream function. */
@@ -247,6 +255,7 @@ export class Agent {
 		this.steeringQueue = new PendingMessageQueue(runtimeOptions.steeringMode ?? "one-at-a-time");
 		this.followUpQueue = new PendingMessageQueue(runtimeOptions.followUpMode ?? "one-at-a-time");
 		this.sessionId = runtimeOptions.sessionId;
+		this.beforeProviderRequest = runtimeOptions.beforeProviderRequest;
 		this.thinkingBudgets = runtimeOptions.thinkingBudgets;
 		this.transport = runtimeOptions.transport ?? "auto";
 		this.maxRetryDelayMs = runtimeOptions.maxRetryDelayMs;
@@ -470,6 +479,7 @@ export class Agent {
 			model: this._state.model,
 			reasoning: this._state.thinkingLevel === "off" ? undefined : this._state.thinkingLevel,
 			sessionId: this.sessionId,
+			beforeProviderRequest: this.beforeProviderRequest,
 			onPayload: this.onPayload,
 			onResponse: this.onResponse,
 			onProviderStreamEvent: this.onProviderStreamEvent,

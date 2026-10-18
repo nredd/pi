@@ -115,6 +115,8 @@ Inline extension factories can be supplied through `DefaultResourceLoader`. Give
 
 The CLI loads `codemode`, `tool_search`, and MCP as built-in extensions. SDK sessions do not; add `createCodemodeExtension()`, `createToolSearchExtension()`, and `createMcpExtension()` to the `extensionFactories` of `DefaultResourceLoader`. `codemode` and `tool_search` are registered inactive: enable them through the `defaultTools` setting (`["+codemode", "+tool_search"]` keeps the other default tools), or let the MCP extension activate them: `codemode` for servers with `codemode` exposure, `tool_search` for servers with `deferred` exposure. The MCP extension connects its servers on `session_start`, so call `session.bindExtensions()`. See [Codemode and MCP](../examples/sdk/14-codemode-mcp.ts).
 
+A `session_start` handler can fail startup by throwing `ExtensionStartupError`. `bindExtensions()` (and `reload()`) then reject, and the session refuses `prompt()` and other provider-bound calls until a later `bindExtensions()` or `reload()` succeeds. `dispose()` the session if you give up. See [Fail startup on purpose](extensions.md#fatal-startup).
+
 See the focused examples for [models](../examples/sdk/02-custom-model.ts), [tools](../examples/sdk/05-tools.ts), [extensions](../examples/sdk/06-extensions.ts), and [full control](../examples/sdk/12-full-control.ts).
 
 ## Examples

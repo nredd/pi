@@ -19,6 +19,7 @@ import type {
 	ExtensionWidgetOptions,
 	WorkingIndicatorOptions,
 } from "../../core/extensions/index.ts";
+import { isExtensionStartupError } from "../../core/extensions/startup-error.ts";
 import {
 	flushRawStdout,
 	takeOverStdout,
@@ -379,7 +380,17 @@ export async function runRpcMode(runtimeHost: AgentSessionRuntime): Promise<neve
 		}
 	};
 
-	await rebindSession();
+	try {
+		await rebindSession();
+	} catch (error) {
+		// A fatal session_start failure: accept no commands, dispose the runtime, let the caller report it.
+		if (isExtensionStartupError(error)) {
+			unsubscribe?.();
+			unsubscribeBackpressure?.();
+			await runtimeHost.dispose();
+		}
+		throw error;
+	}
 	registerSignalHandlers();
 
 	// Handle a single command

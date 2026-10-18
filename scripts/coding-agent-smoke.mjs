@@ -31,6 +31,16 @@ import { createAgentSession, SessionManager, ModelRuntime } from "${codingAgentN
 assert.equal(typeof createAgentSession, "function");
 assert.equal(typeof SessionManager.inMemory, "function");
 assert.equal(typeof ModelRuntime.create, "function");
+// Packages test against the published in-process harness; run one real faux turn through it.
+const { createHarness, fauxAssistantMessage, getAssistantTexts } = await import("${codingAgentName}/testing");
+const harness = await createHarness();
+try {
+	harness.setResponses([fauxAssistantMessage("pong")]);
+	await harness.session.prompt("ping");
+	assert.deepEqual(getAssistantTexts(harness), ["pong"]);
+} finally {
+	harness.cleanup();
+}
 `);
 		execFileSync(runtime, [entry], { cwd: directory, env, stdio: ["inherit", "pipe", "pipe"], timeout: 30_000 });
 		for (const cli of new Set([manifest.bin.pi, "dist/cli.js"])) {

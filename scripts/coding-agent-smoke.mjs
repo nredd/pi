@@ -28,9 +28,19 @@ export function smokeTestCodingAgent(directory, runtime = process.execPath) {
 	try {
 		writeFileSync(entry, `import assert from "node:assert/strict";
 import { createAgentSession, SessionManager, ModelRuntime } from "${codingAgentName}";
+// Packages test against the published in-process harness; run one real faux turn through it.
+import { createHarness, fauxAssistantMessage, getAssistantTexts } from "${codingAgentName}/testing";
 assert.equal(typeof createAgentSession, "function");
 assert.equal(typeof SessionManager.inMemory, "function");
 assert.equal(typeof ModelRuntime.create, "function");
+const harness = await createHarness();
+try {
+	harness.setResponses([fauxAssistantMessage("pong")]);
+	await harness.session.prompt("ping");
+	assert.deepEqual(getAssistantTexts(harness), ["pong"]);
+} finally {
+	harness.cleanup();
+}
 `);
 		execFileSync(runtime, [entry], { cwd: directory, env, stdio: ["inherit", "pipe", "pipe"], timeout: 30_000 });
 		for (const cli of new Set([manifest.bin.pi, "dist/cli.js"])) {

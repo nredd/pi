@@ -119,6 +119,36 @@ A `session_start` handler can fail startup by throwing `ExtensionStartupError`. 
 
 See the focused examples for [models](../examples/sdk/02-custom-model.ts), [tools](../examples/sdk/05-tools.ts), [extensions](../examples/sdk/06-extensions.ts), and [full control](../examples/sdk/12-full-control.ts).
 
+<a id="testing"></a>
+
+## Testing extensions in-process
+
+`@earendil-works/pi-coding-agent/testing` runs a real `AgentSession` in the test process. `createHarness()` builds the session, extension runner, in-memory settings and auth, and a model registry around a scripted faux provider. Extension factories load through the real loader, so hooks, tools, commands, settlement, compaction and resume behave as they do in Pi, without a Pi process, a terminal, credentials, or network.
+
+```typescript
+import { createHarness, fauxAssistantMessage, fauxToolCall, getToolResult } from "@earendil-works/pi-coding-agent/testing";
+import myExtension from "../src/index.ts";
+
+const harness = await createHarness({ extensionFactories: [myExtension] });
+try {
+  await harness.session.bindExtensions({ mode: "print" });
+  harness.setResponses([
+    fauxAssistantMessage([fauxToolCall("my_tool", { path: "a.txt" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("done"),
+  ]);
+  await harness.session.prompt("use my_tool");
+  console.log(getToolResult(harness, "my_tool").content);
+} finally {
+  harness.cleanup();
+}
+```
+
+- Creating a harness loads extensions but does not start them. Call `session.bindExtensions()` with the mode under test (`print`, `json`, `rpc`, or `tui`) and a UI context from `createTestUiContext()` when handlers need one; `session_start` runs then.
+- `setResponses()`/`appendResponses()` script the faux provider with assistant messages (text, thinking, tool calls, error stop reasons, usage) or functions of the request context. `harness.events` records every session event, and `eventsOfType()` filters them.
+- Pass `extensionFactories` with several factories to test how extensions interact, `sessionManager` (for example `SessionManager.open(file)`) to test a resume, and `cwd` to run in a fixture directory. `cleanup()` disposes the session and removes `harness.tempDir`, never a caller-owned `cwd`.
+- Import the faux builders from this entry rather than a separate `@earendil-works/pi-ai` copy, so responses are scripted against the instance the harness registered with.
+- The harness bypasses the CLI: argument parsing, package installation and discovery, project trust, the TUI renderer, and process exit are not exercised. Test those against a real `pi` binary.
+
 ## Examples
 
 | Example | Purpose |

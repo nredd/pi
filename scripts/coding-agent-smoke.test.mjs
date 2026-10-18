@@ -16,7 +16,7 @@ function writePackage(directory, manifest, files) {
 	}
 }
 
-function createFixture(t, { importUndeclared = false } = {}) {
+function createFixture(t, { importUndeclared = false, exportTesting = true } = {}) {
 	const temporaryRoot = mkdtempSync(join(tmpdir(), "pi-coding-agent-smoke-test-"));
 	t.after(() => rmSync(temporaryRoot, { recursive: true, force: true }));
 	const root = join(temporaryRoot, "fixture with spaces");
@@ -31,7 +31,10 @@ function createFixture(t, { importUndeclared = false } = {}) {
 			type: "module",
 			main: "./dist/index.js",
 			types: "./dist/index.d.ts",
-			exports: { ".": { types: "./dist/index.d.ts", import: "./dist/index.js" } },
+			exports: {
+				".": { types: "./dist/index.d.ts", import: "./dist/index.js" },
+				...(exportTesting ? { "./testing": { types: "./dist/index.d.ts", import: "./dist/testing/index.js" } } : {}),
+			},
 			files: ["dist"],
 			bin: { pi: "dist/bundle/cli.js" },
 		},
@@ -42,6 +45,15 @@ export class SessionManager { static inMemory() {} }
 export class ModelRuntime { static create() {} }
 `,
 			"dist/index.d.ts": "export {};\n",
+			"dist/testing/index.js": `export const fauxAssistantMessage = (text) => ({ role: "assistant", text });
+export const getAssistantTexts = (harness) => harness.texts;
+export async function createHarness() {
+	const harness = { texts: [], responses: [], cleanup() {} };
+	harness.setResponses = (responses) => { harness.responses = responses; };
+	harness.session = { prompt: async () => { harness.texts.push(harness.responses.shift().text); } };
+	return harness;
+}
+`,
 			"dist/cli.js": 'console.log("1.0.0");\n',
 			"dist/bundle/cli.js": 'console.log("1.0.0");\n',
 		},
@@ -60,4 +72,9 @@ test("accepts a valid coding-agent package", (t) => {
 test("fails when the SDK imports an undeclared package despite a working CLI", (t) => {
 	const directory = createFixture(t, { importUndeclared: true });
 	assert.throws(() => smokeTestCodingAgent(directory), /Cannot find package '@earendil-works\/undeclared'/);
+});
+
+test("fails when the in-process testing entry is not exported", (t) => {
+	const directory = createFixture(t, { exportTesting: false });
+	assert.throws(() => smokeTestCodingAgent(directory), /ERR_PACKAGE_PATH_NOT_EXPORTED/);
 });

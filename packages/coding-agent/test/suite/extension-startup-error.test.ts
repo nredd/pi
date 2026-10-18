@@ -13,7 +13,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AgentSessionRuntime } from "../../src/core/agent-session-runtime.ts";
 import type { ExtensionAPI } from "../../src/core/extensions/types.ts";
 import { VIRTUAL_MODULES } from "../../src/core/extensions/virtual-modules.ts";
-import { ExtensionStartupError } from "../../src/index.ts";
+import { AgentSession, ExtensionStartupError } from "../../src/index.ts";
 import { runPrintMode } from "../../src/modes/print-mode.ts";
 import { createHarness, createTestUiContext, type Harness } from "./harness.ts";
 
@@ -1515,6 +1515,58 @@ describe("ExtensionStartupError", () => {
 					.filter((message) => message.role === "user")
 					.map((message) => contentText(message.content)),
 			).toEqual(["later"]);
+		});
+
+		it("routes immediate and replayed startup sends through the public methods", async () => {
+			// Installed extensions wrap `AgentSession.prototype.sendCustomMessage` (pi-dynamic-workflows
+			// swallows a capture-only probe there). Every runtime send, held or not, must pass
+			// through the public method, and a wrapper that forwards `options` keeps the replay.
+			const seen: Array<{ customType: string; triggerTurn: boolean | undefined }> = [];
+			const proto = AgentSession.prototype;
+			const original = proto.sendCustomMessage;
+			proto.sendCustomMessage = function wrapped(this: AgentSession, message, options) {
+				seen.push({ customType: message.customType, triggerTurn: options?.triggerTurn });
+				if (message.customType === "probe") return Promise.resolve();
+				return original.call(this, message, options);
+			};
+			try {
+				let emission = 0;
+				const errors: string[] = [];
+				const harness = await harnessWith({
+					extensionFactories: [
+						(pi) => {
+							pi.on("session_start", () => {
+								emission++;
+								pi.sendMessage({ customType: "probe", content: "", display: false }, { triggerTurn: false });
+								pi.sendMessage({ customType: "held", content: "turn", display: false }, { triggerTurn: true });
+								if (emission === 2) throw new ExtensionStartupError("fatal after sends");
+							});
+						},
+					],
+				});
+				harness.setResponses([fauxAssistantMessage("reply"), fauxAssistantMessage("unexpected")]);
+				await harness.session.bindExtensions({ mode: "print", onError: (error) => errors.push(error.error) });
+				await harness.session.waitForIdle();
+
+				expect(seen).toEqual([
+					{ customType: "probe", triggerTurn: false },
+					{ customType: "held", triggerTurn: true },
+				]);
+				expect(harness.faux.state.callCount).toBe(1);
+				// The swallowed probe never reached the transcript; the held message did, once.
+				expect(
+					harness.session.messages.filter((message) => message.role === "custom").map((m) => m.customType),
+				).toEqual(["held"]);
+
+				// The first "held" entry above IS the replay: the runtime held it and sent it through
+				// the wrapper after startup settled. A held message discarded by a fatal startup is
+				// never replayed, so the wrapper sees only the immediate probe of the second bind.
+				await expect(harness.session.bindExtensions({ mode: "print" })).rejects.toThrow("fatal after sends");
+				expect(harness.faux.state.callCount).toBe(1);
+				expect(seen.map((entry) => entry.customType)).toEqual(["probe", "held", "probe"]);
+			} finally {
+				proto.sendCustomMessage = original;
+			}
 		});
 
 		it("discards a startup message from a failed reload", async () => {

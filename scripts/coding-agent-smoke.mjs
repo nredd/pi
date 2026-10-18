@@ -28,11 +28,11 @@ export function smokeTestCodingAgent(directory, runtime = process.execPath) {
 	try {
 		writeFileSync(entry, `import assert from "node:assert/strict";
 import { createAgentSession, SessionManager, ModelRuntime } from "${codingAgentName}";
+// Packages test against the published in-process harness; run one real faux turn through it.
+import { createHarness, fauxAssistantMessage, getAssistantTexts } from "${codingAgentName}/testing";
 assert.equal(typeof createAgentSession, "function");
 assert.equal(typeof SessionManager.inMemory, "function");
 assert.equal(typeof ModelRuntime.create, "function");
-// Packages test against the published in-process harness; run one real faux turn through it.
-const { createHarness, fauxAssistantMessage, getAssistantTexts } = await import("${codingAgentName}/testing");
 const harness = await createHarness();
 try {
 	harness.setResponses([fauxAssistantMessage("pong")]);

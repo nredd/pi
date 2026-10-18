@@ -389,6 +389,27 @@ interface StartupReplay {
 	fatalCount: number;
 }
 
+/**
+ * Where a replayed startup action carries its {@link StartupReplay} token: a symbol-keyed property
+ * on the public method's `options`. Replays enter through the same public `prompt()`,
+ * `sendUserMessage()` and `sendCustomMessage()` as everything else, so an extension that wraps
+ * those methods on the prototype sees every send, and a wrapper that forwards `options` unchanged
+ * keeps the token.
+ */
+const STARTUP_REPLAY = Symbol("pi.startupReplay");
+
+type Replayable = { [STARTUP_REPLAY]?: StartupReplay };
+
+/** Attach `replay` to `options` for a public method call. */
+function withStartupReplay<T extends object>(options: T | undefined, replay: StartupReplay): T {
+	return { ...(options ?? ({} as T)), [STARTUP_REPLAY]: replay };
+}
+
+/** Read the replay token a public method call was made with, if any. */
+function startupReplayOf(options: object | undefined): StartupReplay | undefined {
+	return options ? (options as Replayable)[STARTUP_REPLAY] : undefined;
+}
+
 export class AgentSession {
 	readonly agent: Agent;
 	readonly sessionManager: SessionManager;
@@ -2150,14 +2171,9 @@ export class AgentSession {
 	 * @throws Error if no model selected or no API key available (when not streaming)
 	 */
 	async prompt(text: string, options?: PromptOptions): Promise<void> {
-		await this._prompt(text, options);
-	}
-
-	/**
-	 * `prompt()` body. A replayed startup action passes its `replay` token to wait for a pending
-	 * session_start instead of failing on it, and to skip the wait on its own replay.
-	 */
-	private async _prompt(text: string, options: PromptOptions | undefined, replay?: StartupReplay): Promise<void> {
+		// A replayed startup action carries its token on `options`; it waits for a pending
+		// session_start instead of failing on it, and skips the wait on its own replay.
+		const replay = startupReplayOf(options);
 		if (replay) {
 			const wait = this._awaitReplayableState(replay);
 			if (wait) await wait;
@@ -2170,7 +2186,7 @@ export class AgentSession {
 			await this._startupReplay;
 		}
 		if (this._isEmittingAgentSettled) {
-			this._deferredSettledActions.push(async () => await this._prompt(text, options, replay));
+			this._deferredSettledActions.push(async () => await this.prompt(text, options));
 			return;
 		}
 		const expandPromptTemplates = options?.expandPromptTemplates ?? true;
@@ -2447,15 +2463,8 @@ export class AgentSession {
 		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details">,
 		options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" },
 	): Promise<void> {
-		await this._sendCustomMessage(message, options);
-	}
-
-	/** `sendCustomMessage()` body; `replay` is set for replayed startup actions. */
-	private async _sendCustomMessage<T = unknown>(
-		message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details">,
-		options: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" } | undefined,
-		replay?: StartupReplay,
-	): Promise<void> {
+		// A replayed startup action carries its token on `options` (see STARTUP_REPLAY).
+		const replay = startupReplayOf(options);
 		const appMessage = {
 			role: "custom" as const,
 			customType: message.customType,
@@ -2480,7 +2489,7 @@ export class AgentSession {
 			}
 		} else if (options?.triggerTurn) {
 			if (this._isEmittingAgentSettled) {
-				this._deferredSettledActions.push(async () => await this._sendCustomMessage(message, options, replay));
+				this._deferredSettledActions.push(async () => await this.sendCustomMessage(message, options));
 				return;
 			}
 			await this._startRun({ messageType: "custom", message: appMessage }, undefined, replay);
@@ -2533,15 +2542,8 @@ export class AgentSession {
 		content: string | (TextContent | ImageContent)[],
 		options?: { deliverAs?: "steer" | "followUp"; expandPromptTemplates?: boolean },
 	): Promise<void> {
-		await this._sendUserMessage(content, options);
-	}
-
-	/** `sendUserMessage()` body; `replay` is set for replayed startup actions. */
-	private async _sendUserMessage(
-		content: string | (TextContent | ImageContent)[],
-		options: { deliverAs?: "steer" | "followUp"; expandPromptTemplates?: boolean } | undefined,
-		replay?: StartupReplay,
-	): Promise<void> {
+		// A replayed startup action carries its token on `options` (see STARTUP_REPLAY).
+		const replay = startupReplayOf(options);
 		// Normalize content to text string + optional images
 		let text: string;
 		let images: ImageContent[] | undefined;
@@ -2562,16 +2564,13 @@ export class AgentSession {
 			if (images.length === 0) images = undefined;
 		}
 
-		await this._prompt(
-			text,
-			{
-				expandPromptTemplates: options?.expandPromptTemplates ?? false,
-				streamingBehavior: options?.deliverAs,
-				images,
-				source: "extension",
-			},
-			replay,
-		);
+		const promptOptions: PromptOptions = {
+			expandPromptTemplates: options?.expandPromptTemplates ?? false,
+			streamingBehavior: options?.deliverAs,
+			images,
+			source: "extension",
+		};
+		await this.prompt(text, replay ? withStartupReplay(promptOptions, replay) : promptOptions);
 	}
 
 	/**
@@ -3749,7 +3748,8 @@ export class AgentSession {
 							error: error instanceof Error ? error.message : String(error),
 						});
 					};
-					const send = (replay?: StartupReplay) => this._sendCustomMessage(message, options, replay).catch(report);
+					const send = (replay?: StartupReplay) =>
+						this.sendCustomMessage(message, replay ? withStartupReplay(options, replay) : options).catch(report);
 					// A message that asks for a turn is held, whichever turn it is delivered on: a
 					// `nextTurn` one would otherwise sit outside the held queue, survive a fatal
 					// startup, and ride the first prompt after a recovery. Plain appends go now.
@@ -3764,7 +3764,8 @@ export class AgentSession {
 							error: error instanceof Error ? error.message : String(error),
 						});
 					};
-					const send = (replay?: StartupReplay) => this._sendUserMessage(content, options, replay).catch(report);
+					const send = (replay?: StartupReplay) =>
+						this.sendUserMessage(content, replay ? withStartupReplay(options, replay) : options).catch(report);
 					if (this._deferWhileStarting(send, report)) return;
 					void send();
 				},

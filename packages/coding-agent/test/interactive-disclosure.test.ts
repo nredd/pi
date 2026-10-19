@@ -1,10 +1,6 @@
 import { createBashToolDefinition } from "@earendil-works/pi-coding-agent";
-import {
-	createInteractiveHarness,
-	fauxAssistantMessage,
-	fauxToolCall,
-	type InteractiveHarness,
-} from "@earendil-works/pi-coding-agent/testing";
+import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-coding-agent/testing";
+import { createInteractiveHarness, type InteractiveHarness } from "@earendil-works/pi-coding-agent/testing/interactive";
 import { describe, expect, it } from "vitest";
 
 function rowOf(host: InteractiveHarness, pattern: RegExp): number {

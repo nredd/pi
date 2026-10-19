@@ -151,10 +151,11 @@ try {
 
 ### Testing interactive extensions
 
-Install `@xterm/headless@5.5.0` as a dev dependency (the optional peer of `@earendil-works/pi-tui`). The testing entry mounts the real `InteractiveMode`, extension UI context, editor, widgets, footer, overlays and transcript on an `AgentSessionRuntime`:
+`@earendil-works/pi-coding-agent/testing/interactive` is a separate entry because it needs `@xterm/headless@5.5.0`, the optional peer of `@earendil-works/pi-tui`: install it as a dev dependency. `/testing` never loads it. The entry mounts the real `InteractiveMode`, extension UI context, editor, widgets, footer, overlays and transcript on an `AgentSessionRuntime`:
 
 ```typescript
-import { createInteractiveHarness, fauxAssistantMessage } from "@earendil-works/pi-coding-agent/testing";
+import { fauxAssistantMessage } from "@earendil-works/pi-coding-agent/testing";
+import { createInteractiveHarness } from "@earendil-works/pi-coding-agent/testing/interactive";
 
 const host = await createInteractiveHarness({
   extensionFactories: [myExtension],

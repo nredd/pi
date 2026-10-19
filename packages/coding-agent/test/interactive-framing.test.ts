@@ -1,9 +1,5 @@
-import {
-	createInteractiveHarness,
-	fauxAssistantMessage,
-	fauxText,
-	fauxThinking,
-} from "@earendil-works/pi-coding-agent/testing";
+import { fauxAssistantMessage, fauxText, fauxThinking } from "@earendil-works/pi-coding-agent/testing";
+import { createInteractiveHarness } from "@earendil-works/pi-coding-agent/testing/interactive";
 import { describe, expect, it } from "vitest";
 
 // Ports test_transcript_framing.py's complete viewport/style assertions.

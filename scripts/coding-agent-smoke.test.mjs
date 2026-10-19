@@ -33,7 +33,12 @@ function createFixture(t, { importUndeclared = false, exportTesting = true, rend
 			types: "./dist/index.d.ts",
 			exports: {
 				".": { types: "./dist/index.d.ts", import: "./dist/index.js" },
-				...(exportTesting ? { "./testing": { types: "./dist/index.d.ts", import: "./dist/testing/index.js" } } : {}),
+				...(exportTesting
+					? {
+							"./testing": { types: "./dist/index.d.ts", import: "./dist/testing/index.js" },
+							"./testing/interactive": { types: "./dist/index.d.ts", import: "./dist/testing/interactive.js" },
+						}
+					: {}),
 			},
 			files: ["dist"],
 			bin: { pi: "dist/bundle/cli.js" },
@@ -54,6 +59,8 @@ export async function createHarness() {
 	harness.session = { prompt: async () => { harness.texts.push(harness.responses.shift().text); } };
 	return harness;
 }
+`,
+			"dist/testing/interactive.js": `import { createHarness } from "./index.js";
 export async function createInteractiveHarness() {
 	return {
 		harness: await createHarness(),

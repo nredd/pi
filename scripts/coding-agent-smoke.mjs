@@ -29,7 +29,8 @@ export function smokeTestCodingAgent(directory, runtime = process.execPath, { ch
 		writeFileSync(entry, `import assert from "node:assert/strict";
 import { createAgentSession, SessionManager, ModelRuntime } from "${codingAgentName}";
 // Packages test against the published in-process harness; run one real faux turn through it.
-import { createHarness, createInteractiveHarness, fauxAssistantMessage, getAssistantTexts } from "${codingAgentName}/testing";
+import { createHarness, fauxAssistantMessage, getAssistantTexts } from "${codingAgentName}/testing";
+import { createInteractiveHarness } from "${codingAgentName}/testing/interactive";
 import { VirtualTerminal } from "@earendil-works/pi-tui/testing";
 assert.equal(typeof createAgentSession, "function");
 assert.equal(typeof SessionManager.inMemory, "function");

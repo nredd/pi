@@ -1,6 +1,10 @@
-/** Real interactive mode bound to a scripted session, without a process-level run loop. */
+/**
+ * `@earendil-works/pi-coding-agent/testing/interactive`: the real InteractiveMode bound to a scripted
+ * session, without a process-level run loop. A separate entry because it needs pi-tui's optional
+ * `@xterm/headless` peer; `/testing` never loads it.
+ */
 import { getKeybindings, setKeybindings } from "@earendil-works/pi-tui";
-import type { VirtualTerminal } from "@earendil-works/pi-tui/testing";
+import { VirtualTerminal } from "@earendil-works/pi-tui/testing";
 import chalk from "chalk";
 import { AgentSessionRuntime, type AgentSessionServices } from "../core/agent-session-runtime.ts";
 import { FooterDataProvider } from "../core/footer-data-provider.ts";
@@ -38,9 +42,7 @@ export interface InteractiveHarness {
 export async function createInteractiveHarness(options: InteractiveHarnessOptions = {}): Promise<InteractiveHarness> {
 	const previousKeybindings = getKeybindings();
 	const previousColorLevel = chalk.level;
-	const terminal =
-		options.terminal ??
-		new (await import("@earendil-works/pi-tui/testing")).VirtualTerminal(options.columns, options.rows);
+	const terminal = options.terminal ?? new VirtualTerminal(options.columns, options.rows);
 	const first = await createHarness({ ...options, settings: { quietStartup: true, ...options.settings } });
 	chalk.level = 3;
 	const harnesses = [first];

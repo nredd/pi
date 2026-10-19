@@ -1,5 +1,6 @@
 import { ExtensionStartupError } from "@earendil-works/pi-coding-agent";
-import { createInteractiveHarness, fauxAssistantMessage } from "@earendil-works/pi-coding-agent/testing";
+import { fauxAssistantMessage } from "@earendil-works/pi-coding-agent/testing";
+import { createInteractiveHarness } from "@earendil-works/pi-coding-agent/testing/interactive";
 import { Text } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 

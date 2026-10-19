@@ -6,7 +6,8 @@
 	"main": "dist/index.js",
 	"exports": {
 		".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" },
-		"./testing": { "types": "./dist/testing/index.d.ts", "import": "./dist/testing/index.js" }
+		"./testing": { "types": "./dist/testing/index.d.ts", "import": "./dist/testing/index.js" },
+		"./*": "./*"
 	},
 	"peerDependencies": { "@xterm/headless": "5.5.0" },
 	"peerDependenciesMeta": { "@xterm/headless": { "optional": true } },

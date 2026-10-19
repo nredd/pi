@@ -71,6 +71,11 @@ const BUDGETS = {
 		// The file tools reach their environment helpers and the Harness definitions they need, not the Harness itself.
 		"./tools": { maxFiles: 17, forbid: ["packages/durable/src/images/"] },
 	},
+	"packages/coding-agent": {
+		// No file budget: the session harness deliberately reaches the whole session runtime. It must not reach the
+		// interactive host or pi-tui's emulator, whose `@xterm/headless` peer is optional.
+		"./testing": { forbid: ["coding-agent/src/testing/interactive.ts", "packages/tui/src/testing/"] },
+	},
 };
 
 const SPEC = /(?:^|\n)\s*(?:import|export)\s+(?!type\s)([^;]*?\sfrom\s*)?["']([^"']+)["']/g;

@@ -22,6 +22,9 @@ export const workspaceSourcePaths = {
 	codemodeDeclarations: fileURLToPath(new URL("./packages/codemode/src/declarations.ts", import.meta.url)),
 	codemodeSource: fileURLToPath(new URL("./packages/codemode/src/source.ts", import.meta.url)),
 	codingAgentTesting: fileURLToPath(new URL("./packages/coding-agent/src/testing/index.ts", import.meta.url)),
+	codingAgentTestingInteractive: fileURLToPath(
+		new URL("./packages/coding-agent/src/testing/interactive.ts", import.meta.url),
+	),
 	tuiTesting: fileURLToPath(new URL("./packages/tui/src/testing/index.ts", import.meta.url)),
 	codingAgentIndex: fileURLToPath(new URL("./packages/coding-agent/src/index.ts", import.meta.url)),
 	tuiIndex: fileURLToPath(new URL("./packages/tui/src/index.ts", import.meta.url)),
@@ -60,6 +63,10 @@ export default defineConfig({
 			{ find: /^@earendil-works\/pi-codemode\/source$/, replacement: workspaceSourcePaths.codemodeSource },
 			{ find: /^@earendil-works\/pi-coding-agent$/, replacement: workspaceSourcePaths.codingAgentIndex },
 			{ find: /^@earendil-works\/pi-coding-agent\/testing$/, replacement: workspaceSourcePaths.codingAgentTesting },
+			{
+				find: /^@earendil-works\/pi-coding-agent\/testing\/interactive$/,
+				replacement: workspaceSourcePaths.codingAgentTestingInteractive,
+			},
 			{ find: /^@earendil-works\/pi-tui\/testing$/, replacement: workspaceSourcePaths.tuiTesting },
 			{ find: /^@earendil-works\/pi-tui$/, replacement: workspaceSourcePaths.tuiIndex },
 		],

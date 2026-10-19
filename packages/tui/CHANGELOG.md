@@ -6,7 +6,7 @@
 
 - `@earendil-works/pi-tui/testing` exports `VirtualTerminal` with raw input, resize, viewport/scrollback and styled-cell inspection. `@xterm/headless` is an optional peer used only by this testing entry.
 - `TUI.flushRender()` synchronously paints a requested frame without waiting for the render throttle.
-- `package.json` now has an `exports` map for the testing entry; `"./*": "./*"` keeps every previously resolvable deep path (for example `@earendil-works/pi-tui/dist/...`) resolvable.
+- `package.json` now has an `exports` map for the testing entry. Every specifier that resolved before still resolves to the same file, for `require` and `import`: the entries carry a `default` condition and `"./*": "./*"` keeps deep paths (for example `@earendil-works/pi-tui/dist/...`).
 
 ### Fixed
 

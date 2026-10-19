@@ -569,6 +569,8 @@ export interface TUI extends Component {
 	start(): void;
 	stop(options?: TuiStopOptions): void;
 	renderNow(force?: boolean): void;
+	/** Paint a requested frame synchronously, bypassing the render throttle. */
+	flushRender(): void;
 	requestRender(force?: boolean): void;
 	addInputListener(listener: TuiInputListener): () => void;
 	removeInputListener(listener: TuiInputListener): void;
@@ -1084,6 +1086,11 @@ export abstract class TuiBase extends Container implements TUI {
 		this.cancelRenderTimer();
 		this.lastRenderAt = performance.now();
 		this.doRender();
+	}
+
+	/** Paint only a pending frame. Queued scheduler callbacks become no-ops. */
+	flushRender(): void {
+		if (!this.stopped && this.renderRequested) this.renderNow();
 	}
 
 	requestRender(force = false): void {

@@ -14,10 +14,17 @@ import type {
 	Model,
 	ToolResultMessage,
 } from "@earendil-works/pi-ai/compat";
-import { registerFauxProvider, streamSimple } from "@earendil-works/pi-ai/compat";
+import { getApiProvider, registerFauxProvider, streamSimple } from "@earendil-works/pi-ai/compat";
+import { normalizeContext } from "@earendil-works/pi-ai/utils/transcript";
+
 import { AgentSession, type AgentSessionEvent } from "../core/agent-session.ts";
 import { AuthStorage } from "../core/auth-storage.ts";
-import type { ExtensionRunner, ExtensionUIContext, InlineExtension } from "../core/extensions/index.ts";
+import type {
+	ExtensionRunner,
+	ExtensionUIContext,
+	InlineExtension,
+	SessionStartEvent,
+} from "../core/extensions/index.ts";
 import { convertToLlm } from "../core/messages.ts";
 import type { ModelRuntime } from "../core/model-runtime.ts";
 import type { ResourceLoader } from "../core/resource-loader.ts";
@@ -31,6 +38,9 @@ import {
 	createTestExtensionsResult,
 	createTestResourceLoader,
 } from "./resources.ts";
+
+// Reload resets the process-global compat registry. A harness owns its scripted transport.
+const fauxTransports = new WeakMap<FauxProviderRegistration, typeof streamSimple>();
 
 type MessageTextPart = { type: "text"; text: string };
 
@@ -110,6 +120,8 @@ export function createTestUiContext(overrides: Partial<ExtensionUIContext> = {})
 }
 
 export interface HarnessOptions {
+	/** Caller-owned faux registration, shared across runtime replacements. Cleanup does not unregister it. */
+	fauxProvider?: FauxProviderRegistration;
 	models?: FauxModelDefinition[];
 	settings?: Partial<Settings>;
 	tools?: AgentTool[];
@@ -126,6 +138,8 @@ export interface HarnessOptions {
 	modelsJson?: Record<string, unknown>;
 	/** Session to continue, for example to test a resume. Default: a new in-memory session. */
 	sessionManager?: SessionManager;
+	/** Startup reason supplied by an enclosing session runtime. */
+	sessionStartEvent?: SessionStartEvent;
 	/** Working directory of the session and its extensions, owned by the caller. Default: `tempDir`. */
 	cwd?: string;
 }
@@ -160,16 +174,31 @@ function createTempDir(): string {
 export async function createHarness(options: HarnessOptions = {}): Promise<Harness> {
 	const tempDir = createTempDir();
 	const cwd = options.cwd ?? tempDir;
-	const fauxProvider: FauxProviderRegistration = registerFauxProvider({
-		models: options.models,
-	});
-	fauxProvider.setResponses([]);
+	const fauxProvider: FauxProviderRegistration =
+		options.fauxProvider ??
+		registerFauxProvider({
+			models: options.models,
+		});
+	if (!options.fauxProvider) fauxProvider.setResponses([]);
+	let fauxStream = fauxTransports.get(fauxProvider);
+	if (!fauxStream) {
+		const provider = getApiProvider(fauxProvider.api);
+		if (!provider) throw new Error(`Faux transport missing: ${fauxProvider.api}`);
+		fauxStream = (requestModel, context, requestOptions) =>
+			provider.streamSimple(requestModel, normalizeContext(context), requestOptions);
+		fauxTransports.set(fauxProvider, fauxStream);
+	}
+	const scriptedStream = fauxStream;
+	const stream: typeof streamSimple = (requestModel, context, requestOptions) =>
+		requestModel.api === fauxProvider.api && !getApiProvider(requestModel.api)
+			? scriptedStream(requestModel, context, requestOptions)
+			: streamSimple(requestModel, context, requestOptions);
 	const model = fauxProvider.getModel();
 	const toolMap = options.tools ? Object.fromEntries(options.tools.map((tool) => [tool.name, tool])) : undefined;
 	const withConfiguredAuth = options.withConfiguredAuth ?? true;
 	const extensionRunnerRef: { current?: ExtensionRunner } = {};
 
-	const sessionManager = options.sessionManager ?? SessionManager.inMemory();
+	const sessionManager = options.sessionManager ?? SessionManager.inMemory(cwd);
 	const settingsManager = SettingsManager.inMemory(options.settings);
 
 	const authStorage = AuthStorage.inMemory();
@@ -186,6 +215,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 			baseUrl: model.baseUrl,
 			apiKey: "faux-key",
 			api: fauxProvider.api,
+			streamSimple: stream,
 			models: fauxProvider.models.map((registeredModel) => ({
 				id: registeredModel.id,
 				name: registeredModel.name,
@@ -206,7 +236,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 		getApiKey: () => (withConfiguredAuth ? "faux-key" : undefined),
 		streamFn: options.useModelRuntimeStream
 			? (requestModel, context, requestOptions) => modelRuntime.streamSimple(requestModel, context, requestOptions)
-			: streamSimple,
+			: stream,
 		initialState: {
 			model,
 			systemPrompt: "",
@@ -241,11 +271,20 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 		? await createTestExtensionsResult(options.extensionFactories, cwd)
 		: undefined;
 	const resourceLoader =
-		options.resourceLoader ?? createTestResourceLoader(extensionsResult ? { extensionsResult } : undefined);
+		options.resourceLoader ??
+		createTestResourceLoader(
+			extensionsResult
+				? {
+						extensionsResult,
+						reloadExtensions: () => createTestExtensionsResult(options.extensionFactories ?? [], cwd),
+					}
+				: undefined,
+		);
 
 	const session = new AgentSession({
 		agent,
 		sessionManager,
+		sessionStartEvent: options.sessionStartEvent,
 		settingsManager,
 		cwd,
 		modelRuntime,
@@ -282,7 +321,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 		tempDir,
 		cleanup() {
 			session.dispose();
-			fauxProvider.unregister();
+			if (!options.fauxProvider) fauxProvider.unregister();
 			if (existsSync(tempDir)) {
 				rmSync(tempDir, { recursive: true });
 			}

@@ -18,6 +18,7 @@ describe("@earendil-works/pi-coding-agent/testing", () => {
 	it("exports the harness, its helpers, and the faux builders", () => {
 		expect(Object.keys(testing).sort()).toEqual([
 			"createHarness",
+			"createInteractiveHarness",
 			"createTestExtensionsResult",
 			"createTestResourceLoader",
 			"createTestUiContext",

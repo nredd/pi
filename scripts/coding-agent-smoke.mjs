@@ -5,7 +5,7 @@ import { join } from "node:path";
 
 export const codingAgentName = "@earendil-works/pi-coding-agent";
 
-export function smokeTestCodingAgent(directory, runtime = process.execPath) {
+export function smokeTestCodingAgent(directory, runtime = process.execPath, { checkCli = true } = {}) {
 	const packageDir = join(directory, "node_modules", codingAgentName);
 	const manifest = JSON.parse(readFileSync(join(packageDir, "package.json"), "utf8"));
 	const home = mkdtempSync(join(tmpdir(), "pi-coding-agent-smoke-home-"));
@@ -29,7 +29,8 @@ export function smokeTestCodingAgent(directory, runtime = process.execPath) {
 		writeFileSync(entry, `import assert from "node:assert/strict";
 import { createAgentSession, SessionManager, ModelRuntime } from "${codingAgentName}";
 // Packages test against the published in-process harness; run one real faux turn through it.
-import { createHarness, fauxAssistantMessage, getAssistantTexts } from "${codingAgentName}/testing";
+import { createHarness, createInteractiveHarness, fauxAssistantMessage, getAssistantTexts } from "${codingAgentName}/testing";
+import { VirtualTerminal } from "@earendil-works/pi-tui/testing";
 assert.equal(typeof createAgentSession, "function");
 assert.equal(typeof SessionManager.inMemory, "function");
 assert.equal(typeof ModelRuntime.create, "function");
@@ -41,9 +42,20 @@ try {
 } finally {
 	harness.cleanup();
 }
+const terminal = new VirtualTerminal(80, 24);
+const host = await createInteractiveHarness({ terminal });
+try {
+	host.harness.setResponses([fauxAssistantMessage("PACKED INTERACTIVE FRAME")]);
+	await host.harness.session.prompt("paint");
+	await host.settle();
+	assert.ok(host.viewport().some((line) => line.includes("PACKED INTERACTIVE FRAME")));
+} finally {
+	await host.dispose();
+	terminal.dispose();
+}
 `);
 		execFileSync(runtime, [entry], { cwd: directory, env, stdio: ["inherit", "pipe", "pipe"], timeout: 30_000 });
-		for (const cli of new Set([manifest.bin.pi, "dist/cli.js"])) {
+		for (const cli of checkCli ? new Set([manifest.bin.pi, "dist/cli.js"]) : []) {
 			const output = execFileSync(runtime, [join(packageDir, cli), "--version"], {
 				cwd: directory,
 				encoding: "utf8",

@@ -776,6 +776,36 @@ interface Terminal {
 - `ProcessTerminal` - Uses `process.stdin/stdout`
 - `VirtualTerminal` - For testing (uses `@xterm/headless`)
 
+## Testing in-process
+
+The `@earendil-works/pi-tui/testing` entry exports `VirtualTerminal`, the xterm-headless emulator used by the TUI suite. Install `@xterm/headless@5.5.0` as a dev dependency. It is an optional peer, never imported by the main entry or required by the CLI.
+
+```typescript
+import { Text, TuiMainScreen } from "@earendil-works/pi-tui";
+import { VirtualTerminal } from "@earendil-works/pi-tui/testing";
+
+const terminal = new VirtualTerminal(80, 24);
+const tui = new TuiMainScreen(terminal);
+tui.addChild(new Text("hello", 0, 0));
+tui.start();
+try {
+  tui.flushRender();
+  await terminal.flush();
+  console.log(terminal.getViewport());
+} finally {
+  tui.stop();
+  terminal.dispose();
+}
+```
+
+- `sendInput(data: string)` injects raw keyboard/SGR mouse data; `resize(columns, rows)` invokes the host's resize handler.
+- `flush(): Promise<void>` fences xterm writes. Inspect `getViewport(): string[]` or `getScrollBuffer(): string[]` afterwards.
+- `getStyledLine(row: number): StyledCell[]` uses zero-based viewport rows and columns. Each cell has `text`, `bold`, `foreground`, and `foregroundMode` (xterm's indexed/RGB mode bitfield). Foreground values are palette indices, packed RGB values, or `-1` for the default color. Wide characters occupy multiple cells.
+- `TUI.flushRender(): void` paints *only* a pending requested frame immediately, cancelling its throttle timer. It does not create a frame or change production scheduling. Drain promise/nextTick work before it when that work requests rendering, then fence writes with `terminal.flush()`.
+- The emulator answers DA1 in a microtask, advertising no terminal colors, so capability queries need no timeout wait. Inject clocks into the extension under test rather than globally replacing xterm's timers. The legacy `waitForRender()` still waits real time; prefer `flushRender()` plus `flush()`.
+
+For the actual Pi session/extension UI host, use [`createInteractiveHarness()`](../coding-agent/docs/sdk.md#testing-interactive-extensions).
+
 ## Utilities
 
 ```typescript

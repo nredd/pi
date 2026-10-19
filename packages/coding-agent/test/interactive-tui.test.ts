@@ -128,6 +128,7 @@ describe("createInteractiveTui", () => {
 
 		type SwitchContext = {
 			runtimeHost: {
+				services: { agentDir: string };
 				session: {
 					settingsManager: {
 						getFullscreenCopyOnSelect: () => boolean;
@@ -144,6 +145,7 @@ describe("createInteractiveTui", () => {
 		};
 		const context = Object.assign(Object.create(InteractiveMode.prototype), {
 			runtimeHost: {
+				services: { agentDir: "/tmp" },
 				session: {
 					settingsManager: { getFullscreenCopyOnSelect: () => true, getFullscreenWheelScrollLines: () => "auto" },
 				},

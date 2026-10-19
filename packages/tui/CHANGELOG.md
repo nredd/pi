@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+
+- `@earendil-works/pi-tui/testing` exports `VirtualTerminal` with raw input, resize, viewport/scrollback and styled-cell inspection. `@xterm/headless` is an optional peer used only by this testing entry.
+- `TUI.flushRender()` synchronously paints a requested frame without waiting for the render throttle.
+
 ### Fixed
 
 - Fixed `Container` mouse dispatch misplacing clicks when a child transforms its own render output, by aligning the child's rendered lines with the geometry it recorded.

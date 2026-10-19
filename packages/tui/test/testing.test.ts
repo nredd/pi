@@ -1,6 +1,7 @@
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
 import { Text, TuiMainScreen } from "@earendil-works/pi-tui";
 import { VirtualTerminal } from "@earendil-works/pi-tui/testing";
-import { describe, expect, it } from "vitest";
 
 describe("testing terminal and render flush", () => {
 	it("flushes only pending frames synchronously without waiting for the throttle", async () => {
@@ -18,17 +19,17 @@ describe("testing terminal and render flush", () => {
 		tui.start();
 		try {
 			tui.flushRender();
-			expect(renders).toBe(1);
+			assert.equal(renders, 1);
 			text = "second";
 			tui.requestRender();
 			tui.flushRender();
-			expect(renders).toBe(2);
+			assert.equal(renders, 2);
 			tui.flushRender();
-			expect(renders).toBe(2);
+			assert.equal(renders, 2);
 			await terminal.flush();
-			expect(terminal.getViewport()[0]).toBe("second");
+			assert.equal(terminal.getViewport()[0], "second");
 			await new Promise<void>((resolve) => process.nextTick(resolve));
-			expect(renders).toBe(2);
+			assert.equal(renders, 2);
 		} finally {
 			tui.stop();
 			terminal.dispose();
@@ -49,21 +50,21 @@ describe("testing terminal and render flush", () => {
 		);
 		try {
 			terminal.sendInput("raw\x1b[<0;1;1M");
-			expect(input).toBe("raw\x1b[<0;1;1M");
+			assert.equal(input, "raw\x1b[<0;1;1M");
 			terminal.resize(30, 4);
-			expect(resizes).toBe(1);
-			expect([terminal.columns, terminal.rows]).toEqual([30, 4]);
+			assert.equal(resizes, 1);
+			assert.deepEqual([terminal.columns, terminal.rows], [30, 4]);
 			terminal.write("\x1b[1;31mRED\x1b[0m normal");
 			await terminal.flush();
 			const cells = terminal.getStyledLine(0);
-			expect(cells[0]).toEqual({ text: "R", bold: true, foreground: 1, foregroundMode: 16777216 });
-			expect(cells[4].bold).toBe(false);
-			expect(cells[4].foreground).not.toBe(cells[0].foreground);
-			expect(terminal.getStyledLine(-1)).toEqual([]);
+			assert.deepEqual(cells[0], { text: "R", bold: true, foreground: 1, foregroundMode: 16777216 });
+			assert.equal(cells[4].bold, false);
+			assert.notEqual(cells[4].foreground, cells[0].foreground);
+			assert.deepEqual(terminal.getStyledLine(-1), []);
 			terminal.write("\r\n1\r\n2\r\n3\r\n4\r\n5");
 			await terminal.flush();
-			expect(terminal.getScrollBuffer()).toContain("RED normal");
-			expect(terminal.getViewport()).toContain("5");
+			assert.ok(terminal.getScrollBuffer().includes("RED normal"));
+			assert.ok(terminal.getViewport().includes("5"));
 		} finally {
 			terminal.dispose();
 		}
@@ -76,10 +77,15 @@ describe("testing terminal and render flush", () => {
 		tui.start();
 		try {
 			const result = await tui.queryTerminalColors({ timeoutMs: 60_000 });
-			expect(result.foreground).toBeUndefined();
+			assert.equal(result.foreground, undefined);
 			tui.flushRender();
 			await terminal.flush();
-			expect(terminal.getViewport().map((line) => line.trimEnd())).toContain("frame");
+			assert.ok(
+				terminal
+					.getViewport()
+					.map((line) => line.trimEnd())
+					.includes("frame"),
+			);
 		} finally {
 			tui.stop();
 			terminal.dispose();

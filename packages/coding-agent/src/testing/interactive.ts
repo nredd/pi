@@ -28,7 +28,7 @@ export interface InteractiveHarness {
 	readonly terminal: VirtualTerminal;
 	input(data: string): void;
 	resize(columns: number, rows: number): void;
-	/** Drain queued work and paint requested frames. Does not await held tools or overlays. */
+	/** Await submitted editor handlers, then paint. Agent turns dispatched through onInput remain independent. */
 	settle(): Promise<void>;
 	viewport(): string[];
 	dispose(): Promise<void>;
@@ -73,6 +73,7 @@ export async function createInteractiveHarness(options: InteractiveHarnessOption
 		};
 	});
 	const errors: unknown[] = [];
+	const submissions = new Set<Promise<void>>();
 	const mode = new InteractiveMode(runtime, {
 		terminal,
 		tuiMode: options.tuiMode ?? "fullscreen",
@@ -82,6 +83,14 @@ export async function createInteractiveHarness(options: InteractiveHarnessOption
 		prepareTools: async () => ({}),
 		onInput: (text) => {
 			void runtime.session.prompt(text).catch((error: unknown) => errors.push(error));
+		},
+		onEditorSubmit: (submission) => {
+			const tracked = submission
+				.catch((error: unknown) => {
+					errors.push(error);
+				})
+				.finally(() => submissions.delete(tracked));
+			submissions.add(tracked);
 		},
 	});
 	let disposed = false;
@@ -93,8 +102,10 @@ export async function createInteractiveHarness(options: InteractiveHarnessOption
 		input: (data) => terminal.sendInput(data),
 		resize: (columns, rows) => terminal.resize(columns, rows),
 		async settle() {
-			// nextTick drains the preceding promise jobs too. xterm's callback fences all writes,
-			// including frames requested by work that completed while the first batch was parsed.
+			// Editor handlers include async built-in commands such as /new and /reload. A job
+			// drain alone cannot fence their I/O. Turns/extension commands sent by onInput are
+			// deliberately separate, so held tools and custom overlays can still be inspected.
+			await Promise.all([...submissions]);
 			await new Promise<void>((resolve) => process.nextTick(resolve));
 			mode.flushRender();
 			await terminal.flush();

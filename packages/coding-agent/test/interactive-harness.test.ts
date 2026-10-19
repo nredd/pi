@@ -5,6 +5,45 @@ import { Text } from "@earendil-works/pi-tui";
 import { describe, expect, it } from "vitest";
 
 describe("interactive extension host", () => {
+	// nredd/pi#5: a promise/nextTick drain is not a fence for submitted commands.
+	it("fences a new session paused during extension rebinding", async () => {
+		const entered = Promise.withResolvers<void>();
+		const resume = Promise.withResolvers<void>();
+		const host = await createInteractiveHarness({
+			extensionFactories: [
+				(pi) => {
+					pi.on("session_start", async (event) => {
+						if (event.reason === "new") {
+							entered.resolve();
+							await resume.promise;
+						}
+					});
+				},
+			],
+		});
+		let settling: Promise<void> | undefined;
+		try {
+			host.input("/new");
+			host.input("\r");
+			let settled = false;
+			settling = host.settle().then(() => {
+				settled = true;
+			});
+			await entered.promise;
+			// Fence emulator writes without releasing the submitted command.
+			await host.terminal.flush();
+			await host.terminal.flush();
+			expect(settled).toBe(false);
+			resume.resolve();
+			await settling;
+			expect(host.viewport().join("\n")).toContain("New session started");
+		} finally {
+			resume.resolve();
+			await settling;
+			await host.dispose();
+		}
+	});
+
 	it("cleans up a fatal startup and supports the next host", async () => {
 		const listeners = process.listenerCount("SIGINT");
 		await expect(

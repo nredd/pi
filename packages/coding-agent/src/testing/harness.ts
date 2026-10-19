@@ -2,6 +2,7 @@
  * In-process harness: a real `AgentSession` around a scripted faux provider.
  */
 
+import { randomUUID } from "node:crypto";
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,8 +15,13 @@ import type {
 	Model,
 	ToolResultMessage,
 } from "@earendil-works/pi-ai/compat";
-import { getApiProvider, registerFauxProvider, streamSimple } from "@earendil-works/pi-ai/compat";
-import { normalizeContext } from "@earendil-works/pi-ai/utils/transcript";
+import {
+	getApiProvider,
+	registerApiProvider,
+	registerFauxProvider,
+	streamSimple,
+	unregisterApiProviders,
+} from "@earendil-works/pi-ai/compat";
 
 import { AgentSession, type AgentSessionEvent } from "../core/agent-session.ts";
 import { AuthStorage } from "../core/auth-storage.ts";
@@ -39,8 +45,8 @@ import {
 	createTestResourceLoader,
 } from "./resources.ts";
 
-// Reload resets the process-global compat registry. A harness owns its scripted transport.
-const fauxTransports = new WeakMap<FauxProviderRegistration, typeof streamSimple>();
+// Share restoration and cleanup ownership across harnesses using the same faux registration.
+const fauxRegistrations = new WeakMap<FauxProviderRegistration, () => void>();
 
 type MessageTextPart = { type: "text"; text: string };
 
@@ -180,19 +186,23 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 			models: options.models,
 		});
 	if (!options.fauxProvider) fauxProvider.setResponses([]);
-	let fauxStream = fauxTransports.get(fauxProvider);
-	if (!fauxStream) {
+	let restoreFauxProvider = fauxRegistrations.get(fauxProvider);
+	if (!restoreFauxProvider) {
 		const provider = getApiProvider(fauxProvider.api);
 		if (!provider) throw new Error(`Faux transport missing: ${fauxProvider.api}`);
-		fauxStream = (requestModel, context, requestOptions) =>
-			provider.streamSimple(requestModel, normalizeContext(context), requestOptions);
-		fauxTransports.set(fauxProvider, fauxStream);
+		const sourceId = `harness-faux-${randomUUID()}`;
+		restoreFauxProvider = () => {
+			if (!getApiProvider(fauxProvider.api)) registerApiProvider(provider, sourceId);
+		};
+		// pi-ai does not expose the original source ID. Extend the owner's unregister callback
+		// to remove restored registrations too; borrowed harnesses never invoke it on cleanup.
+		const unregister = fauxProvider.unregister;
+		fauxProvider.unregister = () => {
+			unregisterApiProviders(sourceId);
+			unregister();
+		};
+		fauxRegistrations.set(fauxProvider, restoreFauxProvider);
 	}
-	const scriptedStream = fauxStream;
-	const stream: typeof streamSimple = (requestModel, context, requestOptions) =>
-		requestModel.api === fauxProvider.api && !getApiProvider(requestModel.api)
-			? scriptedStream(requestModel, context, requestOptions)
-			: streamSimple(requestModel, context, requestOptions);
 	const model = fauxProvider.getModel();
 	const toolMap = options.tools ? Object.fromEntries(options.tools.map((tool) => [tool.name, tool])) : undefined;
 	const withConfiguredAuth = options.withConfiguredAuth ?? true;
@@ -215,7 +225,6 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 			baseUrl: model.baseUrl,
 			apiKey: "faux-key",
 			api: fauxProvider.api,
-			streamSimple: stream,
 			models: fauxProvider.models.map((registeredModel) => ({
 				id: registeredModel.id,
 				name: registeredModel.name,
@@ -236,7 +245,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 		getApiKey: () => (withConfiguredAuth ? "faux-key" : undefined),
 		streamFn: options.useModelRuntimeStream
 			? (requestModel, context, requestOptions) => modelRuntime.streamSimple(requestModel, context, requestOptions)
-			: stream,
+			: streamSimple,
 		initialState: {
 			model,
 			systemPrompt: "",
@@ -272,14 +281,14 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 		: undefined;
 	const resourceLoader =
 		options.resourceLoader ??
-		createTestResourceLoader(
-			extensionsResult
-				? {
-						extensionsResult,
-						reloadExtensions: () => createTestExtensionsResult(options.extensionFactories ?? [], cwd),
-					}
-				: undefined,
-		);
+		createTestResourceLoader({
+			extensionsResult,
+			reloadExtensions: async () => {
+				// AgentSession.reload resets API providers before reloading extension resources.
+				restoreFauxProvider();
+				return createTestExtensionsResult(options.extensionFactories ?? [], cwd);
+			},
+		});
 
 	const session = new AgentSession({
 		agent,

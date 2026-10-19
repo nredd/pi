@@ -456,6 +456,8 @@ export interface InteractiveModeOptions {
 	prepareTools?: () => Promise<{ fdPath?: string }>;
 	/** Receive ordinary editor submissions without entering the process-level run loop. */
 	onInput?: (text: string) => void;
+	/** Observe editor-handler completion, including built-in commands, without changing dispatch. */
+	onEditorSubmit?: (submission: Promise<void>) => void;
 }
 
 /** A second Ctrl+C within this window exits; the first clears the editor and says so. */
@@ -3230,7 +3232,7 @@ export class InteractiveMode {
 	}
 
 	private setupEditorSubmitHandler(): void {
-		this.defaultEditor.onSubmit = async (text: string) => {
+		const onSubmit = async (text: string) => {
 			text = text.trim();
 			if (!text) return;
 
@@ -3430,6 +3432,14 @@ export class InteractiveMode {
 			}
 			this.editor.addToHistory?.(text);
 		};
+		const observe = this.options.onEditorSubmit;
+		this.defaultEditor.onSubmit = observe
+			? (text) => {
+					const submission = onSubmit(text);
+					observe(submission);
+					return submission;
+				}
+			: onSubmit;
 	}
 
 	private subscribeToAgent(): void {

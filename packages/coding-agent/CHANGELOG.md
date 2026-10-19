@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- In-process harnesses preserve default-stream auth checks and restore faux providers during reload with owner-scoped cleanup. Interactive harness settlement awaits submitted editor commands before painting, including asynchronous `/new` and `/reload` work.
 - Interactive shutdown removes its theme callback, watcher and terminal appearance subscription so a disposed embedded host cannot repaint later.
 - Standalone binary archives now include `schemas/` (settings, models, keybindings, theme JSON schemas), matching the npm package's `files`.
 - Fullscreen copy-on-select rejoins soft-wrapped rows (no stray newlines inside paragraphs or URLs) and leaves the `│` transcript rule and disclosure gutter out of copied text. Clicking a plain-text URL that wraps across rows opens the whole URL.

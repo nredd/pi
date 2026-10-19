@@ -145,12 +145,12 @@ export function wireConsumer({ artifactSet, consumerDirectory, packageNames, pac
 	return manifest;
 }
 
-export function installConsumer({ artifactSet, directory, packageNames, packageManager = "npm" }) {
+export function installConsumer({ artifactSet, directory, packageNames, packageManager = "npm", dependencies = {} }) {
 	if (packageManager !== "npm" && packageManager !== "bun") throw new Error(`Unsupported package manager: ${packageManager}`);
 	if (packageNames.length === 0) throw new Error("At least one package is required");
 	for (const packageName of packageNames) artifactSet.getPackage(packageName);
 	mkdirSync(directory, { recursive: true });
-	writeFileSync(join(directory, "package.json"), '{"private":true,"type":"module"}\n');
+	writeFileSync(join(directory, "package.json"), `${JSON.stringify({ private: true, type: "module", dependencies })}\n`);
 	wireConsumer({ artifactSet, consumerDirectory: directory, packageNames });
 	const installArgs = packageManager === "bun" ? ["--production"] : ["--omit=dev", "--no-audit", "--no-fund"];
 	const args = ["install", "--ignore-scripts", ...installArgs];

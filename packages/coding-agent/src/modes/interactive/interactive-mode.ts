@@ -448,6 +448,14 @@ export interface InteractiveModeOptions {
 	initialThemeSetting?: string;
 	/** Terminal implementation. Defaults to the current process terminal. */
 	terminal?: Terminal;
+	/** Host-owned keybindings; defaults to the runtime's agent directory. */
+	keybindings?: KeybindingsManager;
+	/** Host-owned footer data, disposed with this mode. */
+	footerDataProvider?: FooterDataProvider;
+	/** Managed-tool setup. Embedded hosts can omit downloads and supply an fd path. */
+	prepareTools?: () => Promise<{ fdPath?: string }>;
+	/** Receive ordinary editor submissions without entering the process-level run loop. */
+	onInput?: (text: string) => void;
 }
 
 /** A second Ctrl+C within this window exits; the first clears the editor and says so. */
@@ -595,6 +603,7 @@ export class InteractiveMode {
 	};
 	private autoTrustOnReloadCwd: string | undefined;
 	private themeController: InteractiveThemeController;
+	private themeChangeUnsubscribe?: () => void;
 
 	// Convenience accessors
 	private get session(): AgentSession {
@@ -627,7 +636,7 @@ export class InteractiveMode {
 		this.renderer = createInteractiveTui({
 			tuiMode,
 			showHardwareCursor: this.settingsManager.getShowHardwareCursor(),
-			logDirectory: getAgentDir(),
+			logDirectory: this.runtimeHost.services.agentDir,
 			terminal: options.terminal,
 			onRightClickPaste: this.onRightClickPaste,
 			fullscreenCopyOnSelect: this.settingsManager.getFullscreenCopyOnSelect(),
@@ -646,7 +655,7 @@ export class InteractiveMode {
 		this.statusContainer = new Container();
 		this.widgetContainerAbove = new Container();
 		this.widgetContainerBelow = new Container();
-		this.keybindings = KeybindingsManager.create();
+		this.keybindings = options.keybindings ?? KeybindingsManager.create(this.runtimeHost.services.agentDir);
 		setKeybindings(this.keybindings);
 		const editorPaddingX = this.settingsManager.getEditorPaddingX();
 		const autocompleteMaxVisible = this.settingsManager.getAutocompleteMaxVisible();
@@ -658,7 +667,7 @@ export class InteractiveMode {
 		this.editor = this.defaultEditor;
 		this.editorContainer = new Container();
 		this.editorContainer.addChild(this.editor as Component);
-		this.footerDataProvider = new FooterDataProvider(this.sessionManager.getCwd());
+		this.footerDataProvider = options.footerDataProvider ?? new FooterDataProvider(this.sessionManager.getCwd());
 		this.footer = new FooterComponent(this.session, this.footerDataProvider);
 		this.footer.setAutoCompactEnabled(this.session.autoCompactionEnabled);
 		this.footerContainer = new Container();
@@ -915,7 +924,7 @@ export class InteractiveMode {
 		const nextUi = createInteractiveTui({
 			tuiMode: mode,
 			showHardwareCursor,
-			logDirectory: getAgentDir(),
+			logDirectory: this.runtimeHost.services.agentDir,
 			terminal,
 			onRightClickPaste: this.onRightClickPaste,
 			fullscreenCopyOnSelect: this.settingsManager.getFullscreenCopyOnSelect(),
@@ -1090,11 +1099,15 @@ export class InteractiveMode {
 		// Ensure fd and rg are available after mounting the TUI (downloads if missing, adds to PATH via getBinDir)
 		// so slow downloads do not make startup appear frozen.
 		// Both are needed: fd for autocomplete, rg for grep tool and bash commands.
-		const [fdPath] = await Promise.all([
-			ensureTool("fd", (status) => this.showManagedToolStatus(status)),
-			ensureTool("rg", (status) => this.showManagedToolStatus(status)),
-		]);
-		this.fdPath = fdPath;
+		if (this.options.prepareTools) {
+			this.fdPath = (await this.options.prepareTools()).fdPath;
+		} else {
+			const [fdPath] = await Promise.all([
+				ensureTool("fd", (status) => this.showManagedToolStatus(status)),
+				ensureTool("rg", (status) => this.showManagedToolStatus(status)),
+			]);
+			this.fdPath = fdPath;
+		}
 
 		// Enable the remaining input handlers only after managed-tool setup completes.
 		this.setupKeyHandlers();
@@ -1121,7 +1134,7 @@ export class InteractiveMode {
 		this.renderInitialMessages();
 
 		// Set up theme file watcher
-		onThemeChange(() => {
+		this.themeChangeUnsubscribe = onThemeChange(() => {
 			this.ui.invalidate();
 			this.updateEditorBorderColor();
 			this.ui.requestRender();
@@ -3410,6 +3423,8 @@ export class InteractiveMode {
 
 			if (this.onInputCallback) {
 				this.onInputCallback(text);
+			} else if (this.options.onInput) {
+				this.options.onInput(text);
 			} else {
 				this.pendingUserInputs.push(text);
 			}
@@ -7126,13 +7141,20 @@ export class InteractiveMode {
 		}
 	}
 
+	/** Flush the current renderer without waiting for its throttle timer. */
+	flushRender(): void {
+		this.ui.flushRender();
+	}
+
 	stop(fullscreenExitOutput = this.settingsManager.getFullscreenExitOutput()): void {
 		this.disposeActiveSelector();
 		if (this.settingsManager.getShowTerminalProgress()) {
 			this.ui.terminal.setProgress(false);
 		}
 		this.clearStatusIndicator();
-		this.themeController.disableAutoSync();
+		this.themeController.dispose();
+		this.themeChangeUnsubscribe?.();
+		this.themeChangeUnsubscribe = undefined;
 		this.clearExtensionTerminalInputListeners();
 		this.footer.dispose();
 		this.footerDataProvider.dispose();

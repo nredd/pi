@@ -4,6 +4,17 @@
 	"description": "Terminal User Interface library with differential rendering for efficient text-based applications",
 	"type": "module",
 	"main": "dist/index.js",
+	"exports": {
+		".": { "types": "./dist/index.d.ts", "import": "./dist/index.js", "default": "./dist/index.js" },
+		"./testing": {
+			"types": "./dist/testing/index.d.ts",
+			"import": "./dist/testing/index.js",
+			"default": "./dist/testing/index.js"
+		},
+		"./*": "./*"
+	},
+	"peerDependencies": { "@xterm/headless": "5.5.0" },
+	"peerDependenciesMeta": { "@xterm/headless": { "optional": true } },
 	"scripts": {
 		"clean": "shx rm -rf dist",
 		"build": "tsc -p tsconfig.build.json",

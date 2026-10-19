@@ -86,6 +86,15 @@ function createArtifactSet(t) {
 	};
 }
 
+test("installs caller-selected testing peers alongside the target", (t) => {
+	const { artifactSet, root } = createArtifactSet(t);
+	const directory = join(root, "testing-peer-consumer");
+	installConsumer({ artifactSet, directory, packageNames: ["@pi-package-test/target"], dependencies: { "@pi-package-test/second": "1.0.0" } });
+	const manifest = JSON.parse(readFileSync(join(directory, "package.json"), "utf8"));
+	assert.deepEqual(Object.keys(manifest.dependencies).sort(), ["@pi-package-test/second", "@pi-package-test/target"]);
+	smokeTestNpmConsumer({ artifactSet, directory, packageName: "@pi-package-test/target" });
+});
+
 test("wires multiple direct packages without registry fallbacks", (t) => {
 	const { artifactSet, root } = createArtifactSet(t);
 	const consumerDirectory = join(root, "consumer");

@@ -22,6 +22,10 @@
 		"./testing": {
 			"types": "./dist/testing/index.d.ts",
 			"import": "./dist/testing/index.js"
+		},
+		"./testing/interactive": {
+			"types": "./dist/testing/interactive.d.ts",
+			"import": "./dist/testing/interactive.js"
 		}
 	},
 	"files": [

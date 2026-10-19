@@ -43,11 +43,13 @@ export async function createTestExtensionsResult(
 
 export interface CreateTestResourceLoaderOptions {
 	extensionsResult?: LoadExtensionsResult;
+	/** Recreate factories during the real session reload lifecycle. */
+	reloadExtensions?: () => Promise<LoadExtensionsResult>;
 }
 
 /** A resource loader with the given extensions and no skills, prompts, themes, or context files. */
 export function createTestResourceLoader(options: CreateTestResourceLoaderOptions = {}): ResourceLoader {
-	const extensionsResult = options.extensionsResult ?? {
+	let extensionsResult = options.extensionsResult ?? {
 		extensions: [],
 		errors: [],
 		runtime: createExtensionRuntime(),
@@ -64,6 +66,8 @@ export function createTestResourceLoader(options: CreateTestResourceLoaderOption
 		getAppendSystemPrompt: () => [],
 		getAppendSystemPromptSources: () => [],
 		extendResources: () => {},
-		reload: async () => {},
+		reload: async () => {
+			if (options.reloadExtensions) extensionsResult = await options.reloadExtensions();
+		},
 	};
 }

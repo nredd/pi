@@ -2,11 +2,14 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- `package.json` now has an `exports` map (for the testing entry). Extension-less or directory deep paths such as `@earendil-works/pi-tui/dist/index` no longer resolve; use the package name or the explicit file (`@earendil-works/pi-tui/dist/index.js`). The package name and every explicit-file path resolve to the same file as before, for `require` and `import`. Pi extensions are unaffected: they reach pi-tui only by its package name.
+
 ### Added
 
 - `@earendil-works/pi-tui/testing` exports `VirtualTerminal` with raw input, resize, viewport/scrollback and styled-cell inspection. `@xterm/headless` is an optional peer used only by this testing entry.
 - `TUI.flushRender()` synchronously paints a requested frame without waiting for the render throttle.
-- `package.json` now has an `exports` map for the testing entry. The package name and every explicit-file path (for example `@earendil-works/pi-tui/dist/components/editor.js`) resolve to the same file as before, for `require` and `import`: the entries carry a `default` condition and `"./*": "./*"` maps deep paths. Extension-less or directory deep requires (`.../dist/index`) no longer resolve; Pi extensions reach pi-tui only by its package name.
 
 ### Fixed
 

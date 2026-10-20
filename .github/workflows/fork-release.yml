@@ -5,6 +5,8 @@ on:
   pull_request:
     paths: [.github/workflows/fork-release.yml]
   push:
+    branches: ["automation/**"]
+    paths: [.github/workflows/fork-release.yml]
     tags: ["v*-nredd.*"]
   workflow_dispatch:
     inputs:
@@ -34,7 +36,7 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-          ref: ${{ github.event_name == 'pull_request' && 'v1.3.0-nredd.7' || inputs.release_tag || github.ref }}
+          ref: ${{ github.ref_type == 'tag' && github.ref || inputs.release_tag || 'v1.3.0-nredd.7' }}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
@@ -47,7 +49,7 @@ jobs:
       - name: Verify the owner-signed tag and release branch
         id: target
         env:
-          RELEASE_TAG: ${{ github.event_name == 'pull_request' && 'v1.3.0-nredd.7' || inputs.release_tag || github.ref_name }}
+          RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || inputs.release_tag || 'v1.3.0-nredd.7' }}
         run: |
           set -euo pipefail
           case "$RELEASE_TAG" in
@@ -101,7 +103,7 @@ jobs:
         with:
           subject-path: ${{ runner.temp }}/release/*.tgz
       - name: Compare dry-run artifacts with the published release
-        if: github.event_name != 'push'
+        if: github.ref_type != 'tag'
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
@@ -113,7 +115,7 @@ jobs:
           (cd "$RUNNER_TEMP/published" && sha256sum -- *.tgz | sort) >"$RUNNER_TEMP/published/SHA256SUMS"
           diff -u "$RUNNER_TEMP/published/SHA256SUMS" <(sort "$RUNNER_TEMP/release/SHA256SUMS")
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: github.event_name == 'push'
+        if: github.ref_type == 'tag'
         with:
           name: fork-release-${{ github.run_id }}
           path: ${{ runner.temp }}/release/
@@ -121,7 +123,7 @@ jobs:
           retention-days: 30
 
   release:
-    if: github.event_name == 'push'
+    if: github.ref_type == 'tag'
     needs: build
     runs-on: ubuntu-24.04
     timeout-minutes: 5

@@ -1,0 +1,169 @@
+# Owner-signed fork tags build the exact tarballs consumed by the tap and pi-harness.
+name: Fork release
+
+on:
+  pull_request:
+    paths: [.github/workflows/fork-release.yml]
+  push:
+    branches: ["automation/**"]
+    paths: [.github/workflows/fork-release.yml]
+    tags: ["v*-nredd.*"]
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing signed fork tag to build and attest without changing its release
+        required: true
+        type: string
+
+concurrency:
+  group: fork-release-${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+  cancel-in-progress: false
+
+permissions: {}
+
+env:
+  DRY_RUN_RELEASE_TAG: v1.3.0-nredd.7
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    outputs:
+      release_tag: ${{ steps.target.outputs.tag }}
+    permissions:
+      attestations: write
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+          ref: ${{ github.ref_type == 'tag' && github.ref || inputs.release_tag || env.DRY_RUN_RELEASE_TAG }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install system dependencies
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev fd-find ripgrep
+          sudo ln -s "$(which fdfind)" /usr/local/bin/fd
+      - name: Verify the owner-signed tag and release branch
+        id: target
+        env:
+          RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || inputs.release_tag || env.DRY_RUN_RELEASE_TAG }}
+        run: |
+          set -euo pipefail
+          case "$RELEASE_TAG" in
+            v[0-9]*.[0-9]*.[0-9]*-nredd.[0-9]*) ;;
+            *) echo "Invalid fork release tag: $RELEASE_TAG" >&2; exit 1 ;;
+          esac
+          test "$(git cat-file -t "$RELEASE_TAG")" = tag
+          mkdir "$RUNNER_TEMP/ssh"
+          printf '%s\n' 'nredd ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIEP15T1vobAfHHteFRAXcVGhXacXHRfz17FhbMT1BzvJ' >"$RUNNER_TEMP/ssh/allowed_signers"
+          git -c "gpg.ssh.allowedSignersFile=$RUNNER_TEMP/ssh/allowed_signers" verify-tag "$RELEASE_TAG"
+          version=${RELEASE_TAG#v}
+          version=${version%-nredd.*}
+          branch="origin/nredd/v$version"
+          git fetch origin "+refs/heads/nredd/v$version:refs/remotes/origin/nredd/v$version"
+          commit=$(git rev-parse "$RELEASE_TAG^{commit}")
+          git merge-base --is-ancestor "$commit" "$branch"
+          printf 'tag=%s\nversion=%s\n' "$RELEASE_TAG" "$version" >>"$GITHUB_OUTPUT"
+      - name: Install dependencies
+        run: npm ci --ignore-scripts
+      - name: Restore the release model data
+        env:
+          VERSION: ${{ steps.target.outputs.version }}
+        run: |
+          set -euo pipefail
+          npm pack "@earendil-works/pi-ai@$VERSION" --pack-destination "$RUNNER_TEMP"
+          tar -xzf "$RUNNER_TEMP/earendil-works-pi-ai-$VERSION.tgz" -C "$RUNNER_TEMP"
+          rm -rf packages/ai/src/providers/data
+          cp -R "$RUNNER_TEMP/package/dist/providers/data" packages/ai/src/providers/data
+      - name: Build offline
+        run: npm run build:offline
+      - name: Check
+        run: npm run check
+      - name: Build the pi-env daemon
+        run: npm run build:daemon --workspace packages/env
+      - name: Test in an isolated home
+        run: ./test.sh
+      - name: Pack release artifacts
+        env:
+          VERSION: ${{ steps.target.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/release"
+          for package in coding-agent tui agent ai; do
+            (cd "packages/$package" && npm pack --pack-destination "$RUNNER_TEMP/release")
+          done
+          mkdir "$RUNNER_TEMP/packed-coding-agent"
+          tar -xzf "$RUNNER_TEMP"/release/earendil-works-pi-coding-agent-"$VERSION".tgz -C "$RUNNER_TEMP/packed-coding-agent"
+          grep -Eq 'DEFAULT_REASONING_SUMMARY *= *"detailed"' "$RUNNER_TEMP"/packed-coding-agent/package/dist/bundle/chunks/*.js
+          (cd "$RUNNER_TEMP/release" && sha256sum -- *.tgz >SHA256SUMS)
+      - name: Attest packed tarballs
+        if: github.ref_type == 'tag'
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0
+        with:
+          subject-path: ${{ runner.temp }}/release/*.tgz
+      - name: Compare dry-run artifacts with the published release
+        if: github.ref_type != 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ steps.target.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/published"
+          gh release download "$RELEASE_TAG" --pattern '*.tgz' --dir "$RUNNER_TEMP/published"
+          (cd "$RUNNER_TEMP/published" && sha256sum -- *.tgz | sort) >"$RUNNER_TEMP/published/SHA256SUMS"
+          # Compare only the assets that tag published; older releases shipped fewer tarballs.
+          (cd "$RUNNER_TEMP/published" && ls -- *.tgz) >"$RUNNER_TEMP/published/names"
+          # Exact filename match; zero overlap yields an empty file, and the diff then warns.
+          awk 'NR == FNR { names[$0]; next } ($2 in names)' \
+            "$RUNNER_TEMP/published/names" "$RUNNER_TEMP/release/SHA256SUMS" | sort >"$RUNNER_TEMP/rebuilt-published.sums"
+          if diff -u "$RUNNER_TEMP/published/SHA256SUMS" "$RUNNER_TEMP/rebuilt-published.sums" >"$RUNNER_TEMP/reproducibility.diff"; then
+            echo "Byte-reproducible: $RELEASE_TAG" >>"$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::Rebuild differs from published $RELEASE_TAG tarballs"
+            {
+              echo "### Not byte-reproducible: $RELEASE_TAG"
+              echo '```diff'
+              cat "$RUNNER_TEMP/reproducibility.diff"
+              echo '```'
+            } >>"$GITHUB_STEP_SUMMARY"
+          fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: github.ref_type == 'tag'
+        with:
+          name: fork-release-${{ github.run_id }}
+          path: ${{ runner.temp }}/release/
+          if-no-files-found: error
+          retention-days: 30
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: fork-release-${{ github.run_id }}
+          path: ${{ runner.temp }}/release/
+      - name: Create immutable GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.build.outputs.release_tag }}
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Refusing to overwrite existing release $RELEASE_TAG" >&2
+            exit 1
+          fi
+          gh release create "$RELEASE_TAG" --verify-tag --title "$RELEASE_TAG" --notes "Attested fork release." "$RUNNER_TEMP/release"/*.tgz "$RUNNER_TEMP/release/SHA256SUMS"

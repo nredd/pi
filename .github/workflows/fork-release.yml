@@ -121,7 +121,9 @@ jobs:
           (cd "$RUNNER_TEMP/published" && sha256sum -- *.tgz | sort) >"$RUNNER_TEMP/published/SHA256SUMS"
           # Compare only the assets that tag published; older releases shipped fewer tarballs.
           (cd "$RUNNER_TEMP/published" && ls -- *.tgz) >"$RUNNER_TEMP/published/names"
-          grep -F -f "$RUNNER_TEMP/published/names" "$RUNNER_TEMP/release/SHA256SUMS" | sort >"$RUNNER_TEMP/rebuilt-published.sums"
+          # Exact filename match; zero overlap yields an empty file, and the diff then warns.
+          awk 'NR == FNR { names[$0]; next } ($2 in names)' \
+            "$RUNNER_TEMP/published/names" "$RUNNER_TEMP/release/SHA256SUMS" | sort >"$RUNNER_TEMP/rebuilt-published.sums"
           if diff -u "$RUNNER_TEMP/published/SHA256SUMS" "$RUNNER_TEMP/rebuilt-published.sums" >"$RUNNER_TEMP/reproducibility.diff"; then
             echo "Byte-reproducible: $RELEASE_TAG" >>"$GITHUB_STEP_SUMMARY"
           else

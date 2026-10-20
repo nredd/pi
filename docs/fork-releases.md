@@ -12,7 +12,7 @@
 
 ## Prove a workflow change
 
-Pushing a `fork-release.yml` change to an `automation/**` branch runs the same dry-run against `v1.3.0-nredd.7`. This is required because GitHub indexes `workflow_dispatch` workflows only after they reach the default branch, and does not schedule a workflow newly added to a pull request. After the workflow reaches the default branch, run `Fork release` with `workflow_dispatch` and `release_tag=v1.3.0-nredd.7` (or another existing signed fork tag). Both paths check out that immutable tag, build, pack, and compare it with published assets. Only tag-triggered runs attest and release; dry-runs create neither attestations nor releases.
+Pushing a `fork-release.yml` change to an `automation/**` branch runs the same dry-run against `v1.3.0-nredd.7`. This is required because GitHub indexes `workflow_dispatch` workflows only after they reach the default branch, and does not schedule a workflow newly added to a pull request. After the workflow reaches the default branch, run `Fork release` with `workflow_dispatch` and `release_tag=v1.3.0-nredd.7` (or another existing signed fork tag). Both paths check out that immutable tag, build, pack, and compare the rebuilt tarballs that tag actually published (older tags shipped fewer) with its published assets. Only tag-triggered runs attest and release; dry-runs create neither attestations nor releases.
 
 `v1.3.0-nredd.3` through `v1.3.0-nredd.7` predate this workflow. They are legacy releases: pi-harness permits their explicit recorded SHA-256 values only. Do not backfill an attestation by rerunning a newer workflow because provenance would describe the newer workflow revision, not the historical release build.
 

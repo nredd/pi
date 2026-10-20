@@ -96,7 +96,7 @@ jobs:
           (cd packages/tui && npm pack --pack-destination "$RUNNER_TEMP/release")
           mkdir "$RUNNER_TEMP/packed-coding-agent"
           tar -xzf "$RUNNER_TEMP"/release/earendil-works-pi-coding-agent-"$VERSION".tgz -C "$RUNNER_TEMP/packed-coding-agent"
-          grep -q '"detailed"' "$RUNNER_TEMP"/packed-coding-agent/package/dist/bundle/chunks/*responses*.js
+          grep -Eq 'DEFAULT_REASONING_SUMMARY *= *"detailed"' "$RUNNER_TEMP"/packed-coding-agent/package/dist/bundle/chunks/*.js
           (cd "$RUNNER_TEMP/release" && sha256sum -- *.tgz >SHA256SUMS)
       - name: Attest packed tarballs
         uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3.0.0

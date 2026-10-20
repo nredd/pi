@@ -12,7 +12,7 @@
 
 ## Prove a workflow change
 
-Run `Fork release` with `workflow_dispatch` from the PR branch and `release_tag=v1.3.0-nredd.7` (or another existing signed fork tag). It checks out that immutable tag, performs the complete build, pack and attestation path, downloads the existing release tarballs, and fails unless their SHA-256 values are byte-identical. It creates or changes no GitHub release.
+A pull request changing `fork-release.yml` automatically runs the same dry-run against `v1.3.0-nredd.7`. This is required because GitHub indexes `workflow_dispatch` workflows only after they reach the default branch, so it cannot dispatch a new workflow file from its first PR branch. After the workflow reaches the default branch, run `Fork release` with `workflow_dispatch` and `release_tag=v1.3.0-nredd.7` (or another existing signed fork tag). Both paths check out that immutable tag, build, pack, and attest it, download the existing tarballs, and fail unless their SHA-256 values are byte-identical. Neither creates or changes a GitHub release.
 
 `v1.3.0-nredd.6` and `v1.3.0-nredd.7` predate this workflow. They are legacy releases: pi-harness permits their recorded SHA-256 values only. Do not backfill an attestation by rerunning a newer workflow because provenance would describe the newer workflow revision, not the historical release build.
 

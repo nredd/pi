@@ -36,7 +36,7 @@ By default, `reserveTokens` is 16384 tokens (configurable in `~/.pi/agent/settin
 
 During a multi-turn agent run, Pi checks the canonical projected context after tools finish and their results are appended, before starting the next assistant response. If the threshold is crossed, Pi compacts during `prepareNextTurn`, then performs the existing catch-up steering poll before `turn_start`. It skips this between-turn check when the completed tool batch terminates the run and no queued message requires another response. Pi also checks before a new user prompt and performs final-attempt overflow recovery after the low-level run ends.
 
-A provider context-overflow error or an early final `stopReason: "length"` can select one compact-and-retry recovery attempt. Length responses with tool calls retain their synthetic failed tool results and follow the ordinary tool/queue scheduler rather than forcing the run to end.
+A provider context-overflow error or an early final `stopReason: "length"` can select one compact-and-retry recovery attempt. Length responses with tool calls retain their synthetic failed tool results and follow the ordinary tool/queue scheduler rather than forcing the run to end. Extension custom messages sent while manual compaction, automatic compaction, or branch summarization owns the session are acknowledged immediately, then admitted as one FIFO batch after the session state commits and before `session_compact`, `compaction_end`, or tree listeners run. Passive messages persist in admission order; the first triggered message (steer, follow-up, or default delivery) starts one run with its preceding passive context, and later steering/follow-up messages join that run. When automatic compaction settles inside a live turn, no second run starts: each message is queued into that run exactly as a send during it would be. Deferred `nextTurn` messages wait for the next user prompt and retain their global enqueue order with later `nextTurn` messages. User prompts are unchanged: `AgentSession.prompt()` rejects during manual compaction, while interactive mode keeps typed prompts in its own UI-local queue.
 
 You can also trigger manually with `/compact [instructions]`, where optional instructions focus the summary.
 
@@ -296,7 +296,7 @@ Extensions can intercept and customize both compaction and branch summarization.
 
 ### session_before_compact
 
-Fired before auto-compaction or `/compact`. Can cancel or provide custom summary. See `SessionBeforeCompactEvent` and `CompactionPreparation` in the types file.
+Fired before auto-compaction or `/compact`. Can cancel or provide custom summary. See `SessionBeforeCompactEvent` and `CompactionPreparation` in the types file. Extension messages sent while compaction is running are acknowledged when queued and delivered after state settles, including messages with `triggerTurn: true`; awaiting such a send from this hook does not deadlock compaction.
 
 ```typescript
 pi.on("session_before_compact", async (event, ctx) => {

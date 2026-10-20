@@ -429,10 +429,18 @@ export class AgentSession {
 	private _steeringMessages: string[] = [];
 	/** Tracks pending follow-up messages for UI display. Removed when delivered. */
 	private _followUpMessages: string[] = [];
-	/** Messages queued to be included with the next user prompt as context ("asides"). */
-	private _pendingNextTurnMessages: CustomMessage[] = [];
+	/** Messages queued to be included with a future turn as context, in their global enqueue order. */
+	private _pendingNextTurnMessages: Array<{ message: CustomMessage; requireUserPrompt: boolean }> = [];
 	/** Context-only custom messages queued during a run, flushed once the current turn's tool results are in. */
 	private _pendingCustomMessages: CustomMessage[] = [];
+	/** Extension messages held until every active compaction or branch summary has settled. */
+	private _pendingCompactionMessages: Array<{
+		message: Pick<CustomMessage, "customType" | "content" | "display" | "details">;
+		options: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" } | undefined;
+	}> = [];
+	/** A session-owned owner count, not controller identity, for overlapping summarization lifecycles. */
+	private _compactionOwners = 0;
+	private _disposed = false;
 
 	// Compaction state
 	private _compactionAbortController: AbortController | undefined = undefined;
@@ -1502,6 +1510,9 @@ export class AgentSession {
 			// Dispose must succeed even if an abort hook throws.
 		}
 
+		this._disposed = true;
+		this._pendingCompactionMessages = [];
+
 		this._extensionRunner.invalidate(
 			"This extension ctx is stale after session replacement or reload. Do not use a captured pi or command ctx after ctx.newSession(), ctx.fork(), ctx.switchSession(), or ctx.reload(). For newSession, fork, and switchSession, move post-replacement work into withSession and use the ctx passed to withSession. For reload, do not use the old ctx after await ctx.reload().",
 		);
@@ -1723,11 +1734,7 @@ export class AgentSession {
 
 	/** Whether compaction or branch summarization is currently running */
 	get isCompacting(): boolean {
-		return (
-			this._autoCompactionAbortController !== undefined ||
-			this._compactionAbortController !== undefined ||
-			this._branchSummaryAbortController !== undefined
-		);
+		return this._compactionOwners > 0;
 	}
 
 	/** All messages including custom types like BashExecutionMessage */
@@ -1935,7 +1942,9 @@ export class AgentSession {
 		trigger: BeforeAgentStartTrigger,
 		onStarted?: () => void,
 		replay?: StartupReplay,
+		startingMessages?: CustomMessage[],
 	): Promise<void> {
+		if (this._disposed) return;
 		// A replayed startup action may have been paused (an input handler, say) while another
 		// session_start began. It waits for that startup, then fails only if it latched fatally.
 		if (replay) {
@@ -1947,7 +1956,7 @@ export class AgentSession {
 		this._agentRunAbortRequested = false;
 		let messages: AgentMessage[];
 		try {
-			messages = await this._prepareRun(trigger);
+			messages = await this._prepareRun(trigger, startingMessages);
 			// before_agent_start handlers ran inside _prepareRun; a replay that was paused there
 			// across a fatal bind must not commit its message, recovery or not.
 			if (replay) {
@@ -1962,10 +1971,17 @@ export class AgentSession {
 			this._resolveIdleWaitIfIdle();
 			throw error;
 		}
+		// Disposal can race an async pre-prompt compaction. Do not admit this batch after it.
+		if (this._disposed) {
+			this._isAgentRunActive = false;
+			return;
+		}
 		// Messages held while the run was starting go before its starting messages, as they would
 		// have while idle. No run exists yet, so they cannot split a tool call from its result.
 		this._flushPendingBashMessages();
-		this._flushPendingCustomMessages();
+		// A compaction batch is already an ordered run input. Its messages must reach
+		// Agent.prompt() before older passive messages can be persisted.
+		if (!startingMessages) this._flushPendingCustomMessages();
 		onStarted?.();
 
 		// Compaction before the prompt may have scheduled a retry; the new prompt replaces it.
@@ -2002,7 +2018,10 @@ export class AgentSession {
 	 * message followed by pending nextTurn messages (consumed here) and handler messages, with a
 	 * system patch first when the prompt changed.
 	 */
-	private async _prepareRun(trigger: BeforeAgentStartTrigger): Promise<AgentMessage[]> {
+	private async _prepareRun(
+		trigger: BeforeAgentStartTrigger,
+		startingMessages?: CustomMessage[],
+	): Promise<AgentMessage[]> {
 		// Check if we need to compact before sending (catches aborted responses).
 		// The starting message is sent below, so do not call agent.continue() here.
 		const lastAssistant = this._findLastAssistantMessage();
@@ -2021,7 +2040,9 @@ export class AgentSession {
 		if (!handlerEditedTools) result.systemPromptOptions.selectedTools = this.getActiveToolNames();
 
 		const messages: AgentMessage[] = [];
-		if (trigger.messageType === "custom") {
+		if (startingMessages) {
+			messages.push(...startingMessages);
+		} else if (trigger.messageType === "custom") {
 			messages.push(trigger.message);
 		} else {
 			// Normalize images after before_agent_start so extension-driven model selection
@@ -2035,9 +2056,17 @@ export class AgentSession {
 				timestamp: Date.now(),
 			});
 		}
-		// Inject any pending "nextTurn" messages as context alongside the starting message
-		messages.push(...this._pendingNextTurnMessages);
+		// Inject eligible "nextTurn" messages while retaining compaction-deferred items until a user prompt.
+		const pendingNextTurnMessages = this._pendingNextTurnMessages;
 		this._pendingNextTurnMessages = [];
+		for (let index = 0; index < pendingNextTurnMessages.length; index++) {
+			const pending = pendingNextTurnMessages[index];
+			if (pending.requireUserPrompt && trigger.messageType !== "user") {
+				this._pendingNextTurnMessages.push(...pendingNextTurnMessages.slice(index));
+				break;
+			}
+			messages.push(pending.message);
+		}
 		for (const msg of result.messages) {
 			messages.push({
 				role: "custom",
@@ -2202,6 +2231,7 @@ export class AgentSession {
 			}
 		}
 
+		// Only manual compaction rejects prompts; automatic compaction and branch summaries admit them.
 		if (this._compactionAbortController !== undefined) {
 			throw new Error(
 				"Cannot submit a prompt while compaction is in progress. Wait for compaction to finish and retry.",
@@ -2465,6 +2495,12 @@ export class AgentSession {
 	): Promise<void> {
 		// A replayed startup action carries its token on `options` (see STARTUP_REPLAY).
 		const replay = startupReplayOf(options);
+		if (this.isCompacting) {
+			// A send is acknowledged on enqueue so a compaction hook can await it without
+			// waiting for the compaction that owns the hook.
+			this._pendingCompactionMessages.push({ message, options });
+			return;
+		}
 		const appMessage = {
 			role: "custom" as const,
 			customType: message.customType,
@@ -2480,7 +2516,7 @@ export class AgentSession {
 			if (wait) await wait;
 		}
 		if (options?.deliverAs === "nextTurn") {
-			this._pendingNextTurnMessages.push(appMessage);
+			this._pendingNextTurnMessages.push({ message: appMessage, requireUserPrompt: false });
 		} else if (this.isStreaming && options?.triggerTurn !== false) {
 			if (options?.deliverAs === "followUp") {
 				this.agent.followUp(appMessage);
@@ -2527,6 +2563,96 @@ export class AgentSession {
 		this._pendingCustomMessages = [];
 		for (const appMessage of pending) {
 			this._appendCustomMessage(appMessage);
+		}
+	}
+
+	private _beginCompaction(): void {
+		this._compactionOwners++;
+	}
+
+	private _endCompaction(): void {
+		this._compactionOwners--;
+		if (this._compactionOwners < 0) throw new Error("Compaction owner underflow");
+		if (this._compactionOwners === 0) this._flushPendingCompactionMessages();
+		this._resolveIdleWaitIfIdle();
+	}
+
+	/**
+	 * Admit an ordered batch once the final compaction owner releases it. Build the complete
+	 * plan before starting a run: calling `sendCustomMessage()` item by item would let its
+	 * streaming branches reorder passive messages around the triggering one.
+	 */
+	private _flushPendingCompactionMessages(): void {
+		if (this._disposed || this.isCompacting || this._pendingCompactionMessages.length === 0) return;
+
+		const pending = this._pendingCompactionMessages.splice(0);
+		const messages = pending.map(({ message }) => ({
+			role: "custom" as const,
+			customType: message.customType,
+			content: message.content ?? [],
+			display: message.display,
+			details: message.details,
+			timestamp: Date.now(),
+		}));
+		// A live run (automatic compaction inside a turn) already owns the transcript. Admit each
+		// item as a send during that run would be: queue it rather than start an overlapping run.
+		const startIndex = this._isAgentRunActive
+			? -1
+			: pending.findIndex(({ options }) => options?.triggerTurn === true && options.deliverAs !== "nextTurn");
+
+		if (startIndex < 0 && !this._isAgentRunActive) {
+			for (let index = 0; index < pending.length && !this._disposed; index++) {
+				if (pending[index].options?.deliverAs === "nextTurn") {
+					this._pendingNextTurnMessages.push({ message: messages[index], requireUserPrompt: true });
+				} else {
+					try {
+						this._appendCustomMessage(messages[index]);
+					} catch (error) {
+						this._extensionRunner.emitError({
+							extensionPath: "<runtime>",
+							event: "send_message",
+							error: error instanceof Error ? error.message : String(error),
+						});
+					}
+				}
+			}
+			return;
+		}
+
+		const isStartingMessage = (index: number): boolean =>
+			index <= startIndex && pending[index].options?.deliverAs !== "nextTurn";
+		const startingMessages = messages.filter((_message, index) => isStartingMessage(index));
+		const deferred = pending.flatMap((item, index) =>
+			isStartingMessage(index) ? [] : [{ message: messages[index], options: item.options }],
+		);
+
+		// `_startRun()` claims the run before its first await. Execute every remaining admission
+		// action synchronously, so listeners cannot interleave an item before this FIFO batch.
+		if (startIndex >= 0) {
+			void this._startRun(
+				{ messageType: "custom", message: messages[startIndex] },
+				undefined,
+				undefined,
+				startingMessages,
+			).catch((error: unknown) => {
+				this._extensionRunner.emitError({
+					extensionPath: "<runtime>",
+					event: "send_message",
+					error: error instanceof Error ? error.message : String(error),
+				});
+			});
+		}
+		for (const { message, options } of deferred) {
+			if (this._disposed) return;
+			if (options?.deliverAs === "nextTurn") {
+				this._pendingNextTurnMessages.push({ message, requireUserPrompt: true });
+			} else if (options?.triggerTurn === false) {
+				this._pendingCustomMessages.push(message);
+			} else if (options?.deliverAs === "followUp") {
+				this.agent.followUp(message);
+			} else {
+				this.agent.steer(message);
+			}
 		}
 	}
 
@@ -2920,9 +3046,11 @@ export class AgentSession {
 		);
 	}
 
-	private _clearManualCompactionState(): void {
-		this._compactionAbortController = undefined;
-		this._resolveIdleWaitIfIdle();
+	private _clearManualCompactionState(controller: AbortController): void {
+		if (this._compactionAbortController === controller) {
+			this._compactionAbortController = undefined;
+			this._resolveIdleWaitIfIdle();
+		}
 	}
 
 	/**
@@ -2942,11 +3070,20 @@ export class AgentSession {
 	 */
 	async compact(customInstructions?: string): Promise<CompactionResult> {
 		this._assertExtensionsStarted();
+		if (this._compactionAbortController) {
+			throw new Error("Compaction is already in progress.");
+		}
 		await this.abort();
-		this._compactionAbortController = new AbortController();
+		if (this._compactionAbortController) {
+			throw new Error("Compaction is already in progress.");
+		}
+		const abortController = new AbortController();
+		this._beginCompaction();
+		this._compactionAbortController = abortController;
 		this._emit({ type: "compaction_start", reason: "manual" });
 		let fromExtension = false;
 		let cancelledByExtension = false;
+		let ownsCompaction = true;
 
 		try {
 			const model = this.model;
@@ -3020,7 +3157,7 @@ export class AgentSession {
 				details = result.details;
 			}
 
-			if (this._compactionAbortController.signal.aborted) {
+			if (abortController.signal.aborted) {
 				throw new Error("Compaction cancelled");
 			}
 
@@ -3034,6 +3171,19 @@ export class AgentSession {
 				| CompactionEntry
 				| undefined;
 
+			const compactionResult: CompactionResult = {
+				summary,
+				firstKeptEntryId,
+				tokensBefore,
+				estimatedTokensAfter,
+				usage,
+				details,
+			};
+			// Settle state and admit deferred extension work before either compaction listener can run.
+			this._clearManualCompactionState(abortController);
+			// Clear ownership first: `_endCompaction()` may throw during deferred admission, and `finally` must not release twice.
+			ownsCompaction = false;
+			this._endCompaction();
 			if (this._extensionRunner && savedCompactionEntry) {
 				await this._extensionRunner.emit({
 					type: "session_compact",
@@ -3043,17 +3193,6 @@ export class AgentSession {
 					willRetry: false,
 				});
 			}
-
-			const compactionResult: CompactionResult = {
-				summary,
-				firstKeptEntryId,
-				tokensBefore,
-				estimatedTokensAfter,
-				usage,
-				details,
-			};
-			// compaction_end listeners may submit queued prompts, so expose idle state before notifying them.
-			this._clearManualCompactionState();
 			this._emit({
 				type: "compaction_end",
 				reason: "manual",
@@ -3064,9 +3203,14 @@ export class AgentSession {
 			return compactionResult;
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
-			const aborted = this._compactionAbortController.signal.aborted || cancelledByExtension;
+			const aborted = abortController.signal.aborted || cancelledByExtension;
 			const errorMessage = aborted ? undefined : `Compaction failed: ${message}`;
-			this._clearManualCompactionState();
+			// Keep the manual controller until session_compact_failed handlers return so a
+			// second manual compaction remains rejected, but release the queue owner first.
+			if (ownsCompaction) {
+				ownsCompaction = false;
+				this._endCompaction();
+			}
 			this._emit({
 				type: "compaction_end",
 				reason: "manual",
@@ -3084,7 +3228,11 @@ export class AgentSession {
 			});
 			throw error;
 		} finally {
-			this._clearManualCompactionState();
+			this._clearManualCompactionState(abortController);
+			if (ownsCompaction) {
+				ownsCompaction = false;
+				this._endCompaction();
+			}
 		}
 	}
 
@@ -3294,6 +3442,7 @@ export class AgentSession {
 			}
 
 			abortController = new AbortController();
+			this._beginCompaction();
 			this._autoCompactionAbortController = abortController;
 			started = true;
 			this._emit({ type: "compaction_start", reason });
@@ -3364,6 +3513,20 @@ export class AgentSession {
 				| CompactionEntry
 				| undefined;
 
+			const result: CompactionResult = {
+				summary,
+				firstKeptEntryId,
+				tokensBefore,
+				estimatedTokensAfter,
+				usage,
+				details,
+			};
+			// Settle state and admit deferred extension work before either compaction listener can run.
+			if (this._autoCompactionAbortController === abortController) {
+				this._autoCompactionAbortController = undefined;
+			}
+			started = false;
+			this._endCompaction();
 			if (this._extensionRunner && savedCompactionEntry) {
 				await this._extensionRunner.emit({
 					type: "session_compact",
@@ -3373,15 +3536,6 @@ export class AgentSession {
 					willRetry,
 				});
 			}
-
-			const result: CompactionResult = {
-				summary,
-				firstKeptEntryId,
-				tokensBefore,
-				estimatedTokensAfter,
-				usage,
-				details,
-			};
 			this._emit({ type: "compaction_end", reason, result, aborted: false, willRetry });
 
 			if (willRetry) return true;
@@ -3398,6 +3552,11 @@ export class AgentSession {
 					: reason === "overflow"
 						? `Context overflow recovery failed: ${message}`
 						: `Auto-compaction failed: ${message}`;
+				if (this._autoCompactionAbortController === abortController) {
+					this._autoCompactionAbortController = undefined;
+				}
+				started = false;
+				this._endCompaction();
 				this._emit({
 					type: "compaction_end",
 					reason,
@@ -3418,6 +3577,10 @@ export class AgentSession {
 		} finally {
 			if (this._autoCompactionAbortController === abortController) {
 				this._autoCompactionAbortController = undefined;
+			}
+			if (started) {
+				started = false;
+				this._endCompaction();
 			}
 			this._resolveIdleWaitIfIdle();
 		}
@@ -4391,7 +4554,9 @@ export class AgentSession {
 		};
 
 		// Set up abort controller for summarization
+		this._beginCompaction();
 		this._branchSummaryAbortController = new AbortController();
+		let ownsCompaction = true;
 
 		try {
 			let extensionSummary: { summary: string; details?: unknown; usage?: Usage } | undefined;
@@ -4513,6 +4678,11 @@ export class AgentSession {
 			this._refreshFinalizedContext();
 			this._restoreToolsFromTranscript();
 
+			// The tree state is committed. Admit deferred work before tree listeners can send.
+			this._branchSummaryAbortController = undefined;
+			ownsCompaction = false;
+			this._endCompaction();
+
 			// Emit session_tree event
 			await this._extensionRunner.emit({
 				type: "session_tree",
@@ -4527,6 +4697,10 @@ export class AgentSession {
 			return { editorText, cancelled: false, summaryEntry };
 		} finally {
 			this._branchSummaryAbortController = undefined;
+			if (ownsCompaction) {
+				ownsCompaction = false;
+				this._endCompaction();
+			}
 			this._resolveIdleWaitIfIdle();
 		}
 	}

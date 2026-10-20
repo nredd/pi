@@ -96,8 +96,9 @@ jobs:
         run: |
           set -euo pipefail
           mkdir "$RUNNER_TEMP/release"
-          (cd packages/coding-agent && npm pack --pack-destination "$RUNNER_TEMP/release")
-          (cd packages/tui && npm pack --pack-destination "$RUNNER_TEMP/release")
+          for package in coding-agent tui agent ai; do
+            (cd "packages/$package" && npm pack --pack-destination "$RUNNER_TEMP/release")
+          done
           mkdir "$RUNNER_TEMP/packed-coding-agent"
           tar -xzf "$RUNNER_TEMP"/release/earendil-works-pi-coding-agent-"$VERSION".tgz -C "$RUNNER_TEMP/packed-coding-agent"
           grep -Eq 'DEFAULT_REASONING_SUMMARY *= *"detailed"' "$RUNNER_TEMP"/packed-coding-agent/package/dist/bundle/chunks/*.js

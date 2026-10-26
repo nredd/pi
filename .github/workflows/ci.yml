@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, nredd/v1.3.0, "security/**"]
+    branches: [main, nredd/v1.3.0]
   pull_request:
     branches: [main, nredd/v1.3.0]
 
@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       # Trusted ref only: the PR base branch or the pushed branch, never PR-controlled text.
-      IS_FORK_REF: ${{ github.base_ref == 'nredd/v1.3.0' || github.ref_name == 'nredd/v1.3.0' || startsWith(github.ref_name, 'security/') }}
+      IS_FORK_REF: ${{ github.base_ref == 'nredd/v1.3.0' || github.ref_name == 'nredd/v1.3.0' }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -35,9 +35,19 @@ jobs:
       - name: Install dependencies
         run: npm ci --ignore-scripts
 
-      - name: Audit fork dependencies including development tools
+      - name: Audit every fork dependency lock including development tools
         if: env.IS_FORK_REF == 'true'
-        run: npm audit --audit-level=moderate
+        run: |
+          set -euo pipefail
+          git ls-files -z -- package-lock.json '**/package-lock.json' >"$RUNNER_TEMP/npm-lockfiles"
+          test -s "$RUNNER_TEMP/npm-lockfiles"
+          while IFS= read -r -d '' lockfile; do
+            opts=(--package-lock-only --audit-level=info --prefix "$(dirname "$lockfile")")
+            if [[ "$lockfile" != package-lock.json ]]; then
+              opts+=(--workspaces=false)
+            fi
+            npm audit "${opts[@]}"
+          done <"$RUNNER_TEMP/npm-lockfiles"
 
       # Fork branch: freeze model data to the published pi-ai release instead of fetching it live.
       - name: Restore the release model data

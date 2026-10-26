@@ -12,14 +12,13 @@
 
 ## Pull request CI
 
-`ci.yml` runs on pushes and pull requests to `main` and `nredd/v1.3.0`, plus pushes to
-`security/**`. The security-branch push path bootstraps candidate CI before the PR target
-contains the new branch trigger; require a real run on the exact candidate commit.
+`ci.yml` runs on pushes and pull requests to `main` and `nredd/v1.3.0`. Require a real run
+on the exact candidate commit; missing checks are not a success.
 
 For `main`, upstream behavior stays unchanged: `npm run build` (live model data),
-`npm run check`, the `packages/env` daemon build and `npm test`. For the fork branch or
-a security-branch push, the same `build-check-test` job audits the full dependency graph
-including development tools, restores model data from the upstream npm
+`npm run check`, the `packages/env` daemon build and `npm test`. For the fork branch,
+the same `build-check-test` job audits every tracked `package-lock.json` at all severities,
+including development tools and the private examples' own lockfiles, then restores model data from the upstream npm
 `@earendil-works/pi-ai@<packages/coding-agent version>` release (the same frozen input as
 `Fork release`), then runs `npm run build:offline`, `npm run check`, the daemon build and
 `./test.sh`. `mcp-conformance` runs unchanged on both paths. No new jobs or matrix are added.

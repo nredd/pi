@@ -31,6 +31,14 @@
 - `@earendil-works/pi-coding-agent/testing` exports the in-process harness the coding-agent suite runs on: `createHarness()` builds a real `AgentSession`, extension runner, settings, auth and model registry around a scripted faux provider, loads extension factories through the real loader, and accepts a caller-owned `cwd`. Also `createTestUiContext()`, transcript helpers, test resource loading, and the faux response builders. See `docs/sdk.md`.
 - `ToolRenderContext.probe` marks a throwaway render: no timers or I/O. `docs/tui.md` now states that a renderer whose output changes after the final result must call `context.invalidate()`, since settled rows are cached.
 
+### Removed
+
+- Removed the optional `sandbox/` example and its `@anthropic-ai/sandbox-runtime` dependency. It was bundled as an example, not enabled by default. Built-in execution and the separate `gondolin/` example are unchanged.
+
+### Security
+
+- Updated `undici` and `@earendil-works/gondolin`, and bumped dev tooling `vitest` to 4.1.12 with patched `vite` and `fast-uri` lock transitives. `npm audit`, including dev dependencies, reports no vulnerabilities.
+
 ## [1.3.0] - 2026-10-15
 
 ### New Features

@@ -12,7 +12,18 @@
 
 ## Pull request CI
 
-`ci.yml` runs on pushes and pull requests to `main` and `nredd/v1.3.0`. For `main` it keeps upstream behavior: `npm run build` (live model data), `npm run check`, the `packages/env` daemon build and `npm test`. When the pushed branch or PR base is exactly `nredd/v1.3.0` (a trusted ref value, `IS_FORK_REF`), the same `build-check-test` job instead restores `@earendil-works/pi-ai@<packages/coding-agent version>` model data (as `Fork release` does), runs `npm run build:offline`, `npm run check`, the daemon build and `./test.sh`. `mcp-conformance` runs unchanged on both. A new fork branch (e.g. `nredd/v1.4.0`) must be added to the `ci.yml` triggers and `IS_FORK_REF`. A `ci.yml` change reaches PR CI only through the branch it targets, so verify it on the real PR run.
+`ci.yml` runs on pushes and pull requests to `main` and `nredd/v1.3.0`, plus pushes to
+`security/**`. The security-branch push path bootstraps candidate CI before the PR target
+contains the new branch trigger; require a real run on the exact candidate commit.
+
+For `main`, upstream behavior stays unchanged: `npm run build` (live model data),
+`npm run check`, the `packages/env` daemon build and `npm test`. For the fork branch or
+a security-branch push, the same `build-check-test` job audits the full dependency graph
+including development tools, restores model data from the upstream npm
+`@earendil-works/pi-ai@<packages/coding-agent version>` release (the same frozen input as
+`Fork release`), then runs `npm run build:offline`, `npm run check`, the daemon build and
+`./test.sh`. `mcp-conformance` runs unchanged on both paths. No new jobs or matrix are added.
+A new fork branch (e.g. `nredd/v1.4.0`) must be added to the triggers and `IS_FORK_REF`.
 
 ## Prove a workflow change
 

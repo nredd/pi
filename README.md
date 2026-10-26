@@ -177,7 +177,7 @@ We treat npm dependency changes as reviewed code changes.
 - Local release smoke tests and npm publication use the same tarball packer; npm publishes the validated tarballs rather than repacking workspace directories.
 - Local release installs, documented npm installs, and `pi update --self` use `--ignore-scripts` where supported.
 - CI installs with `npm ci --ignore-scripts`, and a scheduled GitHub workflow runs `npm audit --omit=dev` plus `npm audit signatures --omit=dev`.
-- The unused optional `sandbox/` example extension (`@anthropic-ai/sandbox-runtime`) was removed, along with its audit exceptions. Pi itself never enabled it; use [containerization](packages/coding-agent/docs/containerization.md) for stronger boundaries. `scripts/npm-audit.mjs` has no accepted advisories, and full `npm audit` (dev dependencies included) is clean.
+- The unused optional `sandbox/` example extension (`@anthropic-ai/sandbox-runtime`) was removed, along with its audit exceptions. Pi itself never enabled it; use [containerization](packages/coding-agent/docs/containerization.md) for stronger boundaries. `scripts/npm-audit.mjs` has no accepted advisories. Fork CI also runs full `npm audit`, including development dependencies.
 - Install lock generation has an explicit allowlist for dependency lifecycle scripts; new lifecycle-script deps fail checks until reviewed.
 
 ## Share your OSS coding agent sessions

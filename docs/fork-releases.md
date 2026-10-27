@@ -10,6 +10,23 @@
 4. CI extracts the packed coding-agent bundle and requires `DEFAULT_REASONING_SUMMARY="detailed"` in at least one bundled chunk (the shared default is hoisted into a generic chunk, so this is stronger than grepping only `*responses*.js` for `"detailed"`, but it does not prove every chunk). It writes `SHA256SUMS`, attests all four tarballs with GitHub build provenance, and creates a new GitHub release. Existing releases are never overwritten.
 5. Verify the release bytes before changing the tap or dotfiles. `pi-harness` requires the release `SHA256SUMS` and provenance for all post-automation tags. Releases are authenticated by provenance of CI-built bytes, not reproducible rebuilding: dry-run [39502658787](https://github.com/nredd/pi/actions/runs/39502658787) rebuilt `v1.3.0-nredd.7` with different SHA-256 values. Rebuilds will differ; reproducibility is tracked in [nredd/pi-harness#84](https://github.com/nredd/pi-harness/issues/84).
 
+## Pull request CI
+
+`ci.yml` runs on pushes and pull requests to `main` and `nredd/v1.3.0`, plus pushes to
+`security/**`. Security branches are maintained-fork candidates and use the fork path below;
+the push run validates the candidate head independently of PR event delivery. Both events may
+run when a PR is open. Require a real run on the exact candidate commit; missing checks are
+not a success.
+
+For `main`, upstream behavior stays unchanged: `npm run build` (live model data),
+`npm run check`, the `packages/env` daemon build and `npm test`. For the fork branch or
+a security-branch push, the same `build-check-test` job audits every tracked `package-lock.json` at all severities,
+including development tools and the private examples' own lockfiles, then restores model data from the upstream npm
+`@earendil-works/pi-ai@<packages/coding-agent version>` release (the same frozen input as
+`Fork release`), then runs `npm run build:offline`, `npm run check`, the daemon build and
+`./test.sh`. `mcp-conformance` runs unchanged on both paths. No new jobs or matrix are added.
+A new fork branch (e.g. `nredd/v1.4.0`) must be added to the triggers and `IS_FORK_REF`.
+
 ## Prove a workflow change
 
 Pushing a `fork-release.yml` change to an `automation/**` branch runs the same dry-run against `v1.3.0-nredd.7`. This is required because GitHub indexes `workflow_dispatch` workflows only after they reach the default branch, and does not schedule a workflow newly added to a pull request. After the workflow reaches the default branch, run `Fork release` with `workflow_dispatch` and `release_tag=v1.3.0-nredd.7` (or another existing signed fork tag). Both paths check out that immutable tag, build, pack, and compare the rebuilt tarballs that tag actually published (older tags shipped fewer) with its published assets. Only tag-triggered runs attest and release; dry-runs create neither attestations nor releases.

@@ -25,6 +25,7 @@
 	},
 	"files": {
 		"includes": [
+			"scripts/fork-release-signers.test.mjs",
 			"scripts/model-catalog-protocol.ts",
 			"scripts/model-catalog-protocol.test.ts",
 			"packages/*/src/**/*.ts",

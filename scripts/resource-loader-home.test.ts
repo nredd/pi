@@ -141,6 +141,60 @@ test("an injected home redirects automatic and explicit resources without touchi
 	assert.equal(manager.addSourceToSettings("~/package"), true);
 	assert.equal(manager.removeSourceFromSettings("~/package"), true);
 	assert.equal((await manager.resolveExtensionSources(["./package"], { temporary: true })).prompts.length, 2);
+	for (const skills of [
+		["!~/.agents/skills/*"],
+		["-~/.agents/skills/private-skill", "-~/.agents/skills/linked-skill"],
+	]) {
+		const filtered = new DefaultResourceLoader({
+			cwd,
+			agentDir,
+			homeDir,
+			settingsManager: SettingsManager.inMemory({ skills }),
+		});
+		await filtered.reload();
+		assert.deepEqual(filtered.getSkills().skills, [], `automatic override ${skills}`);
+	}
+	const forced = new DefaultResourceLoader({
+		cwd,
+		agentDir,
+		homeDir,
+		settingsManager: SettingsManager.inMemory({
+			skills: [
+				"!~/.agents/skills/*",
+				"+~/.agents/skills/private-skill",
+				"+~/.agents/skills/linked-skill",
+				"~/explicit.md",
+				"!~/explicit.md",
+			],
+		}),
+	});
+	await forced.reload();
+	assert.deepEqual(
+		forced.getSkills().skills.map((skill) => skill.name),
+		["private-skill"],
+	);
+	for (const [autoload, prompts] of [
+		[true, ["~/package/kept.md"]],
+		[true, ["!~/package/hidden.md"]],
+		[true, ["!*", "+~/package/kept.md"]],
+		[true, ["-~/package/hidden.md"]],
+		[false, ["~/package/kept.md"]],
+	] as const) {
+		const filtered = new DefaultResourceLoader({
+			cwd,
+			agentDir,
+			homeDir,
+			settingsManager: SettingsManager.inMemory({
+				packages: [{ source: "~/package", autoload, prompts: [...prompts] }],
+			}),
+		});
+		await filtered.reload();
+		assert.deepEqual(
+			filtered.getPrompts().prompts.map((prompt) => prompt.name),
+			["kept"],
+			`package filter ${prompts}`,
+		);
+	}
 	assert.deepEqual(forbiddenReads, []);
 	assert.equal(process.env.HOME || process.env.USERPROFILE, ambientHome);
 

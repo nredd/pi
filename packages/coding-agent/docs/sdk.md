@@ -107,6 +107,22 @@ Each boundary can be supplied explicitly:
 
 Use `DefaultResourceLoader` when you want standard discovery with selected overrides. Supply a custom `ResourceLoader` when the host owns resource storage and discovery completely.
 
+Pass an absolute `homeDir` to `DefaultResourceLoader` or `DefaultPackageManager` to select a per-instance resource home without changing `process.env.HOME`:
+
+```typescript
+const resourceLoader = new DefaultResourceLoader({
+  cwd: "/work/project",
+  agentDir: "/work/private-home/.pi/agent",
+  homeDir: "/work/private-home",
+});
+await resourceLoader.reload();
+const { session } = await createAgentSession({ resourceLoader });
+```
+
+This redirects `~` in `cwd`, `agentDir`, configured local packages/resources, additional resource paths and `extendResources()` paths, plus automatic `~/.agents/skills` discovery. `agentDir` still selects Pi's user settings and resource directories independently; `homeDir` does not derive or replace it. `createAgentSessionServices({ resourceLoaderOptions: { homeDir } })` also forwards the option. `PackageManagerOptions` and `DefaultResourceLoaderOptions` are exported for typed hosts.
+
+Omitting `homeDir` retains existing defaults, including the package manager's `HOME || os.homedir()` behavior. Project trust, filters, precedence, ancestor discovery and symlink handling are unchanged. This is a discovery dependency, not a filesystem sandbox: absolute paths, project ancestors, symlink targets, extension code, credentials, package-manager subprocesses and their global installation fallback remain outside its boundary. An explicit `systemPrompt` or `appendSystemPrompt` is still literal text or a path as supplied, not a tilde-expanded resource path. Hosts seeking isolation must also supply private `cwd`, `agentDir`, settings, credentials and session storage as appropriate.
+
 <a id="inlineextension"></a>
 
 Inline extension factories can be supplied through `DefaultResourceLoader`. Give one an `InlineExtension` name only when it needs a stable name in diagnostics and startup output. A named inline extension with `replaceable: true` is left out when another extension registers a tool, command, or flag with a name it registers during loading, instead of both loading with a conflict. The CLI's built-in codemode, tool search, and MCP extensions are replaceable. A named entry with `builtin: true` is not an inline extension: it supplies the code of the `builtin:<name>` extension, which loads like a configured extension file. It loads by default, is listed in `pi config`, and is disabled by `-builtin:<name>` in the `extensions` setting or by `noExtensions`; `additionalExtensionPaths: ["builtin:<name>"]` loads it explicitly. It loads after project trust is resolved, so it cannot handle `project_trust`. The CLI's built-in extensions use it.

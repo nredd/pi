@@ -135,9 +135,11 @@ export interface PackageManager {
 	getInstalledPath(source: string, scope: "user" | "project"): string | undefined;
 }
 
-interface PackageManagerOptions {
+export interface PackageManagerOptions {
 	cwd: string;
 	agentDir: string;
+	/** Home for tilde expansion and automatic ~/.agents/skills discovery. Defaults to HOME or os.homedir(). */
+	homeDir?: string;
 	settingsManager: SettingsManager;
 	/** Names of built-in extensions, resolved as `builtin:<name>` extension resources. */
 	builtinExtensions?: string[];
@@ -818,6 +820,7 @@ function applyAutoloadDisabledPatterns(allPaths: string[], patterns: string[], b
 export class DefaultPackageManager implements PackageManager {
 	private cwd: string;
 	private agentDir: string;
+	private homeDir: string | undefined;
 	private settingsManager: SettingsManager;
 	private builtinExtensions: string[];
 	private globalNpmRoot: string | undefined;
@@ -825,8 +828,9 @@ export class DefaultPackageManager implements PackageManager {
 	private progressCallback: ProgressCallback | undefined;
 
 	constructor(options: PackageManagerOptions) {
-		this.cwd = resolvePath(options.cwd);
-		this.agentDir = resolvePath(options.agentDir);
+		this.homeDir = options.homeDir;
+		this.cwd = resolvePath(options.cwd, undefined, { homeDir: this.homeDir });
+		this.agentDir = resolvePath(options.agentDir, undefined, { homeDir: this.homeDir });
 		this.settingsManager = options.settingsManager;
 		this.builtinExtensions = options.builtinExtensions ?? [];
 	}
@@ -2210,11 +2214,11 @@ export class DefaultPackageManager implements PackageManager {
 	}
 
 	private resolvePath(input: string): string {
-		return resolvePath(input, this.cwd, { homeDir: getHomeDir(), trim: true });
+		return resolvePath(input, this.cwd, { homeDir: this.homeDir ?? getHomeDir(), trim: true });
 	}
 
 	private resolvePathFromBase(input: string, baseDir: string): string {
-		return resolvePath(input, baseDir, { homeDir: getHomeDir(), trim: true });
+		return resolvePath(input, baseDir, { homeDir: this.homeDir ?? getHomeDir(), trim: true });
 	}
 
 	private collectPackageResources(
@@ -2461,7 +2465,7 @@ export class DefaultPackageManager implements PackageManager {
 			prompts: join(projectBaseDir, "prompts"),
 			themes: join(projectBaseDir, "themes"),
 		};
-		const userAgentsSkillsDir = join(getHomeDir(), ".agents", "skills");
+		const userAgentsSkillsDir = join(this.homeDir ?? getHomeDir(), ".agents", "skills");
 		const projectTrusted = this.settingsManager.isProjectTrusted();
 		const projectAgentsSkillDirs = projectTrusted
 			? collectAncestorAgentsSkillDirs(this.cwd).filter((dir) => resolve(dir) !== resolve(userAgentsSkillsDir))

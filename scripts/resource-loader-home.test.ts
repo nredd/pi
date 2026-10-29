@@ -1,14 +1,14 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve, sep } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { DefaultPackageManager } from "../packages/coding-agent/src/core/package-manager.ts";
 import { DefaultResourceLoader } from "../packages/coding-agent/src/core/resource-loader.ts";
 import { SettingsManager } from "../packages/coding-agent/src/core/settings-manager.ts";
+import { ambientReads as forbiddenReads, stopAmbientGuard } from "./resource-home-guard.ts";
 
 // nredd/pi#12 (prerequisite for nredd/pi-harness#179): exercise real discovery, not a replacement package manager.
 test("an injected home redirects automatic and explicit resources without touching ambient user roots", async (t) => {
@@ -19,11 +19,14 @@ test("an injected home redirects automatic and explicit resources without touchi
 		fs.mkdirSync(decoy, { recursive: true });
 		fs.writeFileSync(join(decoy, "SKILL.md"), "---\nname: decoy\ndescription: ambient decoy\n---\nMust not scan.");
 		const file = fileURLToPath(import.meta.url);
+		const guard = fileURLToPath(new URL("./resource-home-guard.ts", import.meta.url));
 		const args = process.versions.bun
-			? ["test", file]
+			? ["test", "--preload", fileURLToPath(new URL("./resource-home-guard.bun.mjs", import.meta.url)), file]
 			: [
 					"--import",
 					fileURLToPath(new URL("../packages/coding-agent/src/experimental/source-resolver.ts", import.meta.url)),
+					"--import",
+					guard,
 					"--test",
 					file,
 				];
@@ -74,28 +77,16 @@ test("an injected home redirects automatic and explicit resources without touchi
 
 	const ambientHome = process.env.HOME || process.env.USERPROFILE;
 	assert.ok(ambientHome, "test requires an ambient home distinct from private-home");
-	const ambientRoots = [join(ambientHome, ".agents"), join(ambientHome, ".pi", "agent")];
-	const forbiddenReads: string[] = [];
-	// Discovery catches some filesystem errors. Record attempts too, so swallowed failures cannot pass.
-	for (const method of ["existsSync", "readdirSync", "readFileSync", "statSync", "realpathSync"] as const) {
-		const original = fs[method];
-		t.mock.method(fs, method, (...args: unknown[]) => {
-			const path = args[0];
-			if (
-				typeof path === "string" &&
-				ambientRoots.some((base) => path === base || path.startsWith(`${base}${sep}`))
-			) {
-				forbiddenReads.push(path);
-				throw new Error(`Ambient resource access: ${path}`);
-			}
-			return Reflect.apply(original, fs, args);
-		});
-	}
-	syncBuiltinESMExports();
-	t.after(() => {
-		t.mock.restoreAll();
-		syncBuiltinESMExports();
+	// Verify the observer against the REAL package-manager scan, even when noSkills hides results.
+	const negativeControl = new DefaultResourceLoader({
+		cwd,
+		agentDir,
+		noSkills: true,
+		settingsManager: SettingsManager.inMemory(),
 	});
+	await assert.rejects(negativeControl.reload(), /Ambient resource access/);
+	assert.ok(forbiddenReads.some((path) => path === join(ambientHome, ".agents", "skills")));
+	forbiddenReads.length = 0;
 	const settingsManager = SettingsManager.inMemory({
 		packages: [{ source: "~/package", prompts: ["kept.md"], extensions: [], skills: [], themes: [] }],
 		skills: ["~/explicit.md"],
@@ -175,8 +166,7 @@ test("an injected home redirects automatic and explicit resources without touchi
 	assert.deepEqual(forbiddenReads, []);
 
 	// Omission must retain normal discovery. HOME is a disposable decoy, never the caller's home.
-	t.mock.restoreAll();
-	syncBuiltinESMExports();
+	stopAmbientGuard();
 	const defaultLoader = new DefaultResourceLoader({ cwd, agentDir, settingsManager: SettingsManager.inMemory() });
 	await defaultLoader.reload();
 	assert.ok(defaultLoader.getSkills().skills.some((skill) => skill.name === "decoy"));

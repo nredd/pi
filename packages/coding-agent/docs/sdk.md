@@ -123,6 +123,18 @@ This redirects `~` in `cwd`, `agentDir`, configured local packages/resources and
 
 Omitting `homeDir` retains existing defaults, including the package manager's `HOME || os.homedir()` behavior. Project trust, filters, precedence, ancestor discovery and symlink handling are unchanged. This is a discovery dependency, not a filesystem sandbox: absolute paths, project ancestors, symlink targets, extension code, credentials, package-manager subprocesses and their global installation fallback remain outside its boundary. An explicit `systemPrompt` or `appendSystemPrompt` is still literal text or a path as supplied, not a tilde-expanded resource path. Hosts seeking isolation must also supply private `cwd`, `agentDir`, settings, credentials and session storage as appropriate.
 
+<a id="inlineextension"></a>
+
+Inline extension factories can be supplied through `DefaultResourceLoader`. Give one an `InlineExtension` name only when it needs a stable name in diagnostics and startup output. A named inline extension with `replaceable: true` is left out when another extension registers a tool, command, or flag with a name it registers during loading, instead of both loading with a conflict. The CLI's built-in codemode, tool search, and MCP extensions are replaceable. A named entry with `builtin: true` is not an inline extension: it supplies the code of the `builtin:<name>` extension, which loads like a configured extension file. It loads by default, is listed in `pi config`, and is disabled by `-builtin:<name>` in the `extensions` setting or by `noExtensions`; `additionalExtensionPaths: ["builtin:<name>"]` loads it explicitly. It loads after project trust is resolved, so it cannot handle `project_trust`. The CLI's built-in extensions use it.
+
+<a id="codemode-mcp"></a>
+
+The CLI loads `codemode`, `tool_search`, and MCP as built-in extensions. SDK sessions do not; add `createCodemodeExtension()`, `createToolSearchExtension()`, and `createMcpExtension()` to the `extensionFactories` of `DefaultResourceLoader`. `codemode` and `tool_search` are registered inactive: enable them through the `defaultTools` setting (`["+codemode", "+tool_search"]` keeps the other default tools), or let the MCP extension activate them: `codemode` for servers with `codemode` exposure, `tool_search` for servers with `deferred` exposure. The MCP extension connects its servers on `session_start`, so call `session.bindExtensions()`. See [Codemode and MCP](../examples/sdk/14-codemode-mcp.ts).
+
+A `session_start` handler can fail startup by throwing `ExtensionStartupError`. `bindExtensions()` (and `reload()`) then reject, and the session refuses `prompt()` and other provider-bound calls until a later `bindExtensions()` or `reload()` succeeds. `dispose()` the session if you give up. See [Fail startup on purpose](extensions.md#fatal-startup).
+
+See the focused examples for [models](../examples/sdk/02-custom-model.ts), [tools](../examples/sdk/05-tools.ts), [extensions](../examples/sdk/06-extensions.ts), and [full control](../examples/sdk/12-full-control.ts).
+
 ### Inspecting skill candidates with an additional veto
 
 `DefaultPackageManager` accepts an optional synchronous `projectSkillPathFilter: (path: string) => boolean` in `PackageManagerOptions`. It receives the absolute discovered path of every project-scoped, top-level skill candidate (configured or automatic, enabled or disabled), after native collection and precedence sorting but **before canonical deduplication**:
@@ -143,18 +155,6 @@ const resources = await manager.resolve(async () => "skip");
 Returning `false` drops that candidate without reserving its canonical identity, so an authorized user or package alias can survive instead. Returning `true` only retains the native candidate and its enabled state; it cannot enable a disabled skill, discover an excluded resource, bypass project trust, or change package identity/filter decisions. The callback is never invoked for package resources, user resources, extensions, prompts or themes. A thrown exception rejects resolution; omitting the callback preserves existing behavior. Use a synchronous callback, not a promise.
 
 This is a package-manager admission seam, not a loader-wide option or a filesystem sandbox. Discovery may already have inspected a rejected path or followed its symlinks. Hosts own their path policy and must not use this as traversal or TOCTOU protection. The option requires an SDK runtime that implements it; older runtimes do not become safe by receiving an unknown option. Passing `"skip"` above preserves native missing-source inspection without installation.
-
-<a id="inlineextension"></a>
-
-Inline extension factories can be supplied through `DefaultResourceLoader`. Give one an `InlineExtension` name only when it needs a stable name in diagnostics and startup output. A named inline extension with `replaceable: true` is left out when another extension registers a tool, command, or flag with a name it registers during loading, instead of both loading with a conflict. The CLI's built-in codemode, tool search, and MCP extensions are replaceable. A named entry with `builtin: true` is not an inline extension: it supplies the code of the `builtin:<name>` extension, which loads like a configured extension file. It loads by default, is listed in `pi config`, and is disabled by `-builtin:<name>` in the `extensions` setting or by `noExtensions`; `additionalExtensionPaths: ["builtin:<name>"]` loads it explicitly. It loads after project trust is resolved, so it cannot handle `project_trust`. The CLI's built-in extensions use it.
-
-<a id="codemode-mcp"></a>
-
-The CLI loads `codemode`, `tool_search`, and MCP as built-in extensions. SDK sessions do not; add `createCodemodeExtension()`, `createToolSearchExtension()`, and `createMcpExtension()` to the `extensionFactories` of `DefaultResourceLoader`. `codemode` and `tool_search` are registered inactive: enable them through the `defaultTools` setting (`["+codemode", "+tool_search"]` keeps the other default tools), or let the MCP extension activate them: `codemode` for servers with `codemode` exposure, `tool_search` for servers with `deferred` exposure. The MCP extension connects its servers on `session_start`, so call `session.bindExtensions()`. See [Codemode and MCP](../examples/sdk/14-codemode-mcp.ts).
-
-A `session_start` handler can fail startup by throwing `ExtensionStartupError`. `bindExtensions()` (and `reload()`) then reject, and the session refuses `prompt()` and other provider-bound calls until a later `bindExtensions()` or `reload()` succeeds. `dispose()` the session if you give up. See [Fail startup on purpose](extensions.md#fatal-startup).
-
-See the focused examples for [models](../examples/sdk/02-custom-model.ts), [tools](../examples/sdk/05-tools.ts), [extensions](../examples/sdk/06-extensions.ts), and [full control](../examples/sdk/12-full-control.ts).
 
 <a id="testing"></a>
 

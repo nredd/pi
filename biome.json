@@ -27,6 +27,7 @@
 		"includes": [
 			"scripts/fork-release-signers.test.mjs",
 			"scripts/resource-loader-home.test.ts",
+			"scripts/project-skill-admission.test.ts",
 			"scripts/resource-home-guard.ts",
 			"scripts/resource-home-guard.bun.mjs",
 			"scripts/model-catalog-protocol.ts",

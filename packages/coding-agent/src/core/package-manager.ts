@@ -141,6 +141,14 @@ export interface PackageManagerOptions {
 	/** Home for tilde expansion and automatic ~/.agents/skills discovery. Defaults to HOME or os.homedir(). */
 	homeDir?: string;
 	settingsManager: SettingsManager;
+	/**
+	 * Synchronous veto for project-scoped top-level skill paths, before canonical deduplication.
+	 * Receives the discovered absolute path, including disabled candidates. False drops the candidate
+	 * without hiding lower-precedence aliases; true preserves native enabled state and trust decisions.
+	 * Never called for package/user resources or other resource types. Exceptions reject resolution.
+	 * Omission preserves native discovery. This is admission control, not a filesystem sandbox.
+	 */
+	projectSkillPathFilter?: (path: string) => boolean;
 	/** Names of built-in extensions, resolved as `builtin:<name>` extension resources. */
 	builtinExtensions?: string[];
 }
@@ -830,6 +838,7 @@ export class DefaultPackageManager implements PackageManager {
 	private homeDir: string | undefined;
 	private settingsManager: SettingsManager;
 	private builtinExtensions: string[];
+	private projectSkillPathFilter: PackageManagerOptions["projectSkillPathFilter"];
 	private globalNpmRoot: string | undefined;
 	private globalNpmRootCommandKey: string | undefined;
 	private progressCallback: ProgressCallback | undefined;
@@ -840,6 +849,7 @@ export class DefaultPackageManager implements PackageManager {
 		this.agentDir = resolvePath(options.agentDir, undefined, { homeDir: this.homeDir });
 		this.settingsManager = options.settingsManager;
 		this.builtinExtensions = options.builtinExtensions ?? [];
+		this.projectSkillPathFilter = options.projectSkillPathFilter;
 	}
 
 	setProgressCallback(callback: ProgressCallback | undefined): void {
@@ -2656,6 +2666,7 @@ export class DefaultPackageManager implements PackageManager {
 
 	private toResolvedPaths(accumulator: ResourceAccumulator): ResolvedPaths {
 		const mapToResolved = (
+			resourceType: ResourceType,
 			entries: Map<string, { metadata: PathMetadata; enabled: boolean }>,
 		): ResolvedResource[] => {
 			const resolved = Array.from(entries.entries()).map(([path, { metadata, enabled }]) => ({
@@ -2667,6 +2678,15 @@ export class DefaultPackageManager implements PackageManager {
 
 			const seen = new Set<string>();
 			return resolved.filter((entry) => {
+				if (
+					resourceType === "skills" &&
+					entry.metadata.scope === "project" &&
+					entry.metadata.origin === "top-level" &&
+					this.projectSkillPathFilter &&
+					!this.projectSkillPathFilter(entry.path)
+				) {
+					return false;
+				}
 				const canonicalPath = canonicalizePath(entry.path);
 				if (seen.has(canonicalPath)) return false;
 				seen.add(canonicalPath);
@@ -2675,10 +2695,10 @@ export class DefaultPackageManager implements PackageManager {
 		};
 
 		return {
-			extensions: mapToResolved(accumulator.extensions),
-			skills: mapToResolved(accumulator.skills),
-			prompts: mapToResolved(accumulator.prompts),
-			themes: mapToResolved(accumulator.themes),
+			extensions: mapToResolved("extensions", accumulator.extensions),
+			skills: mapToResolved("skills", accumulator.skills),
+			prompts: mapToResolved("prompts", accumulator.prompts),
+			themes: mapToResolved("themes", accumulator.themes),
 		};
 	}
 

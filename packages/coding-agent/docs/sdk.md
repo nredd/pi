@@ -135,6 +135,27 @@ A `session_start` handler can fail startup by throwing `ExtensionStartupError`. 
 
 See the focused examples for [models](../examples/sdk/02-custom-model.ts), [tools](../examples/sdk/05-tools.ts), [extensions](../examples/sdk/06-extensions.ts), and [full control](../examples/sdk/12-full-control.ts).
 
+### Inspecting skill candidates with an additional veto
+
+`DefaultPackageManager` accepts an optional synchronous `projectSkillPathFilter: (path: string) => boolean` in `PackageManagerOptions`. It receives the absolute discovered path of every project-scoped, top-level skill candidate (configured or automatic, enabled or disabled), after native collection and precedence sorting but **before canonical deduplication**:
+
+```typescript
+import { DefaultPackageManager, SettingsManager } from "@earendil-works/pi-coding-agent";
+
+const manager = new DefaultPackageManager({
+  cwd,
+  agentDir,
+  homeDir,
+  settingsManager: SettingsManager.create(cwd, agentDir, { projectTrusted: true }),
+  projectSkillPathFilter: path => allowedProjectSkillPaths.has(path),
+});
+const resources = await manager.resolve(async () => "skip");
+```
+
+Returning `false` drops that candidate without reserving its canonical identity, so an authorized user or package alias can survive instead. Returning `true` only retains the native candidate and its enabled state; it cannot enable a disabled skill, discover an excluded resource, bypass project trust, or change package identity/filter decisions. The callback is never invoked for package resources, user resources, extensions, prompts or themes. A thrown exception rejects resolution; omitting the callback preserves existing behavior. Use a synchronous callback, not a promise.
+
+This is a package-manager admission seam, not a loader-wide option or a filesystem sandbox. Discovery may already have inspected a rejected path or followed its symlinks. Hosts own their path policy and must not use this as traversal or TOCTOU protection. The option requires an SDK runtime that implements it; older runtimes do not become safe by receiving an unknown option. Passing `"skip"` above preserves native missing-source inspection without installation.
+
 <a id="testing"></a>
 
 ## Testing extensions in-process

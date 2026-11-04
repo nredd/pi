@@ -6,6 +6,10 @@
 
 - Changed the OpenAI-family Responses requests (OpenAI, Azure OpenAI, Codex) to default `reasoning.summary` to `detailed`. `auto` often returned only a bold headline. An explicit `reasoningSummary` still wins. A model or organization that rejects `detailed` needs `reasoningSummary: "auto"`.
 
+### Fixed
+
+- Fixed Anthropic native tool changes sending a `tool_removal` for a tool the request never declared, which Anthropic rejects with `tool_reference_unresolved`. A request-time projection that hides an inactive tool's earlier addition but keeps its later removal produced one, failing resumed and continued subagents ([nredd/pi-harness#435](https://github.com/nredd/pi-harness/issues/435))
+
 ## [1.3.0] - 2026-10-15
 
 ### Breaking Changes

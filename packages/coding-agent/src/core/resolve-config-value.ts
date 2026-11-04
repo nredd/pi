@@ -245,6 +245,16 @@ export interface RunCommandOptions {
 	signal?: AbortSignal;
 }
 
+/** An error carrying a Node errno-style `code`, as `spawnSync` reports a timeout (`ETIMEDOUT`) or capped output (`ENOBUFS`). */
+const codedError = (message: string, code: string) => Object.assign(new Error(message), { code });
+
+/**
+ * Run `invocation` once. On timeout, abort, or output over the cap, the child gets SIGTERM and,
+ * {@link RunCommandOptions.killGraceMs} later, SIGKILL. Both go to the child's own pid (the
+ * shell), never to a process group: a grandchild started by a compound command (a pipeline, a
+ * backgrounded job) can outlive the run. The run still ends at the shell's exit, so such a
+ * grandchild cannot hold the request.
+ */
 function runAsync(invocation: ShellInvocation, options: Required<RunCommandOptions>): Promise<CommandRun> {
 	const { timeoutMs, exitGraceMs, killGraceMs, maxOutputBytes, signal } = options;
 	return new Promise((resolve) => {
@@ -278,20 +288,24 @@ function runAsync(invocation: ShellInvocation, options: Required<RunCommandOptio
 				error,
 			});
 		};
-		/** Stop the command: SIGTERM, then SIGKILL if it has not exited. Only the child itself, never its group. */
+		/**
+		 * Stop the command: SIGTERM, then SIGKILL if it has not exited. Only the child itself, never
+		 * its group. After the child exited, Node drops its handle and `kill` sends nothing.
+		 */
 		const stop = (reason: Error) => {
 			error ??= reason;
-			if (exit) return;
 			child.kill("SIGTERM");
 			timers.push(setTimeout(() => exit || child.kill("SIGKILL"), killGraceMs));
 		};
 		const onAbort = () => stop(new Error("aborted"));
 		const capture = (name: "stdout" | "stderr") => (chunk: Buffer) => {
+			// Once stopping, later chunks are dropped: no second SIGTERM, no extra SIGKILL timer.
+			if (error) return;
 			const room = maxOutputBytes - bytes[name];
 			const kept = chunk.subarray(0, room);
 			output[name].push(kept);
 			bytes[name] += kept.length;
-			if (kept.length < chunk.length) stop(new Error(`${name} exceeded ${maxOutputBytes} bytes`));
+			if (kept.length < chunk.length) stop(codedError(`${name} exceeded ${maxOutputBytes} bytes`, "ENOBUFS"));
 		};
 
 		child.stdout?.on("data", capture("stdout"));
@@ -310,7 +324,7 @@ function runAsync(invocation: ShellInvocation, options: Required<RunCommandOptio
 			exit ??= { status, signal: closeSignal };
 			finish();
 		});
-		timers.push(setTimeout(() => stop(new Error(`timed out after ${timeoutMs} ms`)), timeoutMs));
+		timers.push(setTimeout(() => stop(codedError(`timed out after ${timeoutMs} ms`, "ETIMEDOUT")), timeoutMs));
 		if (signal.aborted) onAbort();
 		else signal.addEventListener("abort", onAbort, { once: true });
 	});
@@ -385,7 +399,15 @@ function commandOutcome(run: CommandRun): { value: string } | CommandFailure {
 	const value = run.stdout.trim();
 	let failure: string;
 	let permanent = false;
-	if (run.error) {
+	const code = (run.error as NodeJS.ErrnoException | undefined)?.code;
+	if (code === "ETIMEDOUT" || code === "ENOBUFS") {
+		// Running it again would hit the same limit.
+		failure =
+			code === "ETIMEDOUT"
+				? "command timed out"
+				: `command output exceeded ${COMMAND_MAX_OUTPUT_BYTES / (1024 * 1024)} MB`;
+		permanent = true;
+	} else if (run.error) {
 		failure = `could not run the command (${run.error.message})`;
 		permanent = isMissingShell(run.error);
 	} else if (run.status !== 0) {
@@ -396,10 +418,24 @@ function commandOutcome(run: CommandRun): { value: string } | CommandFailure {
 	} else {
 		failure = "command exited 0 but printed no secret (empty output)";
 	}
-	// Redact a window wider than the kept tail, then cut: cutting first could drop a
-	// `Bearer`/`key=` prefix and leave its value in the tail unrecognized.
-	const stderr = redactSecrets(run.stderr.trim().slice(-COMMAND_STDERR_REDACT_CHARS)).slice(-COMMAND_STDERR_CHARS);
+	const stderr = stderrTail(run.stderr);
 	return { failure: redactSecrets(stderr ? `${failure}; stderr: ${stderr}` : failure), permanent };
+}
+
+/**
+ * The redacted tail of `stderr`. A window wider than the tail is redacted before the cut, since
+ * cutting first could drop a `Bearer`/`key=` prefix and leave its value unrecognized. When the
+ * window itself is cut from longer output and starts with a short partial word (up to 64
+ * chars, the size of a flag or key name), that word and the one after it are dropped: the cut
+ * may have split a value from the flag or key that marks it. A longer partial word is a
+ * fragment of a long value, already redacted if it looks like a token. The kept tail is
+ * redacted once more, since cutting it can leave a fragment the window pass saw whole.
+ */
+function stderrTail(stderr: string): string {
+	const text = stderr.trim();
+	let window = redactSecrets(text.slice(-COMMAND_STDERR_REDACT_CHARS));
+	if (text.length > COMMAND_STDERR_REDACT_CHARS) window = window.replace(/^\S{0,64}(?=\s|$)(?:\s+\S*)?\s*/, "");
+	return redactSecrets(window.slice(-COMMAND_STDERR_CHARS));
 }
 
 function commandError(description: string, commandConfig: string, failure: string): Error {

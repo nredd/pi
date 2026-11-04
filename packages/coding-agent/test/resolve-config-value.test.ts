@@ -1,3 +1,4 @@
+import { ChildProcess } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -255,8 +256,8 @@ describe("resolveConfigValueOrThrowWithRetry (pi-harness#456)", () => {
 		[{ status: 0, signal: null, stdout: " \n", stderr: "" }, "command exited 0 but printed no secret (empty output)"],
 		[{ status: null, signal: "SIGTERM", stdout: "", stderr: "" }, "command was killed by SIGTERM"],
 		[
-			{ status: null, signal: "SIGTERM", stdout: "", stderr: "", error: new Error("timed out after 10000 ms") },
-			"could not run the command (timed out after 10000 ms)",
+			{ status: null, signal: null, stdout: "", stderr: "", error: new Error("spawn secret-helper EACCES") },
+			"could not run the command (spawn secret-helper EACCES)",
 		],
 	] satisfies [CommandRun, string][])("distinguishes %#: %s", async (run, failure) => {
 		const { deps } = fakeDeps(run);
@@ -414,6 +415,28 @@ describe("resolveConfigValueOrThrowWithRetry (pi-harness#456)", () => {
 			},
 			"could not run the command (spawn /bin/sh ENOENT)",
 		],
+		[
+			"a timeout",
+			{
+				status: null,
+				signal: "SIGTERM",
+				stdout: "",
+				stderr: "",
+				error: Object.assign(new Error("timed out after 10000 ms"), { code: "ETIMEDOUT" }),
+			},
+			"command timed out",
+		],
+		[
+			"output over the cap",
+			{
+				status: null,
+				signal: "SIGTERM",
+				stdout: "a".repeat(64),
+				stderr: "",
+				error: Object.assign(new Error("stdout exceeded 1048576 bytes"), { code: "ENOBUFS" }),
+			},
+			"command output exceeded 1 MB",
+		],
 	] satisfies [string, CommandRun, string][])(
 		"does not retry a permanent failure: %s",
 		async (_name, run, failure) => {
@@ -525,6 +548,24 @@ describe("resolveConfigValueOrThrowWithRetry (pi-harness#456)", () => {
 
 		expect(error.message).not.toContain(token);
 		expect(error.message).toContain(filler.slice(0, 100));
+	});
+
+	test("drops the partial head of a cut stderr window, and the value it may have been split from", async () => {
+		// A flag split from its letters-only value by the raw window cut, then one long opaque token
+		// whose redaction shrinks the window below the kept tail: the head would otherwise survive.
+		const window = 4_000;
+		const head = "ord hiddenpassword ";
+		const token = `${"a1".repeat(1_990)}b`;
+		const stderr = `${"x".repeat(50)} --passw${head}${token}`;
+		expect(stderr.slice(-window).startsWith(head)).toBe(true);
+		const { deps } = fakeDeps(exit(1, stderr));
+
+		const error = await rejection(
+			resolveConfigValueOrThrowWithRetry("!secret-helper get", "API key", undefined, deps),
+		);
+
+		expect(error.message).not.toContain("hiddenpassword");
+		expect(error.message).toContain("stderr: [REDACTED]");
 	});
 
 	test("only a fully aborted run stops; each waiter leaves with its own abort reason", async () => {
@@ -646,14 +687,14 @@ describe("resolveConfigValueOrThrowWithRetry (pi-harness#456)", () => {
 			signal: null,
 			stdout: "partial-key",
 			stderr: "",
-			error: new Error("stdout exceeded 1048576 bytes"),
+			error: Object.assign(new Error("stdout exceeded 1048576 bytes"), { code: "ENOBUFS" }),
 		});
 
 		const error = await rejection(
 			resolveConfigValueOrThrowWithRetry("!secret-helper get", "API key", undefined, deps),
 		);
 
-		expect(error.message).toContain("(stdout exceeded 1048576 bytes)");
+		expect(error.message).toContain("(command output exceeded 1 MB; failed 1 attempt)");
 		expect(error.message).not.toContain("partial-key");
 	});
 
@@ -758,18 +799,41 @@ describe("runCommandAsync (pi-harness#456)", () => {
 	test("kills a command that outlives its timeout", async () => {
 		const result = await runCommandAsync("exec sleep 30", { timeoutMs: 50 });
 
-		expect(result).toMatchObject({ status: null, signal: "SIGTERM" });
+		expect(result).toMatchObject({ status: null, signal: "SIGTERM", error: { code: "ETIMEDOUT" } });
 		expect(result.error?.message).toBe("timed out after 50 ms");
 	});
 
 	test("escalates to SIGKILL when the command ignores SIGTERM", async () => {
-		const result = await runCommandAsync("trap '' TERM; while :; do sleep 0.05; done", {
-			timeoutMs: 50,
+		const dir = mkdtempSync(join(tmpdir(), "pi-sigkill-"));
+		const ready = join(dir, "trap-set");
+		const controller = new AbortController();
+		try {
+			// The marker is written only after the trap is in place; the stop waits for it.
+			const run = runCommandAsync(`trap '' TERM; : > '${ready}'; while :; do sleep 0.05; done`, {
+				signal: controller.signal,
+				killGraceMs: 50,
+			});
+			await vi.waitFor(() => expect(existsSync(ready)).toBe(true), { timeout: 10_000, interval: 10 });
+			controller.abort();
+
+			const result = await run;
+			expect(result).toMatchObject({ status: null, signal: "SIGKILL" });
+			expect(result.error?.message).toBe("aborted");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test("stops a command once when its output keeps coming over the cap", async () => {
+		const kill = vi.spyOn(ChildProcess.prototype, "kill");
+
+		// The shell ignores SIGTERM and keeps printing well past the cap, chunk after chunk.
+		const result = await runCommandAsync("trap '' TERM; head -c 3000000 /dev/zero | tr '\\0' a; sleep 30", {
 			killGraceMs: 50,
 		});
 
-		expect(result).toMatchObject({ status: null, signal: "SIGKILL" });
-		expect(result.error?.message).toBe("timed out after 50 ms");
+		expect(kill.mock.calls).toEqual([["SIGTERM"], ["SIGKILL"]]);
+		expect(result).toMatchObject({ signal: "SIGKILL", error: { code: "ENOBUFS" } });
 	});
 
 	test("stops a command when its signal aborts", async () => {
@@ -793,8 +857,8 @@ describe("runCommandAsync (pi-harness#456)", () => {
 
 			expect(result).toMatchObject({ status: 0, signal: null, stdout: "key-from-shell\n" });
 		} finally {
-			// The backgrounded `sleep` was spawned by this test: stop exactly that pid.
-			const pid = Number(readFileSync(pidFile, "utf-8").trim());
+			// The backgrounded `sleep` was spawned by this test: stop exactly that pid, if it got that far.
+			const pid = existsSync(pidFile) ? Number(readFileSync(pidFile, "utf-8").trim()) : 0;
 			if (pid > 1) process.kill(pid, "SIGTERM");
 			rmSync(dir, { recursive: true, force: true });
 		}
@@ -805,7 +869,7 @@ describe("runCommandAsync (pi-harness#456)", () => {
 
 		expect(result.stdout).toHaveLength(1024 * 1024);
 		expect(result.stdout).toMatch(/^a+$/);
-		expect(result.error?.message).toBe("stdout exceeded 1048576 bytes");
+		expect(result.error).toMatchObject({ code: "ENOBUFS", message: "stdout exceeded 1048576 bytes" });
 	});
 
 	test("feeds stdin to a configured Windows shell that reads its command from stdin", async () => {

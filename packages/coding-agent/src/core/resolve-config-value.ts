@@ -161,8 +161,8 @@ export interface CommandRun {
 	error?: Error;
 }
 
-/** Runs the shell text of a `!command` (without the `!`). */
-export type CommandRunner = (command: string) => Promise<CommandRun>;
+/** Runs the shell text of a `!command` (without the `!`); `signal` stops it. */
+export type CommandRunner = (command: string, signal?: AbortSignal) => Promise<CommandRun>;
 
 /** Why a `!command` attempt produced no secret, and whether running it again could help. */
 interface CommandFailure {
@@ -172,8 +172,24 @@ interface CommandFailure {
 }
 
 const COMMAND_TIMEOUT_MS = 10_000;
+/**
+ * How long a command's pipes may stay open after its shell exits. A backgrounded grandchild
+ * can hold them indefinitely; the shell's exit is the end of the run. Pipes normally close
+ * within 0.2 ms of the exit (measured over 200 runs), so this only bounds the grandchild case.
+ */
+const COMMAND_EXIT_GRACE_MS = 100;
+/** How long a command gets to exit after SIGTERM before SIGKILL. */
+const COMMAND_KILL_GRACE_MS = 2_000;
+/** Most bytes kept per output stream: `spawnSync`'s default `maxBuffer`. */
+const COMMAND_MAX_OUTPUT_BYTES = 1024 * 1024;
 /** Longest stderr tail an error carries. */
 const COMMAND_STDERR_CHARS = 1_000;
+/**
+ * How much of the stderr tail is redacted before it is cut to {@link COMMAND_STDERR_CHARS}. The
+ * slack keeps a `Bearer`/`key=` prefix just before the kept tail visible to the redaction, and
+ * the bound keeps redaction time independent of how much the command printed.
+ */
+const COMMAND_STDERR_REDACT_CHARS = 4 * COMMAND_STDERR_CHARS;
 
 /** How the platform shell runs `command`: the configured Windows shell, else Node's default shell. */
 type ShellInvocation = { file: string; args: string[]; stdin?: string; shell: boolean };
@@ -219,62 +235,114 @@ function runCommand(command: string): CommandRun {
 	return run && !isMissingShell(run.error) ? run : runSync(defaultShell(command));
 }
 
-function runAsync(invocation: ShellInvocation, timeoutMs: number): Promise<CommandRun> {
+/** Limits of one {@link runCommandAsync} run. Tests shorten them. */
+export interface RunCommandOptions {
+	timeoutMs?: number;
+	exitGraceMs?: number;
+	killGraceMs?: number;
+	maxOutputBytes?: number;
+	/** Stops the command, as a timeout does. */
+	signal?: AbortSignal;
+}
+
+function runAsync(invocation: ShellInvocation, options: Required<RunCommandOptions>): Promise<CommandRun> {
+	const { timeoutMs, exitGraceMs, killGraceMs, maxOutputBytes, signal } = options;
 	return new Promise((resolve) => {
 		const child = spawn(invocation.file, invocation.args, {
 			stdio: [invocation.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
 			shell: invocation.shell,
 			windowsHide: true,
 		});
-		let stdout = "";
-		let stderr = "";
+		const output = { stdout: [] as Buffer[], stderr: [] as Buffer[] };
+		const bytes = { stdout: 0, stderr: 0 };
+		const timers: NodeJS.Timeout[] = [];
 		let error: Error | undefined;
-		child.stdout?.setEncoding("utf-8").on("data", (chunk: string) => {
-			stdout += chunk;
-		});
-		child.stderr?.setEncoding("utf-8").on("data", (chunk: string) => {
-			stderr += chunk;
-		});
-		child.stdin?.end(invocation.stdin);
-		const timer = setTimeout(() => {
-			error = new Error(`timed out after ${timeoutMs} ms`);
+		let exit: { status: number | null; signal: NodeJS.Signals | null } | undefined;
+		let done = false;
+
+		const finish = () => {
+			if (done) return;
+			done = true;
+			for (const timer of timers) clearTimeout(timer);
+			signal.removeEventListener("abort", onAbort);
+			// A grandchild may still hold the pipes: stop reading them.
+			child.stdout?.destroy();
+			child.stderr?.destroy();
+			child.stdin?.destroy();
+			resolve({
+				// Node reports a spawn failure as exit -2 (or similar); it never ran, so it has no status.
+				status: child.pid === undefined ? null : (exit?.status ?? null),
+				signal: exit?.signal ?? null,
+				stdout: Buffer.concat(output.stdout).toString("utf-8"),
+				stderr: Buffer.concat(output.stderr).toString("utf-8"),
+				error,
+			});
+		};
+		/** Stop the command: SIGTERM, then SIGKILL if it has not exited. Only the child itself, never its group. */
+		const stop = (reason: Error) => {
+			error ??= reason;
+			if (exit) return;
 			child.kill("SIGTERM");
-		}, timeoutMs);
-		let started = true;
+			timers.push(setTimeout(() => exit || child.kill("SIGKILL"), killGraceMs));
+		};
+		const onAbort = () => stop(new Error("aborted"));
+		const capture = (name: "stdout" | "stderr") => (chunk: Buffer) => {
+			const room = maxOutputBytes - bytes[name];
+			const kept = chunk.subarray(0, room);
+			output[name].push(kept);
+			bytes[name] += kept.length;
+			if (kept.length < chunk.length) stop(new Error(`${name} exceeded ${maxOutputBytes} bytes`));
+		};
+
+		child.stdout?.on("data", capture("stdout"));
+		child.stderr?.on("data", capture("stderr"));
+		// A command that exits without reading its stdin closes the pipe (EPIPE); its exit status tells the story.
+		child.stdin?.on("error", () => {});
+		child.stdin?.end(invocation.stdin);
 		child.on("error", (spawnError) => {
-			started = false;
-			error = spawnError;
+			error ??= spawnError;
 		});
-		child.on("close", (status, signal) => {
-			clearTimeout(timer);
-			// Node reports a spawn failure as exit -2 (or similar); it never ran, so it has no status.
-			resolve({ status: started ? status : null, signal, stdout, stderr, error });
+		child.on("exit", (status, exitSignal) => {
+			exit = { status, signal: exitSignal };
+			timers.push(setTimeout(finish, exitGraceMs));
 		});
+		child.on("close", (status, closeSignal) => {
+			exit ??= { status, signal: closeSignal };
+			finish();
+		});
+		timers.push(setTimeout(() => stop(new Error(`timed out after ${timeoutMs} ms`)), timeoutMs));
+		if (signal.aborted) onAbort();
+		else signal.addEventListener("abort", onAbort, { once: true });
 	});
 }
 
 /** Run a `!command` once without blocking the event loop. The live runner of the retrying resolver. */
-export async function runCommandAsync(command: string, timeoutMs = COMMAND_TIMEOUT_MS): Promise<CommandRun> {
+export async function runCommandAsync(command: string, options: RunCommandOptions = {}): Promise<CommandRun> {
+	const limits: Required<RunCommandOptions> = {
+		timeoutMs: options.timeoutMs ?? COMMAND_TIMEOUT_MS,
+		exitGraceMs: options.exitGraceMs ?? COMMAND_EXIT_GRACE_MS,
+		killGraceMs: options.killGraceMs ?? COMMAND_KILL_GRACE_MS,
+		maxOutputBytes: options.maxOutputBytes ?? COMMAND_MAX_OUTPUT_BYTES,
+		signal: options.signal ?? new AbortController().signal,
+	};
 	const configured = configuredWindowsShell(command);
-	const run = configured && (await runAsync(configured, timeoutMs));
-	return run && !isMissingShell(run.error) ? run : runAsync(defaultShell(command), timeoutMs);
+	const run = configured && (await runAsync(configured, limits));
+	return run && !isMissingShell(run.error) ? run : runAsync(defaultShell(command), limits);
 }
 
 // A credential that leaks into stderr, an error message or the command text is replaced
 // before it reaches an error message. Shapes covered: URL userinfo, an auth scheme with a
 // token-like value, `key=value` / `token: value` pairs, a secret-named flag followed by its
 // value, and opaque runs of token characters (API keys, base64, JWTs, hex digests, UUIDs).
-const URL_USERINFO_RE = /\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi;
+//
+// Every pattern starts only where a run begins (a lookbehind, not `\b`) and has a single
+// unbounded run before a delimiter, so matching stays linear in the input. Whether a name is
+// secret-like is decided afterwards on the matched name.
+const URL_USERINFO_RE = /(?<![a-z0-9+.-])([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi;
 const AUTH_SCHEME_RE = /\b(Bearer|Basic|Token)(\s+)([^\s"',;]{8,})/gi;
-const SECRET_NAME = String.raw`[\w-]*(?:api[_-]?key|token|secret|password|passwd|credential|authorization)[\w-]*`;
-const SECRET_ASSIGNMENT_RE = new RegExp(
-	String.raw`\b(${SECRET_NAME}["']?\s*[:=]\s*["']?)(?!(?:Bearer|Basic|Token)\s)[^\s"',;]+`,
-	"gi",
-);
-const SECRET_FLAG_RE = new RegExp(
-	String.raw`(^|\s)(--?(?:${SECRET_NAME}|key|p))(\s+)(?!-)("[^"]*"|'[^']*'|[^\s"']+)`,
-	"gi",
-);
+const SECRET_NAME_RE = /api[_-]?key|token|secret|password|passwd|credential|authorization/i;
+const SECRET_ASSIGNMENT_RE = /(?<![\w-])([\w-]+)(["']?\s*[:=]\s*["']?)(?!(?:Bearer|Basic|Token)\s)[^\s"',;]+/gi;
+const SECRET_FLAG_RE = /(^|\s)(--?([\w-]+))(\s+)(?!-)(?:"[^"]*"|'[^']*'|[^\s"']+)/g;
 const TOKEN_RUN_RE = /[A-Za-z0-9+/=_.-]{20,}/g;
 const REDACTED = "[REDACTED]";
 
@@ -298,11 +366,16 @@ export function redactSecrets(text: string): string {
 		text
 			.replace(URL_USERINFO_RE, `$1${REDACTED}@`)
 			// An all-lowercase or Capitalized word after `Token`/`Basic` is prose ("Token refresh failed").
+			// `Bearer` is always followed by a credential.
 			.replace(AUTH_SCHEME_RE, (match, scheme: string, space: string, value: string) =>
-				/^[A-Z]?[a-z]+$/.test(value) ? match : `${scheme}${space}${REDACTED}`,
+				!/^bearer$/i.test(scheme) && /^[A-Z]?[a-z]+$/.test(value) ? match : `${scheme}${space}${REDACTED}`,
 			)
-			.replace(SECRET_ASSIGNMENT_RE, `$1${REDACTED}`)
-			.replace(SECRET_FLAG_RE, `$1$2$3${REDACTED}`)
+			.replace(SECRET_ASSIGNMENT_RE, (match, name: string, separator: string) =>
+				SECRET_NAME_RE.test(name) ? `${name}${separator}${REDACTED}` : match,
+			)
+			.replace(SECRET_FLAG_RE, (match, space: string, flag: string, name: string, gap: string) =>
+				SECRET_NAME_RE.test(name) || /^(?:key|p)$/i.test(name) ? `${space}${flag}${gap}${REDACTED}` : match,
+			)
 			.replace(TOKEN_RUN_RE, (run) => (isOpaqueToken(run) ? REDACTED : run))
 	);
 }
@@ -312,7 +385,7 @@ function commandOutcome(run: CommandRun): { value: string } | CommandFailure {
 	const value = run.stdout.trim();
 	let failure: string;
 	let permanent = false;
-	if (run.error && run.status === null) {
+	if (run.error) {
 		failure = `could not run the command (${run.error.message})`;
 		permanent = isMissingShell(run.error);
 	} else if (run.status !== 0) {
@@ -323,9 +396,9 @@ function commandOutcome(run: CommandRun): { value: string } | CommandFailure {
 	} else {
 		failure = "command exited 0 but printed no secret (empty output)";
 	}
-	// Redact the whole stderr first: cutting it first could drop a `Bearer`/`key=` prefix
-	// and leave its value in the tail unrecognized.
-	const stderr = redactSecrets(run.stderr.trim()).slice(-COMMAND_STDERR_CHARS);
+	// Redact a window wider than the kept tail, then cut: cutting first could drop a
+	// `Bearer`/`key=` prefix and leave its value in the tail unrecognized.
+	const stderr = redactSecrets(run.stderr.trim().slice(-COMMAND_STDERR_REDACT_CHARS)).slice(-COMMAND_STDERR_CHARS);
 	return { failure: redactSecrets(stderr ? `${failure}; stderr: ${stderr}` : failure), permanent };
 }
 
@@ -392,14 +465,27 @@ export const COMMAND_SECRET_TTL_MS = 30_000;
 /** Effects of request-time `!command` resolution, injectable by tests. */
 export interface CommandSecretDeps {
 	run: CommandRunner;
-	sleep: (ms: number) => Promise<void>;
+	/** Waits `ms`, or rejects with the abort reason once `signal` aborts. */
+	sleep: (ms: number, signal?: AbortSignal) => Promise<void>;
 	now: () => number;
 }
 
 /** The live effects. Tests replace members with `vi.spyOn` to avoid real sleeps and clocks. */
 export const commandSecretDeps: CommandSecretDeps = {
-	run: (command) => runCommandAsync(command),
-	sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+	run: (command, signal) => runCommandAsync(command, { signal }),
+	sleep: (ms, signal) =>
+		new Promise((resolve, reject) => {
+			if (signal?.aborted) return reject(signal.reason);
+			const onAbort = () => {
+				clearTimeout(timer);
+				reject(signal?.reason);
+			};
+			const timer = setTimeout(() => {
+				signal?.removeEventListener("abort", onAbort);
+				resolve();
+			}, ms);
+			signal?.addEventListener("abort", onAbort, { once: true });
+		}),
 	now: () => Date.now(),
 };
 
@@ -407,7 +493,19 @@ export const commandSecretDeps: CommandSecretDeps = {
 // result only while it still owns its in-flight slot, so a clear or an invalidation that lands
 // mid-run is never undone by that run.
 const commandSecretCache = new Map<string, { value: string; expiresAt: number }>();
-const commandSecretInFlight = new Map<string, { owner: object; result: Promise<string> }>();
+/**
+ * A run shared by concurrent requests. Once every request waiting on it has been aborted it is
+ * stopped and detached, so the next request starts a fresh run; a waiter without a signal
+ * keeps it alive.
+ */
+interface InFlightCommandSecret {
+	cacheKey: string;
+	owner: object;
+	result: Promise<string>;
+	controller: AbortController;
+	waiters: number;
+}
+const commandSecretInFlight = new Map<string, InFlightCommandSecret>();
 
 const commandSecretKey = (commandConfig: string, description: string) => `${description}\0${commandConfig}`;
 
@@ -417,10 +515,13 @@ async function resolveCommandSecret(
 	cacheKey: string,
 	owner: object,
 	deps: CommandSecretDeps,
+	signal: AbortSignal,
 ): Promise<string> {
 	let attempt = 0;
 	for (;;) {
-		const outcome = commandOutcome(await deps.run(commandConfig.slice(1)));
+		const run = await deps.run(commandConfig.slice(1), signal);
+		signal.throwIfAborted();
+		const outcome = commandOutcome(run);
 		if ("value" in outcome) {
 			if (commandSecretInFlight.get(cacheKey)?.owner === owner) {
 				commandSecretCache.set(cacheKey, { value: outcome.value, expiresAt: deps.now() + COMMAND_SECRET_TTL_MS });
@@ -432,7 +533,7 @@ async function resolveCommandSecret(
 			const attempts = attempt === 1 ? "1 attempt" : `${attempt} attempts`;
 			throw commandError(description, commandConfig, `${outcome.failure}; failed ${attempts}`);
 		}
-		await deps.sleep(COMMAND_SECRET_RETRY_DELAYS_MS[attempt - 1]);
+		await deps.sleep(COMMAND_SECRET_RETRY_DELAYS_MS[attempt - 1], signal);
 	}
 }
 
@@ -443,41 +544,70 @@ async function resolveCommandSecret(
  * the failure is permanent (exit 126/127, or the shell is missing). Its output is reused for
  * {@link COMMAND_SECRET_TTL_MS} per `description` and command, and concurrent callers share
  * one run. Failures are never cached. Environment and literal values resolve exactly as in
- * the synchronous variant.
+ * the synchronous variant. An aborted `signal` rejects this call with its reason, and stops the
+ * shared run (its command and retry sleeps) once no other caller is waiting on it.
  */
 export async function resolveConfigValueOrThrowWithRetry(
 	config: string,
 	description: string,
 	env?: Record<string, string>,
 	deps: CommandSecretDeps = commandSecretDeps,
+	signal?: AbortSignal,
 ): Promise<string> {
 	const reference = parseConfigValueReference(config);
 	if (reference.type !== "command") return resolveConfigValueOrThrow(config, description, env);
+	signal?.throwIfAborted();
 	const cacheKey = commandSecretKey(reference.config, description);
 	const cached = commandSecretCache.get(cacheKey);
 	if (cached && cached.expiresAt > deps.now()) return cached.value;
 	commandSecretCache.delete(cacheKey);
-	const pending = commandSecretInFlight.get(cacheKey);
-	if (pending) return pending.result;
-	const owner = {};
-	const result = resolveCommandSecret(reference.config, description, cacheKey, owner, deps).finally(() => {
-		if (commandSecretInFlight.get(cacheKey)?.owner === owner) commandSecretInFlight.delete(cacheKey);
+	let entry = commandSecretInFlight.get(cacheKey);
+	if (!entry) {
+		const owner = {};
+		const controller = new AbortController();
+		const result = resolveCommandSecret(
+			reference.config,
+			description,
+			cacheKey,
+			owner,
+			deps,
+			controller.signal,
+		).finally(() => {
+			if (commandSecretInFlight.get(cacheKey)?.owner === owner) commandSecretInFlight.delete(cacheKey);
+		});
+		entry = { cacheKey, owner, result, controller, waiters: 0 };
+		commandSecretInFlight.set(cacheKey, entry);
+	}
+	return awaitCommandSecret(entry, signal);
+}
+
+function awaitCommandSecret(entry: InFlightCommandSecret, signal: AbortSignal | undefined): Promise<string> {
+	entry.waiters++;
+	if (!signal) return entry.result;
+	return new Promise((resolve, reject) => {
+		const leave = () => {
+			reject(signal.reason);
+			if (--entry.waiters > 0) return;
+			entry.controller.abort(signal.reason);
+			if (commandSecretInFlight.get(entry.cacheKey) === entry) commandSecretInFlight.delete(entry.cacheKey);
+		};
+		signal.addEventListener("abort", leave, { once: true });
+		entry.result.then(resolve, reject).finally(() => signal.removeEventListener("abort", leave));
 	});
-	commandSecretInFlight.set(cacheKey, { owner, result });
-	return result;
 }
 
 /**
- * Forget the cached result of `config` resolved for `description`, and detach any run in
- * flight so it cannot write one back. Call it when the provider rejects the key (401/403),
- * so the next request runs the command again. A no-op for non-command values.
+ * Forget the cached result of `config` resolved for `description` if it is still
+ * `rejectedValue`. Call it when the provider rejects that key (401/403), so the next request
+ * runs the command again. A cached value that differs came from a later run, and a run in
+ * flight started after the rejected key was handed out; both are kept, so N requests rejected
+ * together cause one re-run. A no-op for non-command values.
  */
-export function invalidateCommandSecret(config: string, description: string): void {
+export function invalidateCommandSecret(config: string, description: string, rejectedValue: string | undefined): void {
 	const reference = parseConfigValueReference(config);
 	if (reference.type !== "command") return;
 	const cacheKey = commandSecretKey(reference.config, description);
-	commandSecretCache.delete(cacheKey);
-	commandSecretInFlight.delete(cacheKey);
+	if (commandSecretCache.get(cacheKey)?.value === rejectedValue) commandSecretCache.delete(cacheKey);
 }
 
 /** Forget every cached request-time `!command` result and detach every run in flight. */

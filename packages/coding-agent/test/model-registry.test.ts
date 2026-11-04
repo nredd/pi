@@ -1851,7 +1851,7 @@ describe("ModelRegistry", () => {
 
 				expect(await registry.getApiKeyForProvider("custom-provider")).toBe("key-value");
 				expect(readFileSync(counterFile, "utf-8").trim()).toBe("3");
-				expect(sleep.mock.calls).toEqual(COMMAND_SECRET_RETRY_DELAYS_MS.map((ms) => [ms]));
+				expect(sleep.mock.calls.map(([ms]: unknown[]) => ms)).toEqual([...COMMAND_SECRET_RETRY_DELAYS_MS]);
 			});
 
 			test("a resolved command key is never persisted or logged (pi-harness#456)", async () => {
@@ -1914,7 +1914,7 @@ describe("ModelRegistry", () => {
 					respond: (
 						apiKey: string | undefined,
 						options: SimpleStreamOptions | undefined,
-					) => Promise<{ status?: number; errorMessage?: string }>,
+					) => Promise<{ status?: number; errorMessage?: string; partialText?: string }>,
 				) {
 					const counterFile = join(tempDir, "counter");
 					writeFileSync(counterFile, "0");
@@ -1931,6 +1931,9 @@ describe("ModelRegistry", () => {
 								const outcome = await respond(options?.apiKey, options);
 								const partial = reply(options?.apiKey);
 								stream.push({ type: "start", partial });
+								if (outcome.partialText !== undefined) {
+									stream.push({ type: "text_delta", contentIndex: 0, delta: outcome.partialText, partial });
+								}
 								if (outcome.status !== undefined) {
 									await options?.onResponse?.(
 										{ status: outcome.status, headers: {} },
@@ -1965,6 +1968,11 @@ describe("ModelRegistry", () => {
 					["a 401 error message", { errorMessage: "401 invalid x-api-key" }, true],
 					["a 403 response status", { status: 403, errorMessage: "Request failed" }, true],
 					["a 401 on a raw stream", { errorMessage: "Error: status code 401" }, false],
+					[
+						"an OpenAI invalid_api_key code",
+						{ errorMessage: "Incorrect API key provided (code: invalid_api_key)" },
+						true,
+					],
 				])("%s drops the cached key and retries once with a fresh one", async (_name, rejection, simple) => {
 					const provider = await rotatingProvider(async (apiKey) => (apiKey === "key-1" ? rejection : {}));
 
@@ -1990,6 +1998,48 @@ describe("ModelRegistry", () => {
 					expect(result).toMatchObject({ stopReason: "error", errorMessage: "401 authentication_error" });
 				});
 
+				test("a 401 after visible output is passed through, never retried", async () => {
+					const provider = await rotatingProvider(async () => ({
+						partialText: "Hel",
+						errorMessage: "401 authentication_error",
+					}));
+
+					const { events, result } = await provider.run();
+
+					expect(events).toEqual(["start", "text_delta", "error"]);
+					expect(provider.keys).toEqual(["key-1"]);
+					expect(provider.commandRuns()).toBe("1");
+					expect(result.errorMessage).toBe("401 authentication_error");
+				});
+
+				test("concurrent 401s on the same key re-run the command once, and keep the new key", async () => {
+					const provider = await rotatingProvider(async (apiKey) =>
+						apiKey === "key-1" ? { errorMessage: "401 authentication_error" } : {},
+					);
+
+					const results = await Promise.all([provider.run(), provider.run(), provider.run()]);
+
+					expect(results.map(({ result }) => result.stopReason)).toEqual(["stop", "stop", "stop"]);
+					expect(provider.keys).toEqual(["key-1", "key-1", "key-1", "key-2", "key-2", "key-2"]);
+					expect(provider.commandRuns()).toBe("2");
+					await provider.run();
+					expect(provider.keys.at(-1)).toBe("key-2");
+					expect(provider.commandRuns()).toBe("2");
+				});
+
+				test("a 401 on a caller-supplied key keeps the cached command key", async () => {
+					const provider = await rotatingProvider(async (apiKey) =>
+						apiKey === "caller-key" ? { errorMessage: "401 authentication_error" } : {},
+					);
+					expect(await provider.registry.getApiKeyForProvider("rotating-provider")).toBe("key-1");
+
+					const { result } = await provider.run({ apiKey: "caller-key" });
+
+					expect(result.errorMessage).toBe("401 authentication_error");
+					expect(await provider.registry.getApiKeyForProvider("rotating-provider")).toBe("key-1");
+					expect(provider.commandRuns()).toBe("1");
+				});
+
 				test("calls the caller's onResponse handler", async () => {
 					const provider = await rotatingProvider(async () => ({ status: 200 }));
 					const statuses: number[] = [];
@@ -2001,6 +2051,13 @@ describe("ModelRegistry", () => {
 
 				test.each([
 					["a non-auth error", { errorMessage: "500 overloaded" }, undefined, ["key-1"], "1"],
+					[
+						"a bare 'unauthorized' in prose",
+						{ errorMessage: "overloaded: unauthorized proxy hiccup" },
+						undefined,
+						["key-1"],
+						"1",
+					],
 					["an error without a message", { errorMessage: "" }, undefined, ["key-1"], "1"],
 					[
 						"a 401 on a caller-supplied key",

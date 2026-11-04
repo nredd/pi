@@ -97,11 +97,13 @@ import {
 } from "./virtual-models.ts";
 
 /**
- * A provider rejecting the request's credentials: HTTP 401/403 from `onResponse`, or the
- * status or error type SDK adapters put in the message when they throw before a response.
+ * A provider rejecting the request's credentials: HTTP 401/403 from `onResponse`, or, when an
+ * SDK adapter throws before a response, the status it leads its message with or names, or a
+ * provider's auth error code (Anthropic `authentication_error` / `permission_error`, OpenAI
+ * `invalid_api_key`). Bare words like "unauthorized" are not enough: proxies and models say them.
  */
 const AUTH_REJECTION_RE =
-	/^\s*(?:401|403)\b|\bstatus(?: code)?:?\s*(?:401|403)\b|authentication_error|permission_error|unauthorized|invalid[ _-]?(?:x-)?api[ _-]?key/i;
+	/^\s*(?:401|403)\b|\bstatus(?: code)?:?\s*(?:401|403)\b|\b(?:authentication_error|permission_error|invalid_api_key)\b/;
 
 function isAuthRejection(event: AssistantMessageEvent, status: number | undefined): boolean {
 	if (event.type !== "error" || event.reason !== "error") return false;
@@ -784,29 +786,38 @@ export class ModelRuntime implements Models {
 			options?.signal?.throwIfAborted();
 			recheck?.();
 			const events = send(prepared.provider, prepared.model, prepared.options);
-			return { events, authSource: prepared.authSource, status: () => status };
+			return { events, authSource: prepared.authSource, apiKey: prepared.options.apiKey, status: () => status };
 		};
-		const invalidate = () =>
+		const first = await attempt();
+		// Only a rejected configured `!command` key is worth re-resolving: a caller's, stored or
+		// inherited key would come back unchanged, and must not cost the command key its cache.
+		const retryAfterRejection = (event: AssistantMessageEvent) =>
+			first.authSource === "configured API key" &&
+			isAuthRejection(event, first.status()) &&
 			invalidateConfiguredApiKey(
 				model.provider,
 				this.config.getProvider(model.provider),
 				this.extensionProviders.get(model.provider),
+				first.apiKey,
 			);
-		const first = await attempt();
 		// The stream whose events were forwarded; its result is the request's result.
 		let source = first.events;
 		const events = (async function* () {
+			// `start` is held back until the first other event, so a retry before any output
+			// leaves no trace. Once output has been forwarded the request is never retried.
 			const held: AssistantMessageEvent[] = [];
+			let forwarded = false;
 			for await (const event of first.events) {
-				if (event.type === "start") {
+				if (!forwarded && event.type === "start") {
 					held.push(event);
 					continue;
 				}
-				if (isAuthRejection(event, first.status()) && invalidate() && first.authSource === "configured API key") {
+				if (!forwarded && retryAfterRejection(event)) {
 					source = (await attempt()).events;
 					yield* source;
 					return;
 				}
+				forwarded = true;
 				yield* held.splice(0);
 				yield event;
 			}

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
@@ -194,18 +194,21 @@ describe("resolveConfigValueOrThrowWithRetry (pi-harness#456)", () => {
 	function fakeDeps(...runs: CommandRun[]) {
 		const commands: string[] = [];
 		const sleeps: number[] = [];
+		const signals: AbortSignal[] = [];
 		const clock = { now: 5_000 };
 		const deps: CommandSecretDeps = {
-			run: async (command) => {
+			run: async (command, signal) => {
 				commands.push(command);
+				if (signal) signals.push(signal);
 				return runs[Math.min(commands.length - 1, runs.length - 1)];
 			},
-			sleep: async (ms) => {
+			sleep: async (ms, signal) => {
 				sleeps.push(ms);
+				if (signal) signals.push(signal);
 			},
 			now: () => clock.now,
 		};
-		return { deps, commands, sleeps, clock };
+		return { deps, commands, sleeps, signals, clock };
 	}
 
 	/** The error `promise` rejects with. */
@@ -375,7 +378,7 @@ describe("resolveConfigValueOrThrowWithRetry (pi-harness#456)", () => {
 		await expect(resolveConfigValueOrThrowWithRetry("!exit 9", "API key")).rejects.toThrow(
 			"command exited with code 9",
 		);
-		expect(sleep.mock.calls).toEqual(COMMAND_SECRET_RETRY_DELAYS_MS.map((ms) => [ms]));
+		expect(sleep.mock.calls.map(([ms]) => ms)).toEqual([...COMMAND_SECRET_RETRY_DELAYS_MS]);
 		expect(await resolveConfigValueOrThrowWithRetry("!echo real-runner", "API key")).toBe("real-runner");
 	});
 
@@ -456,9 +459,19 @@ describe("resolveConfigValueOrThrowWithRetry (pi-harness#456)", () => {
 	});
 
 	test.each([
-		["clearConfigValueCache", () => clearConfigValueCache()],
-		["invalidateCommandSecret", () => invalidateCommandSecret("!secret-helper get", "API key")],
-	])("%s stops a run in flight from caching its result", async (_name, clear) => {
+		[
+			"clearConfigValueCache stops a run in flight from caching its result",
+			() => clearConfigValueCache(),
+			2,
+			"key-2",
+		],
+		[
+			"invalidateCommandSecret keeps a run in flight, which started after the rejected key was handed out",
+			() => invalidateCommandSecret("!secret-helper get", "API key", "key-0"),
+			1,
+			"key-1",
+		],
+	] as const)("%s", async (_name, clear, runs, next) => {
 		let release: (run: CommandRun) => void = () => {};
 		const { deps, commands } = fakeDeps(ok("key-2"));
 		deps.run = async (command) => {
@@ -475,22 +488,25 @@ describe("resolveConfigValueOrThrowWithRetry (pi-harness#456)", () => {
 		release(ok("key-1"));
 
 		expect(await stale).toBe("key-1");
-		expect(await resolveConfigValueOrThrowWithRetry("!secret-helper get", "API key", undefined, deps)).toBe("key-2");
-		expect(commands).toHaveLength(2);
+		expect(await resolveConfigValueOrThrowWithRetry("!secret-helper get", "API key", undefined, deps)).toBe(next);
+		expect(commands).toHaveLength(runs);
 	});
 
-	test("invalidateCommandSecret drops a cached value and ignores non-command values", async () => {
+	test("invalidateCommandSecret drops only the rejected cached value, and ignores non-command values", async () => {
 		const { deps, commands } = fakeDeps(ok("key-1"), ok("key-2"));
 
 		expect(await resolveConfigValueOrThrowWithRetry("!secret-helper get", "provider a", undefined, deps)).toBe(
 			"key-1",
 		);
-		invalidateCommandSecret("literal-key", "provider a");
-		invalidateCommandSecret("!secret-helper get", "provider b");
+		invalidateCommandSecret("literal-key", "provider a", "key-1");
+		invalidateCommandSecret("!secret-helper get", "provider b", "key-1");
+		// A newer key than the rejected one is kept.
+		invalidateCommandSecret("!secret-helper get", "provider a", "key-0");
+		invalidateCommandSecret("!secret-helper get", "provider a", undefined);
 		expect(await resolveConfigValueOrThrowWithRetry("!secret-helper get", "provider a", undefined, deps)).toBe(
 			"key-1",
 		);
-		invalidateCommandSecret("!secret-helper get", "provider a");
+		invalidateCommandSecret("!secret-helper get", "provider a", "key-1");
 		expect(await resolveConfigValueOrThrowWithRetry("!secret-helper get", "provider a", undefined, deps)).toBe(
 			"key-2",
 		);
@@ -509,6 +525,159 @@ describe("resolveConfigValueOrThrowWithRetry (pi-harness#456)", () => {
 
 		expect(error.message).not.toContain(token);
 		expect(error.message).toContain(filler.slice(0, 100));
+	});
+
+	test("only a fully aborted run stops; each waiter leaves with its own abort reason", async () => {
+		let release: (run: CommandRun) => void = () => {};
+		const { deps, commands, signals } = fakeDeps(ok("unused"));
+		deps.run = async (command, signal) => {
+			commands.push(command);
+			if (signal) signals.push(signal);
+			return new Promise<CommandRun>((resolve) => {
+				release = resolve;
+			});
+		};
+		const [a, b] = [new AbortController(), new AbortController()];
+
+		const first = rejection(
+			resolveConfigValueOrThrowWithRetry("!secret-helper get", "API key", undefined, deps, a.signal),
+		);
+		const second = rejection(
+			resolveConfigValueOrThrowWithRetry("!secret-helper get", "API key", undefined, deps, b.signal),
+		);
+		a.abort(new Error("first request cancelled"));
+		expect((await first).message).toBe("first request cancelled");
+		expect(signals[0].aborted).toBe(false);
+		b.abort(new Error("second request cancelled"));
+		expect((await second).message).toBe("second request cancelled");
+		expect(signals[0].aborted).toBe(true);
+		// The stopped run's late result is discarded, not cached.
+		release(ok("key-late"));
+		await Promise.resolve();
+		expect(commands).toHaveLength(1);
+
+		deps.run = async (command) => {
+			commands.push(command);
+			return ok("key-fresh");
+		};
+		expect(await resolveConfigValueOrThrowWithRetry("!secret-helper get", "API key", undefined, deps)).toBe(
+			"key-fresh",
+		);
+		expect(commands).toHaveLength(2);
+	});
+
+	test("aborting a run detached by a clear leaves the run that replaced it alone", async () => {
+		const releases: Array<(run: CommandRun) => void> = [];
+		const { deps, commands } = fakeDeps(ok("unused"));
+		deps.run = async (command) => {
+			commands.push(command);
+			return new Promise<CommandRun>((resolve) => {
+				releases.push(resolve);
+			});
+		};
+		const controller = new AbortController();
+
+		const detached = rejection(
+			resolveConfigValueOrThrowWithRetry("!secret-helper get", "API key", undefined, deps, controller.signal),
+		);
+		clearConfigValueCache();
+		const current = resolveConfigValueOrThrowWithRetry("!secret-helper get", "API key", undefined, deps);
+		controller.abort(new Error("cancelled"));
+		await detached;
+		releases[1](ok("key-current"));
+
+		expect(await current).toBe("key-current");
+		expect(await resolveConfigValueOrThrowWithRetry("!secret-helper get", "API key", undefined, deps)).toBe(
+			"key-current",
+		);
+		expect(commands).toHaveLength(2);
+	});
+
+	test("a waiter without a signal keeps the shared run alive", async () => {
+		let release: (run: CommandRun) => void = () => {};
+		const { deps, signals } = fakeDeps(ok("unused"));
+		deps.run = async (_command, signal) => {
+			if (signal) signals.push(signal);
+			return new Promise<CommandRun>((resolve) => {
+				release = resolve;
+			});
+		};
+		const controller = new AbortController();
+
+		const leaving = rejection(
+			resolveConfigValueOrThrowWithRetry("!secret-helper get", "API key", undefined, deps, controller.signal),
+		);
+		const staying = resolveConfigValueOrThrowWithRetry("!secret-helper get", "API key", undefined, deps);
+		controller.abort(new Error("cancelled"));
+		await leaving;
+		release(ok("key-1"));
+
+		expect(await staying).toBe("key-1");
+		expect(signals[0].aborted).toBe(false);
+	});
+
+	test("passes the run's signal to the command and the retry sleeps, and rejects an aborted request at once", async () => {
+		const { deps, commands, signals } = fakeDeps(exit(1), ok("key-1"));
+
+		expect(await resolveConfigValueOrThrowWithRetry("!secret-helper get", "API key", undefined, deps)).toBe("key-1");
+		expect(signals).toHaveLength(3);
+		expect(new Set(signals).size).toBe(1);
+
+		const aborted = AbortSignal.abort(new Error("already cancelled"));
+		clearConfigValueCache();
+		await expect(
+			resolveConfigValueOrThrowWithRetry("!secret-helper get", "API key", undefined, deps, aborted),
+		).rejects.toThrow("already cancelled");
+		expect(commands).toHaveLength(2);
+	});
+
+	test("the default sleep stops when its signal aborts", async () => {
+		await expect(commandSecretDeps.sleep(60_000, AbortSignal.abort(new Error("gone")))).rejects.toThrow("gone");
+		const controller = new AbortController();
+		const sleeping = commandSecretDeps.sleep(60_000, controller.signal);
+		controller.abort(new Error("gone later"));
+		await expect(sleeping).rejects.toThrow("gone later");
+		await expect(commandSecretDeps.sleep(1, new AbortController().signal)).resolves.toBeUndefined();
+	});
+
+	test("never returns output a run could not finish, such as capped stdout", async () => {
+		const { deps } = fakeDeps({
+			status: 0,
+			signal: null,
+			stdout: "partial-key",
+			stderr: "",
+			error: new Error("stdout exceeded 1048576 bytes"),
+		});
+
+		const error = await rejection(
+			resolveConfigValueOrThrowWithRetry("!secret-helper get", "API key", undefined, deps),
+		);
+
+		expect(error.message).toContain("(stdout exceeded 1048576 bytes)");
+		expect(error.message).not.toContain("partial-key");
+	});
+
+	test("redaction only ever sees a bounded stderr window, however much the command printed", async () => {
+		// 1.2 MB of `ab-ab-...`: the shape that made the old `key=` pattern backtrack quadratically.
+		const { deps } = fakeDeps(exit(1, `${"ab-".repeat(400_000)}token=fake-secret-value`));
+		const inputs: number[] = [];
+		const replace = RegExp.prototype[Symbol.replace];
+		vi.spyOn(RegExp.prototype, Symbol.replace).mockImplementation(function (
+			this: RegExp,
+			text: string,
+			replacer: (substring: string, ...args: unknown[]) => string,
+		) {
+			inputs.push(text.length);
+			return replace.call(this, text, replacer);
+		});
+
+		const error = await rejection(
+			resolveConfigValueOrThrowWithRetry("!secret-helper get", "API key", undefined, deps),
+		);
+
+		expect(error.message).toContain("token=[REDACTED]");
+		expect(error.message).not.toContain("fake-secret-value");
+		expect(Math.max(...inputs)).toBeLessThan(6_000);
 	});
 
 	test("redacts a spawn error message", async () => {
@@ -532,6 +701,9 @@ describe("resolveConfigValueOrThrowWithRetry (pi-harness#456)", () => {
 describe("redactSecrets", () => {
 	test.each([
 		["Bearer abc.def.ghi", "Bearer [REDACTED]"],
+		["Authorization: Bearer abcdefghijkl", "Authorization: Bearer [REDACTED]"],
+		["HELPER_TOKEN=abc", "HELPER_TOKEN=[REDACTED]"],
+		["helper -P hunter2", "helper -P [REDACTED]"],
 		["Token Zm9vYmFyYmF6", "Token [REDACTED]"],
 		["blob dGhpcyBpcyBhIHNlY3JldA/9xQ== end", "blob [REDACTED] end"],
 		["jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.c2lnbmF0dXJl", "jwt [REDACTED]"],
@@ -560,6 +732,9 @@ describe("redactSecrets", () => {
 		"Basic authentication required",
 		"helper --verbose -q",
 		"see https://docs.example.com/v1/errors/expired-credentials-handling",
+		"retry_count=3 and mode: fast",
+		"helper --url https://example.com",
+		"ab-".repeat(80_000),
 	])("keeps %s readable", (input) => {
 		expect(redactSecrets(input)).toBe(input);
 	});
@@ -581,13 +756,56 @@ describe("runCommandAsync (pi-harness#456)", () => {
 	});
 
 	test("kills a command that outlives its timeout", async () => {
-		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-		const run = runCommandAsync("exec sleep 30", 5_000);
-		await vi.advanceTimersByTimeAsync(5_000);
+		const result = await runCommandAsync("exec sleep 30", { timeoutMs: 50 });
 
-		const result = await run;
 		expect(result).toMatchObject({ status: null, signal: "SIGTERM" });
-		expect(result.error?.message).toBe("timed out after 5000 ms");
+		expect(result.error?.message).toBe("timed out after 50 ms");
+	});
+
+	test("escalates to SIGKILL when the command ignores SIGTERM", async () => {
+		const result = await runCommandAsync("trap '' TERM; while :; do sleep 0.05; done", {
+			timeoutMs: 50,
+			killGraceMs: 50,
+		});
+
+		expect(result).toMatchObject({ status: null, signal: "SIGKILL" });
+		expect(result.error?.message).toBe("timed out after 50 ms");
+	});
+
+	test("stops a command when its signal aborts", async () => {
+		const controller = new AbortController();
+		const run = runCommandAsync("exec sleep 30", { signal: controller.signal });
+		controller.abort();
+
+		await expect(run).resolves.toMatchObject({ signal: "SIGTERM", error: { message: "aborted" } });
+		await expect(runCommandAsync("exec sleep 30", { signal: AbortSignal.abort() })).resolves.toMatchObject({
+			error: { message: "aborted" },
+		});
+	});
+
+	test("finishes when the shell exits even if a grandchild still holds its pipes", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "pi-grandchild-"));
+		const pidFile = join(dir, "pid");
+		try {
+			const result = await runCommandAsync(`sleep 30 & echo $! > '${pidFile}'; echo key-from-shell`, {
+				exitGraceMs: 20,
+			});
+
+			expect(result).toMatchObject({ status: 0, signal: null, stdout: "key-from-shell\n" });
+		} finally {
+			// The backgrounded `sleep` was spawned by this test: stop exactly that pid.
+			const pid = Number(readFileSync(pidFile, "utf-8").trim());
+			if (pid > 1) process.kill(pid, "SIGTERM");
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test("caps each output stream at 1 MB", async () => {
+		const result = await runCommandAsync("head -c 3000000 /dev/zero | tr '\\0' a; echo done >&2");
+
+		expect(result.stdout).toHaveLength(1024 * 1024);
+		expect(result.stdout).toMatch(/^a+$/);
+		expect(result.error?.message).toBe("stdout exceeded 1048576 bytes");
 	});
 
 	test("feeds stdin to a configured Windows shell that reads its command from stdin", async () => {
@@ -601,6 +819,22 @@ describe("runCommandAsync (pi-harness#456)", () => {
 		try {
 			Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
 			await expect(runCommandAsync("echo from-stdin")).resolves.toMatchObject({ status: 0, stdout: "from-stdin\n" });
+		} finally {
+			if (platformDescriptor) Object.defineProperty(process, "platform", platformDescriptor);
+		}
+	});
+
+	test("survives a configured stdin shell that exits without reading its stdin (EPIPE)", async () => {
+		if (process.platform === "win32") return;
+		const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+		vi.spyOn(shellModule, "getShellConfig").mockReturnValue({
+			shell: "/bin/sh",
+			args: ["-c", "exit 3"],
+			commandTransport: "stdin",
+		});
+		try {
+			Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+			await expect(runCommandAsync("x".repeat(8 * 1024 * 1024))).resolves.toMatchObject({ status: 3 });
 		} finally {
 			if (platformDescriptor) Object.defineProperty(process, "platform", platformDescriptor);
 		}

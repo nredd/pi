@@ -30,6 +30,7 @@ import { classifierErrorResult, imageErrorResult } from "@earendil-works/pi-ai/u
 import type { ModelConfig, ModelsJsonModel, ModelsJsonModelOverride, ModelsJsonProvider } from "./model-config.ts";
 import {
 	clearConfigValueCache,
+	commandSecretDeps,
 	getConfigValueEnvVarNames,
 	invalidateCommandSecret,
 	isCommandConfigValue,
@@ -396,17 +397,19 @@ function configuredApiKey(
 const apiKeyDescription = (providerId: string) => `API key for provider "${providerId}"`;
 
 /**
- * Drop the cached result of a provider's configured `!command` API key, so the next request
- * runs the command again. Returns whether the configured key is command-backed.
+ * Drop the cached result of a provider's configured `!command` API key if it is still the
+ * rejected key, so the next request runs the command again. Returns whether the configured
+ * key is command-backed.
  */
 export function invalidateConfiguredApiKey(
 	providerId: string,
 	config: ModelsJsonProvider | undefined,
 	extension: ProviderConfigInput | undefined,
+	rejectedKey: string | undefined,
 ): boolean {
 	const rawKey = configuredApiKey(config, extension);
 	if (rawKey === undefined || !isCommandConfigValue(rawKey)) return false;
-	invalidateCommandSecret(rawKey, apiKeyDescription(providerId));
+	invalidateCommandSecret(rawKey, apiKeyDescription(providerId), rejectedKey);
 	return true;
 }
 
@@ -482,7 +485,13 @@ function composeApiKeyAuth(
 						: undefined;
 			} else if (rawKey !== undefined) {
 				const env = await configContextEnv([rawKey], input.ctx);
-				const key = await resolveConfigValueOrThrowWithRetry(rawKey, apiKeyDescription(providerId), env);
+				const key = await resolveConfigValueOrThrowWithRetry(
+					rawKey,
+					apiKeyDescription(providerId),
+					env,
+					commandSecretDeps,
+					input.signal,
+				);
 				result = inherited
 					? await inherited.resolve({ ...input, credential: { type: "api_key", key } })
 					: { auth: { apiKey: key }, source: "configured API key" };

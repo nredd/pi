@@ -244,6 +244,33 @@ describe("transcript system messages", () => {
 		expect(payload.messages.at(-1)).toMatchObject({ role: "user" });
 	});
 
+	test("defines a never-declared Anthropic tool redefined in place and honors its later removal", async () => {
+		const payload = await capturePayload<AnthropicPayload>(anthropicNativeModel, {
+			messages: [
+				{ role: "system", content: "base prompt", toolsAdded: [baseTool], timestamp: 0 },
+				{ role: "user", content: "first", timestamp: 1 },
+				// The earlier addition of late_tool was projected away, so only its redefinition remains.
+				{
+					role: "system",
+					content: "",
+					toolsRemoved: [{ name: "late_tool" }],
+					toolsAdded: [lateTool],
+					timestamp: 2,
+				},
+				{ role: "assistant", content: [{ type: "text", text: "added" }], ...assistantBase, timestamp: 3 },
+				{ role: "system", content: "", toolsRemoved: [{ name: "late_tool" }], timestamp: 4 },
+				{ role: "user", content: "again", timestamp: 5 },
+			],
+		});
+
+		const systemBlocks = payload.messages
+			.filter((message) => message.role === "system")
+			.map((message) =>
+				message.content.map((block) => `${block.type}:${block.tool?.name ?? block.tool?.definition?.name}`),
+			);
+		expect(systemBlocks).toEqual([["tool_addition:late_tool"], ["tool_removal:late_tool"]]);
+	});
+
 	test("sends the current Anthropic tool list without an initial tool", async () => {
 		// Anthropic rejects a tool list where every tool (here: the placeholder) is deferred.
 		const payload = await capturePayload<AnthropicPayload>(anthropicNativeModel, {

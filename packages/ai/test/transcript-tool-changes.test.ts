@@ -1,7 +1,7 @@
 import { Type } from "typebox";
 import { describe, expect, test } from "vitest";
 import { getModel, streamSimple } from "../src/compat.ts";
-import type { Api, Context, Model, Tool } from "../src/types.ts";
+import type { Api, AssistantMessage, Context, Model, Tool } from "../src/types.ts";
 
 class PayloadCaptured extends Error {}
 
@@ -31,6 +31,21 @@ const modelBase = {
 	contextWindow: 100000,
 	maxTokens: 1000,
 };
+
+const assistantBase = {
+	api: "anthropic-messages",
+	provider: "anthropic",
+	model: "claude-opus-5",
+	usage: {
+		input: 0,
+		output: 0,
+		cacheRead: 0,
+		cacheWrite: 0,
+		totalTokens: 0,
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+	},
+	stopReason: "stop",
+} satisfies Omit<AssistantMessage, "role" | "content" | "timestamp">;
 
 const baseTool = tool("base_tool");
 const lateTool = tool("late_tool");
@@ -172,6 +187,88 @@ describe("transcript system messages", () => {
 			],
 		});
 		expect(payload.messages.at(-1)?.content).toHaveLength(1);
+	});
+
+	// Regression nredd/pi-harness#435: a context handler that hides an inactive tool's earlier
+	// addition but keeps its later removal left a reference Anthropic rejects as unresolved.
+	test("drops an Anthropic tool removal the request never declared", async () => {
+		const payload = await capturePayload<AnthropicPayload>(anthropicNativeModel, {
+			messages: [
+				{ role: "system", content: "base prompt", toolsAdded: [baseTool], timestamp: 0 },
+				{ role: "user", content: "before", timestamp: 1 },
+				{ role: "system", content: "", toolsRemoved: [{ name: "late_tool" }], timestamp: 2 },
+				{ role: "user", content: "resume", timestamp: 3 },
+			],
+		});
+
+		expect(payload.tools?.map((tool) => tool.name)).toEqual(["base_tool", "__pi_deferred_placeholder__"]);
+		// The update carried nothing else, so no system message is sent, and the cache
+		// breakpoint stays on the last user message.
+		expect(payload.messages).toEqual([
+			{ role: "user", content: "before" },
+			{ role: "user", content: [{ type: "text", text: "resume", cache_control: { type: "ephemeral" } }] },
+		]);
+	});
+
+	test("keeps Anthropic removals that match earlier declarations", async () => {
+		const payload = await capturePayload<AnthropicPayload>(anthropicNativeModel, {
+			messages: [
+				{ role: "system", content: "base prompt", toolsAdded: [baseTool], timestamp: 0 },
+				{ role: "user", content: "first", timestamp: 1 },
+				{ role: "system", content: "", toolsAdded: [lateTool], timestamp: 2 },
+				{ role: "assistant", content: [{ type: "text", text: "added" }], ...assistantBase, timestamp: 3 },
+				{
+					role: "system",
+					content: "late gone",
+					toolsRemoved: [{ name: "late_tool" }, { name: "base_tool" }, { name: "unknown_tool" }],
+					timestamp: 4,
+				},
+				{ role: "assistant", content: [{ type: "text", text: "removed" }], ...assistantBase, timestamp: 5 },
+				// A second removal of the same tool no longer has anything to withdraw.
+				{ role: "system", content: "", toolsRemoved: [{ name: "late_tool" }], timestamp: 6 },
+				{ role: "user", content: "again", timestamp: 7 },
+			],
+		});
+
+		const systemBlocks = payload.messages
+			.filter((message) => message.role === "system")
+			.map((message) =>
+				message.content.map(
+					(block) => `${block.type}:${block.tool?.name ?? block.tool?.definition?.name ?? block.text}`,
+				),
+			);
+		expect(systemBlocks).toEqual([
+			["tool_addition:late_tool"],
+			["text:late gone", "tool_removal:late_tool", "tool_removal:base_tool"],
+		]);
+		expect(payload.messages.at(-1)).toMatchObject({ role: "user" });
+	});
+
+	test("defines a never-declared Anthropic tool redefined in place and honors its later removal", async () => {
+		const payload = await capturePayload<AnthropicPayload>(anthropicNativeModel, {
+			messages: [
+				{ role: "system", content: "base prompt", toolsAdded: [baseTool], timestamp: 0 },
+				{ role: "user", content: "first", timestamp: 1 },
+				// The earlier addition of late_tool was projected away, so only its redefinition remains.
+				{
+					role: "system",
+					content: "",
+					toolsRemoved: [{ name: "late_tool" }],
+					toolsAdded: [lateTool],
+					timestamp: 2,
+				},
+				{ role: "assistant", content: [{ type: "text", text: "added" }], ...assistantBase, timestamp: 3 },
+				{ role: "system", content: "", toolsRemoved: [{ name: "late_tool" }], timestamp: 4 },
+				{ role: "user", content: "again", timestamp: 5 },
+			],
+		});
+
+		const systemBlocks = payload.messages
+			.filter((message) => message.role === "system")
+			.map((message) =>
+				message.content.map((block) => `${block.type}:${block.tool?.name ?? block.tool?.definition?.name}`),
+			);
+		expect(systemBlocks).toEqual([["tool_addition:late_tool"], ["tool_removal:late_tool"]]);
 	});
 
 	test("sends the current Anthropic tool list without an initial tool", async () => {

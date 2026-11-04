@@ -5,6 +5,7 @@ import {
 	type ApiStreamOptions,
 	type AssistantImages,
 	type AssistantMessage,
+	type AssistantMessageEvent,
 	type AssistantMessageEventStream,
 	type AuthCheck,
 	type AuthInteraction,
@@ -76,12 +77,14 @@ import {
 	type CompatibilityRequestConfig,
 	composeModelProvider,
 	configuredRequestAuthStatus,
+	invalidateConfiguredApiKey,
 	type ProviderConfigInput,
 	resolveCompatibilityRequestConfig,
 	resolveConfiguredModelHeaders,
 	validateExtensionProvider,
 } from "./provider-composer.ts";
 import { withPersonalizedCatalog, withRemoteCatalog } from "./remote-catalog-provider.ts";
+import { clearCommandSecretCache } from "./resolve-config-value.ts";
 import { RuntimeCredentials } from "./runtime-credentials.ts";
 import {
 	createVirtualModel,
@@ -92,6 +95,18 @@ import {
 	type VirtualModelDefinition,
 	withVirtualModels,
 } from "./virtual-models.ts";
+
+/**
+ * A provider rejecting the request's credentials: HTTP 401/403 from `onResponse`, or the
+ * status or error type SDK adapters put in the message when they throw before a response.
+ */
+const AUTH_REJECTION_RE =
+	/^\s*(?:401|403)\b|\bstatus(?: code)?:?\s*(?:401|403)\b|authentication_error|permission_error|unauthorized|invalid[ _-]?(?:x-)?api[ _-]?key/i;
+
+function isAuthRejection(event: AssistantMessageEvent, status: number | undefined): boolean {
+	if (event.type !== "error" || event.reason !== "error") return false;
+	return status === 401 || status === 403 || AUTH_REJECTION_RE.test(event.error.errorMessage ?? "");
+}
 
 interface RegisteredVirtualModel {
 	model: Model<Api>;
@@ -704,6 +719,7 @@ export class ModelRuntime implements Models {
 		provider: Provider;
 		model: TModel;
 		options: Omit<TOptions, "transformHeaders"> & ProviderRequestOptions<TModel>;
+		authSource: string | undefined;
 	}> {
 		const provider = this.models.getProvider(model.provider);
 		if (!provider) throw new ModelsError("provider", `Unknown provider: ${model.provider}`);
@@ -736,7 +752,67 @@ export class ModelRuntime implements Models {
 				headers,
 				env,
 			} as Omit<TOptions, "transformHeaders"> & ProviderRequestOptions<TModel>,
+			authSource: providerOptions.apiKey === undefined ? resolution.source : "request option",
 		};
+	}
+
+	/**
+	 * Prepare and dispatch one request. When the provider rejects the credentials (401/403),
+	 * a cached `!command` API key is dropped so no later request reuses it. If this request used
+	 * that configured key, it is resolved fresh and the request is sent once more; a second
+	 * rejection is returned as is, so a persistently rejected key never loops. Events before
+	 * the rejection (at most `start`) are held back so a retried attempt reads as one response.
+	 */
+	private async dispatch<
+		TModel extends Model<Api>,
+		TOptions extends ProviderRequestOptions<TModel> & ModelsRequestTransforms & BeforeProviderRequestOptions,
+	>(
+		model: TModel,
+		options: TOptions | undefined,
+		send: (provider: Provider, model: TModel, options: ProviderRequestOptions<TModel>) => AssistantMessageEventStream,
+	): Promise<AsyncIterable<AssistantMessageEvent> & { result(): Promise<AssistantMessage> }> {
+		const attempt = async () => {
+			let status: number | undefined;
+			const onResponse: ProviderRequestOptions<TModel>["onResponse"] = async (response, responseModel) => {
+				status = response.status;
+				await options?.onResponse?.(response, responseModel);
+			};
+			const prepared = await this.prepareRequest(model, { ...options, onResponse } as TOptions);
+			const recheck = await options?.beforeProviderRequest?.();
+			// A request cancelled while it was being prepared (a fatal startup aborts in-flight
+			// work) must not dispatch once its transforms resume, recovery or not.
+			options?.signal?.throwIfAborted();
+			recheck?.();
+			const events = send(prepared.provider, prepared.model, prepared.options);
+			return { events, authSource: prepared.authSource, status: () => status };
+		};
+		const invalidate = () =>
+			invalidateConfiguredApiKey(
+				model.provider,
+				this.config.getProvider(model.provider),
+				this.extensionProviders.get(model.provider),
+			);
+		const first = await attempt();
+		// The stream whose events were forwarded; its result is the request's result.
+		let source = first.events;
+		const events = (async function* () {
+			const held: AssistantMessageEvent[] = [];
+			for await (const event of first.events) {
+				if (event.type === "start") {
+					held.push(event);
+					continue;
+				}
+				if (isAuthRejection(event, first.status()) && invalidate() && first.authSource === "configured API key") {
+					source = (await attempt()).events;
+					yield* source;
+					return;
+				}
+				yield* held.splice(0);
+				yield event;
+			}
+			yield* held;
+		})();
+		return Object.assign(events, { result: () => source.result() });
 	}
 
 	stream<TApi extends Api>(
@@ -747,16 +823,12 @@ export class ModelRuntime implements Models {
 		const transcript = normalizeContext(context);
 		return lazyStream(model, async () => {
 			assertChatModel(model);
-			const prepared = await this.prepareRequest(
+			return this.dispatch(
 				model,
-				options as (StreamOptions & ModelsRequestTransforms) | undefined,
+				options as (StreamOptions & ModelsRequestTransforms & BeforeProviderRequestOptions) | undefined,
+				(provider, requestModel, requestOptions) =>
+					provider.stream(requestModel, transcript, requestOptions as ApiStreamOptions<TApi>),
 			);
-			const recheck = await options?.beforeProviderRequest?.();
-			// A request cancelled while it was being prepared (a fatal startup aborts in-flight
-			// work) must not dispatch once its transforms resume, recovery or not.
-			options?.signal?.throwIfAborted();
-			recheck?.();
-			return prepared.provider.stream(prepared.model, transcript, prepared.options as ApiStreamOptions<TApi>);
 		});
 	}
 
@@ -795,13 +867,9 @@ export class ModelRuntime implements Models {
 		}
 		return lazyStream(model, async () => {
 			assertChatModel(model);
-			const prepared = await this.prepareRequest(model, options);
-			const recheck = await options?.beforeProviderRequest?.();
-			// A request cancelled while it was being prepared (a fatal startup aborts in-flight
-			// work) must not dispatch once its transforms resume, recovery or not.
-			options?.signal?.throwIfAborted();
-			recheck?.();
-			return prepared.provider.streamSimple(prepared.model, transcript, prepared.options as SimpleStreamOptions);
+			return this.dispatch(model, options, (provider, requestModel, requestOptions) =>
+				provider.streamSimple(requestModel, transcript, requestOptions as SimpleStreamOptions),
+			);
 		});
 	}
 
@@ -925,7 +993,11 @@ export class ModelRuntime implements Models {
 	}
 
 	async refresh(options: ModelsRefreshOptions = {}): Promise<ModelsRefreshResult> {
+		const previous = this.config;
 		this.config = await ModelConfig.load(this.modelsPath);
+		// A changed models.json may change what a `!command` key resolves to: run it again. An
+		// unchanged one keeps the cache, which other runtimes in this process share.
+		if (!previous.sameProviders(this.config)) clearCommandSecretCache();
 		this.configureRadiusProviders();
 		if (options.providers) {
 			for (const providerId of new Set(options.providers)) this.recomposeProvider(providerId);

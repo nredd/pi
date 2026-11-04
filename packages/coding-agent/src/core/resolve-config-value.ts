@@ -3,7 +3,7 @@
  * Used by auth-storage.ts and model-registry.ts.
  */
 
-import { type SpawnSyncReturns, spawnSync } from "child_process";
+import { spawn, spawnSync } from "child_process";
 import { getShellConfig } from "../utils/shell.ts";
 
 // Cache for shell command results (persists for process lifetime)
@@ -162,16 +162,47 @@ export interface CommandRun {
 }
 
 /** Runs the shell text of a `!command` (without the `!`). */
-export type CommandRunner = (command: string) => CommandRun | Promise<CommandRun>;
+export type CommandRunner = (command: string) => Promise<CommandRun>;
 
-/** A `!command` attempt that failed: the reason the error text carries. */
-type CommandFailure = { failure: string };
+/** Why a `!command` attempt produced no secret, and whether running it again could help. */
+interface CommandFailure {
+	failure: string;
+	/** The shell could not find or execute the command (exit 126/127, or it never started). */
+	permanent: boolean;
+}
 
 const COMMAND_TIMEOUT_MS = 10_000;
 /** Longest stderr tail an error carries. */
 const COMMAND_STDERR_CHARS = 1_000;
 
-function toCommandRun(result: SpawnSyncReturns<string>): CommandRun {
+/** How the platform shell runs `command`: the configured Windows shell, else Node's default shell. */
+type ShellInvocation = { file: string; args: string[]; stdin?: string; shell: boolean };
+
+function configuredWindowsShell(command: string): ShellInvocation | undefined {
+	if (process.platform !== "win32") return undefined;
+	try {
+		const { shell, args, commandTransport } = getShellConfig();
+		return commandTransport === "stdin"
+			? { file: shell, args, stdin: command, shell: false }
+			: { file: shell, args: [...args, command], shell: false };
+	} catch {
+		return undefined;
+	}
+}
+
+const defaultShell = (command: string): ShellInvocation => ({ file: command, args: [], shell: true });
+
+const isMissingShell = (error: Error | undefined) => (error as NodeJS.ErrnoException | undefined)?.code === "ENOENT";
+
+function runSync(invocation: ShellInvocation): CommandRun {
+	const result = spawnSync(invocation.file, invocation.args, {
+		encoding: "utf-8",
+		input: invocation.stdin,
+		timeout: COMMAND_TIMEOUT_MS,
+		stdio: [invocation.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+		shell: invocation.shell,
+		windowsHide: true,
+	});
 	return {
 		status: result.status,
 		signal: result.signal,
@@ -181,80 +212,121 @@ function toCommandRun(result: SpawnSyncReturns<string>): CommandRun {
 	};
 }
 
-/** The configured Windows shell's run, or `undefined` when that shell is unavailable. */
-function runWithConfiguredShell(command: string): CommandRun | undefined {
-	let result: SpawnSyncReturns<string>;
-	try {
-		const { shell, args, commandTransport } = getShellConfig();
-		const commandFromStdin = commandTransport === "stdin";
-		result = spawnSync(shell, commandFromStdin ? args : [...args, command], {
-			encoding: "utf-8",
-			input: commandFromStdin ? command : undefined,
-			timeout: COMMAND_TIMEOUT_MS,
-			stdio: [commandFromStdin ? "pipe" : "ignore", "pipe", "pipe"],
-			shell: false,
+/** Run a `!command` once, blocking. For the synchronous resolvers only. */
+function runCommand(command: string): CommandRun {
+	const configured = configuredWindowsShell(command);
+	const run = configured && runSync(configured);
+	return run && !isMissingShell(run.error) ? run : runSync(defaultShell(command));
+}
+
+function runAsync(invocation: ShellInvocation, timeoutMs: number): Promise<CommandRun> {
+	return new Promise((resolve) => {
+		const child = spawn(invocation.file, invocation.args, {
+			stdio: [invocation.stdin === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+			shell: invocation.shell,
 			windowsHide: true,
 		});
-	} catch {
-		return undefined;
-	}
-	if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") return undefined;
-	return toCommandRun(result);
+		let stdout = "";
+		let stderr = "";
+		let error: Error | undefined;
+		child.stdout?.setEncoding("utf-8").on("data", (chunk: string) => {
+			stdout += chunk;
+		});
+		child.stderr?.setEncoding("utf-8").on("data", (chunk: string) => {
+			stderr += chunk;
+		});
+		child.stdin?.end(invocation.stdin);
+		const timer = setTimeout(() => {
+			error = new Error(`timed out after ${timeoutMs} ms`);
+			child.kill("SIGTERM");
+		}, timeoutMs);
+		let started = true;
+		child.on("error", (spawnError) => {
+			started = false;
+			error = spawnError;
+		});
+		child.on("close", (status, signal) => {
+			clearTimeout(timer);
+			// Node reports a spawn failure as exit -2 (or similar); it never ran, so it has no status.
+			resolve({ status: started ? status : null, signal, stdout, stderr, error });
+		});
+	});
 }
 
-/** Run a `!command` once with the platform shell. stdout and stderr are captured, never echoed. */
-function runCommand(command: string): CommandRun {
-	const configured = process.platform === "win32" ? runWithConfiguredShell(command) : undefined;
-	return (
-		configured ??
-		toCommandRun(
-			spawnSync(command, {
-				encoding: "utf-8",
-				timeout: COMMAND_TIMEOUT_MS,
-				stdio: ["ignore", "pipe", "pipe"],
-				shell: true,
-				windowsHide: true,
-			}),
-		)
-	);
+/** Run a `!command` once without blocking the event loop. The live runner of the retrying resolver. */
+export async function runCommandAsync(command: string, timeoutMs = COMMAND_TIMEOUT_MS): Promise<CommandRun> {
+	const configured = configuredWindowsShell(command);
+	const run = configured && (await runAsync(configured, timeoutMs));
+	return run && !isMissingShell(run.error) ? run : runAsync(defaultShell(command), timeoutMs);
 }
 
-// A credential that leaks into stderr or into the command text is replaced before
-// either reaches an error message. Three shapes: an auth scheme with its value, a
-// `key=value` / `token: value` pair, and any long opaque run of token characters
-// with both letters and digits (API keys, JWT segments, hex digests, UUIDs).
-// Dots and slashes end a run, so hostnames, URLs and paths stay readable.
-const AUTH_SCHEME_RE = /\b(Bearer|Basic|Token)\s+[^\s"',;]+/gi;
-const SECRET_ASSIGNMENT_RE =
-	/\b([\w-]*(?:api[_-]?key|token|secret|password|passwd|credential|authorization)[\w-]*["']?\s*[:=]\s*["']?)(?!(?:Bearer|Basic|Token)\s)[^\s"',;]+/gi;
-const OPAQUE_TOKEN_RE = /[A-Za-z0-9_+=-]{20,}/g;
+// A credential that leaks into stderr, an error message or the command text is replaced
+// before it reaches an error message. Shapes covered: URL userinfo, an auth scheme with a
+// token-like value, `key=value` / `token: value` pairs, a secret-named flag followed by its
+// value, and opaque runs of token characters (API keys, base64, JWTs, hex digests, UUIDs).
+const URL_USERINFO_RE = /\b([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi;
+const AUTH_SCHEME_RE = /\b(Bearer|Basic|Token)(\s+)([^\s"',;]{8,})/gi;
+const SECRET_NAME = String.raw`[\w-]*(?:api[_-]?key|token|secret|password|passwd|credential|authorization)[\w-]*`;
+const SECRET_ASSIGNMENT_RE = new RegExp(
+	String.raw`\b(${SECRET_NAME}["']?\s*[:=]\s*["']?)(?!(?:Bearer|Basic|Token)\s)[^\s"',;]+`,
+	"gi",
+);
+const SECRET_FLAG_RE = new RegExp(
+	String.raw`(^|\s)(--?(?:${SECRET_NAME}|key|p))(\s+)(?!-)("[^"]*"|'[^']*'|[^\s"']+)`,
+	"gi",
+);
+const TOKEN_RUN_RE = /[A-Za-z0-9+/=_.-]{20,}/g;
 const REDACTED = "[REDACTED]";
+
+const lettersAndDigits = (text: string) => /[A-Za-z]/.test(text) && /\d/.test(text);
+
+/**
+ * Whether a run of token characters is a credential. Without `/` or `.` any 20+ character
+ * run of letters and digits is. With them, hostnames, URLs and paths stay readable unless the
+ * run carries base64 markers (`+`, trailing `=`) or a 12+ character letter-and-digit segment
+ * (a JWT part, a base64 chunk).
+ */
+function isOpaqueToken(run: string): boolean {
+	if (!/[/.]/.test(run)) return lettersAndDigits(run);
+	if (/\+|=$/.test(run) && lettersAndDigits(run)) return true;
+	return run.split(/[/.]/).some((segment) => segment.length >= 12 && lettersAndDigits(segment));
+}
 
 /** `text` with anything that looks like a credential replaced by `[REDACTED]`. */
 export function redactSecrets(text: string): string {
-	return text
-		.replace(AUTH_SCHEME_RE, `$1 ${REDACTED}`)
-		.replace(SECRET_ASSIGNMENT_RE, `$1${REDACTED}`)
-		.replace(OPAQUE_TOKEN_RE, (run) => (/[A-Za-z]/.test(run) && /\d/.test(run) ? REDACTED : run));
+	return (
+		text
+			.replace(URL_USERINFO_RE, `$1${REDACTED}@`)
+			// An all-lowercase or Capitalized word after `Token`/`Basic` is prose ("Token refresh failed").
+			.replace(AUTH_SCHEME_RE, (match, scheme: string, space: string, value: string) =>
+				/^[A-Z]?[a-z]+$/.test(value) ? match : `${scheme}${space}${REDACTED}`,
+			)
+			.replace(SECRET_ASSIGNMENT_RE, `$1${REDACTED}`)
+			.replace(SECRET_FLAG_RE, `$1$2$3${REDACTED}`)
+			.replace(TOKEN_RUN_RE, (run) => (isOpaqueToken(run) ? REDACTED : run))
+	);
 }
 
-/** The secret a run printed, or why it produced none. Never includes stdout in a failure. */
+/** The secret a run printed, or why it produced none. Failed-run stdout never reaches the reason. */
 function commandOutcome(run: CommandRun): { value: string } | CommandFailure {
 	const value = run.stdout.trim();
 	let failure: string;
+	let permanent = false;
 	if (run.error && run.status === null) {
 		failure = `could not run the command (${run.error.message})`;
+		permanent = isMissingShell(run.error);
 	} else if (run.status !== 0) {
 		failure = run.signal ? `command was killed by ${run.signal}` : `command exited with code ${run.status}`;
+		permanent = run.status === 126 || run.status === 127;
 	} else if (value) {
 		return { value };
 	} else {
 		failure = "command exited 0 but printed no secret (empty output)";
 	}
-	const stderr = run.stderr.trim();
-	return stderr
-		? { failure: `${failure}; stderr: ${redactSecrets(stderr.slice(-COMMAND_STDERR_CHARS))}` }
-		: { failure };
+	// Redact the whole stderr first: cutting it first could drop a `Bearer`/`key=` prefix
+	// and leave its value in the tail unrecognized.
+	const stderr = redactSecrets(run.stderr.trim()).slice(-COMMAND_STDERR_CHARS);
+	return { failure: redactSecrets(stderr ? `${failure}; stderr: ${stderr}` : failure), permanent };
 }
 
 function commandError(description: string, commandConfig: string, failure: string): Error {
@@ -326,41 +398,52 @@ export interface CommandSecretDeps {
 
 /** The live effects. Tests replace members with `vi.spyOn` to avoid real sleeps and clocks. */
 export const commandSecretDeps: CommandSecretDeps = {
-	run: runCommand,
+	run: (command) => runCommandAsync(command),
 	sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
 	now: () => Date.now(),
 };
 
-// In-memory only: a resolved secret is never written to disk or logged.
+// In-memory only: a resolved secret is never written to disk or logged. A run may write its
+// result only while it still owns its in-flight slot, so a clear or an invalidation that lands
+// mid-run is never undone by that run.
 const commandSecretCache = new Map<string, { value: string; expiresAt: number }>();
-const commandSecretInFlight = new Map<string, Promise<string>>();
+const commandSecretInFlight = new Map<string, { owner: object; result: Promise<string> }>();
+
+const commandSecretKey = (commandConfig: string, description: string) => `${description}\0${commandConfig}`;
 
 async function resolveCommandSecret(
 	commandConfig: string,
 	description: string,
 	cacheKey: string,
+	owner: object,
 	deps: CommandSecretDeps,
 ): Promise<string> {
-	let failure = "";
-	for (let attempt = 0; attempt < COMMAND_SECRET_ATTEMPTS; attempt++) {
-		if (attempt > 0) await deps.sleep(COMMAND_SECRET_RETRY_DELAYS_MS[attempt - 1]);
+	let attempt = 0;
+	for (;;) {
 		const outcome = commandOutcome(await deps.run(commandConfig.slice(1)));
 		if ("value" in outcome) {
-			commandSecretCache.set(cacheKey, { value: outcome.value, expiresAt: deps.now() + COMMAND_SECRET_TTL_MS });
+			if (commandSecretInFlight.get(cacheKey)?.owner === owner) {
+				commandSecretCache.set(cacheKey, { value: outcome.value, expiresAt: deps.now() + COMMAND_SECRET_TTL_MS });
+			}
 			return outcome.value;
 		}
-		failure = outcome.failure;
+		attempt++;
+		if (outcome.permanent || attempt >= COMMAND_SECRET_ATTEMPTS) {
+			const attempts = attempt === 1 ? "1 attempt" : `${attempt} attempts`;
+			throw commandError(description, commandConfig, `${outcome.failure}; failed ${attempts}`);
+		}
+		await deps.sleep(COMMAND_SECRET_RETRY_DELAYS_MS[attempt - 1]);
 	}
-	throw commandError(description, commandConfig, `${failure}; failed ${COMMAND_SECRET_ATTEMPTS} attempts`);
 }
 
 /**
- * Request-time variant of {@link resolveConfigValueOrThrow}. A `!command` that
- * fails is retried up to {@link COMMAND_SECRET_ATTEMPTS} times with short
- * backoff, since secret helpers fail transiently under concurrency. Its output
- * is reused for {@link COMMAND_SECRET_TTL_MS} per `description` and command, and
- * concurrent callers share one run. Failures are never cached. Environment and
- * literal values resolve exactly as in the synchronous variant.
+ * Request-time variant of {@link resolveConfigValueOrThrow}. A `!command` runs without
+ * blocking the event loop; one that fails is retried up to {@link COMMAND_SECRET_ATTEMPTS}
+ * times with short backoff, since secret helpers fail transiently under concurrency, unless
+ * the failure is permanent (exit 126/127, or the shell is missing). Its output is reused for
+ * {@link COMMAND_SECRET_TTL_MS} per `description` and command, and concurrent callers share
+ * one run. Failures are never cached. Environment and literal values resolve exactly as in
+ * the synchronous variant.
  */
 export async function resolveConfigValueOrThrowWithRetry(
 	config: string,
@@ -370,17 +453,37 @@ export async function resolveConfigValueOrThrowWithRetry(
 ): Promise<string> {
 	const reference = parseConfigValueReference(config);
 	if (reference.type !== "command") return resolveConfigValueOrThrow(config, description, env);
-	const cacheKey = `${description}\0${reference.config}`;
+	const cacheKey = commandSecretKey(reference.config, description);
 	const cached = commandSecretCache.get(cacheKey);
 	if (cached && cached.expiresAt > deps.now()) return cached.value;
 	commandSecretCache.delete(cacheKey);
 	const pending = commandSecretInFlight.get(cacheKey);
-	if (pending) return pending;
-	const run = resolveCommandSecret(reference.config, description, cacheKey, deps).finally(() => {
-		commandSecretInFlight.delete(cacheKey);
+	if (pending) return pending.result;
+	const owner = {};
+	const result = resolveCommandSecret(reference.config, description, cacheKey, owner, deps).finally(() => {
+		if (commandSecretInFlight.get(cacheKey)?.owner === owner) commandSecretInFlight.delete(cacheKey);
 	});
-	commandSecretInFlight.set(cacheKey, run);
-	return run;
+	commandSecretInFlight.set(cacheKey, { owner, result });
+	return result;
+}
+
+/**
+ * Forget the cached result of `config` resolved for `description`, and detach any run in
+ * flight so it cannot write one back. Call it when the provider rejects the key (401/403),
+ * so the next request runs the command again. A no-op for non-command values.
+ */
+export function invalidateCommandSecret(config: string, description: string): void {
+	const reference = parseConfigValueReference(config);
+	if (reference.type !== "command") return;
+	const cacheKey = commandSecretKey(reference.config, description);
+	commandSecretCache.delete(cacheKey);
+	commandSecretInFlight.delete(cacheKey);
+}
+
+/** Forget every cached request-time `!command` result and detach every run in flight. */
+export function clearCommandSecretCache(): void {
+	commandSecretCache.clear();
+	commandSecretInFlight.clear();
 }
 
 /**
@@ -414,8 +517,8 @@ export function resolveHeadersOrThrow(
 	return Object.keys(resolved).length > 0 ? resolved : undefined;
 }
 
-/** Clear both config value command caches. Exported for testing. */
+/** Clear both config value command caches, including request-time runs still in flight. */
 export function clearConfigValueCache(): void {
 	commandResultCache.clear();
-	commandSecretCache.clear();
+	clearCommandSecretCache();
 }

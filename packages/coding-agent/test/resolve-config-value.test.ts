@@ -9,11 +9,14 @@ import {
 	type CommandRun,
 	type CommandSecretDeps,
 	clearConfigValueCache,
+	commandSecretDeps,
+	invalidateCommandSecret,
 	redactSecrets,
 	resolveConfigValue,
 	resolveConfigValueOrThrow,
 	resolveConfigValueOrThrowWithRetry,
 	resolveConfigValueUncached,
+	runCommandAsync,
 } from "../src/core/resolve-config-value.ts";
 import * as shellModule from "../src/utils/shell.ts";
 
@@ -193,7 +196,7 @@ describe("resolveConfigValueOrThrowWithRetry (pi-harness#456)", () => {
 		const sleeps: number[] = [];
 		const clock = { now: 5_000 };
 		const deps: CommandSecretDeps = {
-			run: (command) => {
+			run: async (command) => {
 				commands.push(command);
 				return runs[Math.min(commands.length - 1, runs.length - 1)];
 			},
@@ -249,12 +252,8 @@ describe("resolveConfigValueOrThrowWithRetry (pi-harness#456)", () => {
 		[{ status: 0, signal: null, stdout: " \n", stderr: "" }, "command exited 0 but printed no secret (empty output)"],
 		[{ status: null, signal: "SIGTERM", stdout: "", stderr: "" }, "command was killed by SIGTERM"],
 		[
-			{ status: null, signal: "SIGTERM", stdout: "", stderr: "", error: new Error("spawnSync /bin/sh ETIMEDOUT") },
-			"could not run the command (spawnSync /bin/sh ETIMEDOUT)",
-		],
-		[
-			{ status: 127, signal: null, stdout: "", stderr: "sh: secret-helper: not found" },
-			"command exited with code 127",
+			{ status: null, signal: "SIGTERM", stdout: "", stderr: "", error: new Error("timed out after 10000 ms") },
+			"could not run the command (timed out after 10000 ms)",
 		],
 	] satisfies [CommandRun, string][])("distinguishes %#: %s", async (run, failure) => {
 		const { deps } = fakeDeps(run);
@@ -370,23 +369,178 @@ describe("resolveConfigValueOrThrowWithRetry (pi-harness#456)", () => {
 		expect(commands).toEqual([]);
 	});
 
-	test("uses the real runner, sleep and clock by default", async () => {
-		const sleep = vi.spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => void) => {
-			callback();
-			return 0;
-		}) as unknown as typeof setTimeout);
+	test("uses the real async runner by default", async () => {
+		const sleep = vi.spyOn(commandSecretDeps, "sleep").mockResolvedValue(undefined);
 
 		await expect(resolveConfigValueOrThrowWithRetry("!exit 9", "API key")).rejects.toThrow(
 			"command exited with code 9",
 		);
-		expect(sleep.mock.calls.map(([, ms]) => ms)).toEqual([...COMMAND_SECRET_RETRY_DELAYS_MS]);
+		expect(sleep.mock.calls).toEqual(COMMAND_SECRET_RETRY_DELAYS_MS.map((ms) => [ms]));
 		expect(await resolveConfigValueOrThrowWithRetry("!echo real-runner", "API key")).toBe("real-runner");
+	});
+
+	test("the default sleep and clock are a timer and Date.now", async () => {
+		vi.useFakeTimers({ now: 42_000 });
+		try {
+			expect(commandSecretDeps.now()).toBe(42_000);
+			let slept = false;
+			const sleeping = commandSecretDeps.sleep(200).then(() => {
+				slept = true;
+			});
+			await vi.advanceTimersByTimeAsync(199);
+			expect(slept).toBe(false);
+			await vi.advanceTimersByTimeAsync(1);
+			await sleeping;
+			expect(slept).toBe(true);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	test.each([
+		["exit 127 (command not found)", exit(127, "sh: secret-helper: not found"), "command exited with code 127"],
+		["exit 126 (not executable)", exit(126, "sh: secret-helper: Permission denied"), "command exited with code 126"],
+		[
+			"a shell that never started",
+			{
+				status: null,
+				signal: null,
+				stdout: "",
+				stderr: "",
+				error: Object.assign(new Error("spawn /bin/sh ENOENT"), { code: "ENOENT" }),
+			},
+			"could not run the command (spawn /bin/sh ENOENT)",
+		],
+	] satisfies [string, CommandRun, string][])(
+		"does not retry a permanent failure: %s",
+		async (_name, run, failure) => {
+			const { deps, commands, sleeps } = fakeDeps(run, ok("never-reached"));
+
+			await expect(
+				resolveConfigValueOrThrowWithRetry("!secret-helper get", "API key", undefined, deps),
+			).rejects.toThrow(`${failure}`);
+			await expect(
+				rejection(resolveConfigValueOrThrowWithRetry("!other-helper", "API key", undefined, fakeDeps(run).deps)),
+			).resolves.toMatchObject({ message: expect.stringContaining("failed 1 attempt)") });
+			expect(commands).toHaveLength(1);
+			expect(sleeps).toEqual([]);
+		},
+	);
+
+	test("concurrent waiters on a failing command all reject, and the next call runs it again", async () => {
+		let release: (run: CommandRun) => void = () => {};
+		const { deps, commands } = fakeDeps(exit(1));
+		deps.run = async (command) => {
+			commands.push(command);
+			if (commands.length === 1) {
+				return new Promise<CommandRun>((resolve) => {
+					release = resolve;
+				});
+			}
+			return commands.length <= COMMAND_SECRET_ATTEMPTS ? exit(1, "busy") : ok("key-after");
+		};
+
+		const waiters = [1, 2, 3].map(() =>
+			rejection(resolveConfigValueOrThrowWithRetry("!secret-helper get", "API key", undefined, deps)),
+		);
+		release(exit(1, "busy"));
+		const errors = await Promise.all(waiters);
+
+		expect(errors.map((error) => error.message)).toEqual(Array(3).fill(errors[0].message));
+		expect(errors[0].message).toContain("failed 3 attempts");
+		expect(commands).toHaveLength(COMMAND_SECRET_ATTEMPTS);
+		expect(await resolveConfigValueOrThrowWithRetry("!secret-helper get", "API key", undefined, deps)).toBe(
+			"key-after",
+		);
+		expect(commands).toHaveLength(COMMAND_SECRET_ATTEMPTS + 1);
+	});
+
+	test.each([
+		["clearConfigValueCache", () => clearConfigValueCache()],
+		["invalidateCommandSecret", () => invalidateCommandSecret("!secret-helper get", "API key")],
+	])("%s stops a run in flight from caching its result", async (_name, clear) => {
+		let release: (run: CommandRun) => void = () => {};
+		const { deps, commands } = fakeDeps(ok("key-2"));
+		deps.run = async (command) => {
+			commands.push(command);
+			return commands.length === 1
+				? new Promise<CommandRun>((resolve) => {
+						release = resolve;
+					})
+				: ok("key-2");
+		};
+
+		const stale = resolveConfigValueOrThrowWithRetry("!secret-helper get", "API key", undefined, deps);
+		clear();
+		release(ok("key-1"));
+
+		expect(await stale).toBe("key-1");
+		expect(await resolveConfigValueOrThrowWithRetry("!secret-helper get", "API key", undefined, deps)).toBe("key-2");
+		expect(commands).toHaveLength(2);
+	});
+
+	test("invalidateCommandSecret drops a cached value and ignores non-command values", async () => {
+		const { deps, commands } = fakeDeps(ok("key-1"), ok("key-2"));
+
+		expect(await resolveConfigValueOrThrowWithRetry("!secret-helper get", "provider a", undefined, deps)).toBe(
+			"key-1",
+		);
+		invalidateCommandSecret("literal-key", "provider a");
+		invalidateCommandSecret("!secret-helper get", "provider b");
+		expect(await resolveConfigValueOrThrowWithRetry("!secret-helper get", "provider a", undefined, deps)).toBe(
+			"key-1",
+		);
+		invalidateCommandSecret("!secret-helper get", "provider a");
+		expect(await resolveConfigValueOrThrowWithRetry("!secret-helper get", "provider a", undefined, deps)).toBe(
+			"key-2",
+		);
+		expect(commands).toHaveLength(2);
+	});
+
+	test("redacts stderr before cutting it to its tail, so a cut prefix cannot expose the value", async () => {
+		// Letters only, so only the `Bearer` prefix marks it as a credential.
+		const token = "abcdefghijklmnopqrstuvwxyzABCDEF";
+		const filler = "y".repeat(1_000 - token.length - 1);
+		const { deps } = fakeDeps(exit(1, `Authorization: Bearer ${token} ${filler}`));
+
+		const error = await rejection(
+			resolveConfigValueOrThrowWithRetry("!secret-helper get", "API key", undefined, deps),
+		);
+
+		expect(error.message).not.toContain(token);
+		expect(error.message).toContain(filler.slice(0, 100));
+	});
+
+	test("redacts a spawn error message", async () => {
+		const { deps } = fakeDeps({
+			status: null,
+			signal: null,
+			stdout: "",
+			stderr: "",
+			error: new Error("spawn secret-helper --password hunter2 EACCES"),
+		});
+
+		const error = await rejection(
+			resolveConfigValueOrThrowWithRetry("!secret-helper get", "API key", undefined, deps),
+		);
+
+		expect(error.message).toContain("could not run the command (spawn secret-helper --password [REDACTED] EACCES)");
+		expect(error.message).not.toContain("hunter2");
 	});
 });
 
 describe("redactSecrets", () => {
 	test.each([
-		["Bearer abc.def", "Bearer [REDACTED]"],
+		["Bearer abc.def.ghi", "Bearer [REDACTED]"],
+		["Token Zm9vYmFyYmF6", "Token [REDACTED]"],
+		["blob dGhpcyBpcyBhIHNlY3JldA/9xQ== end", "blob [REDACTED] end"],
+		["jwt eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.c2lnbmF0dXJl", "jwt [REDACTED]"],
+		["helper --password hunter2 --url x", "helper --password [REDACTED] --url x"],
+		["helper -p hunter2", "helper -p [REDACTED]"],
+		["helper --token abc --verbose", "helper --token [REDACTED] --verbose"],
+		["helper --api-key 'two words'", "helper --api-key [REDACTED]"],
+		["fetch https://alice:s3cret@vault.example.com/v1", "fetch https://[REDACTED]@vault.example.com/v1"],
+		["clone https://ghp_abc@github.com/o/r", "clone https://[REDACTED]@github.com/o/r"],
 		["basic dXNlcjpwYXNz", "basic [REDACTED]"],
 		["api_key=short1", "api_key=[REDACTED]"],
 		['{"access_token": "tok"}', '{"access_token": "[REDACTED]"}'],
@@ -402,7 +556,73 @@ describe("redactSecrets", () => {
 		"/opt/homebrew/Cellar/secret-helper/1.2.3/bin/secret-helper",
 		"error: connection-refused-while-contacting-server",
 		"exit status 1 at 2026-11-04T12:00:00Z",
+		"Token refresh failed",
+		"Basic authentication required",
+		"helper --verbose -q",
+		"see https://docs.example.com/v1/errors/expired-credentials-handling",
 	])("keeps %s readable", (input) => {
 		expect(redactSecrets(input)).toBe(input);
+	});
+});
+
+describe("runCommandAsync (pi-harness#456)", () => {
+	afterEach(() => {
+		vi.restoreAllMocks();
+		vi.useRealTimers();
+	});
+
+	test("captures stdout, stderr and the exit code without blocking", async () => {
+		await expect(runCommandAsync("printf out; printf err >&2; exit 3")).resolves.toMatchObject({
+			status: 3,
+			signal: null,
+			stdout: "out",
+			stderr: "err",
+		});
+	});
+
+	test("kills a command that outlives its timeout", async () => {
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+		const run = runCommandAsync("exec sleep 30", 5_000);
+		await vi.advanceTimersByTimeAsync(5_000);
+
+		const result = await run;
+		expect(result).toMatchObject({ status: null, signal: "SIGTERM" });
+		expect(result.error?.message).toBe("timed out after 5000 ms");
+	});
+
+	test("feeds stdin to a configured Windows shell that reads its command from stdin", async () => {
+		if (process.platform === "win32") return;
+		const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+		vi.spyOn(shellModule, "getShellConfig").mockReturnValue({
+			shell: "/bin/sh",
+			args: ["-s"],
+			commandTransport: "stdin",
+		});
+		try {
+			Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+			await expect(runCommandAsync("echo from-stdin")).resolves.toMatchObject({ status: 0, stdout: "from-stdin\n" });
+		} finally {
+			if (platformDescriptor) Object.defineProperty(process, "platform", platformDescriptor);
+		}
+	});
+
+	test("falls back to the default shell when the configured Windows shell is missing or unknown", async () => {
+		if (process.platform === "win32") return;
+		const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform");
+		const getShellConfig = vi.spyOn(shellModule, "getShellConfig");
+		try {
+			Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+			getShellConfig.mockReturnValue({ shell: "/nonexistent/bash-456", args: ["-c"], commandTransport: "argv" });
+			// Off Windows the fallback's `cmd.exe` cannot start either, which shows it was reached.
+			const missing = await runCommandAsync("echo hi");
+			expect(missing).toMatchObject({ status: null, error: { code: "ENOENT" } });
+			expect(missing.error?.message).toContain("cmd.exe");
+			getShellConfig.mockImplementation(() => {
+				throw new Error("no shell");
+			});
+			expect((await runCommandAsync("echo hi")).error?.message).toContain("cmd.exe");
+		} finally {
+			if (platformDescriptor) Object.defineProperty(process, "platform", platformDescriptor);
+		}
 	});
 });

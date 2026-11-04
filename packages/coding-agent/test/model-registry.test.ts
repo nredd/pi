@@ -1,7 +1,13 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { normalizeContext } from "@earendil-works/pi-ai";
+import {
+	type AssistantMessage,
+	type AssistantMessageEvent,
+	createAssistantMessageEventStream,
+	normalizeContext,
+	type SimpleStreamOptions,
+} from "@earendil-works/pi-ai";
 import type { AnthropicMessagesCompat, Api, Model, OpenAICompletionsCompat } from "@earendil-works/pi-ai/compat";
 import { getApiProvider, getModels, getSupportedThinkingLevels } from "@earendil-works/pi-ai/compat";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
@@ -13,7 +19,7 @@ import {
 	COMMAND_SECRET_TTL_MS,
 	commandSecretDeps,
 } from "../src/core/resolve-config-value.ts";
-import { createModelRegistry } from "./model-runtime-test-utils.ts";
+import { createModelRegistry, getModelRuntime } from "./model-runtime-test-utils.ts";
 
 describe("ModelRegistry", () => {
 	let tempDir: string;
@@ -1876,6 +1882,216 @@ describe("ModelRegistry", () => {
 				expect(written.some((content) => content.includes(`printf '%s' '${secret}'`))).toBe(true);
 				expect(written.filter((content) => content.includes(secret) && !content.includes("printf"))).toEqual([]);
 				expect(JSON.stringify(logged)).not.toContain(secret);
+			});
+
+			describe("provider auth rejection (pi-harness#456)", () => {
+				function reply(apiKey: string | undefined, errorMessage?: string): AssistantMessage {
+					return {
+						role: "assistant",
+						content: errorMessage === undefined ? [{ type: "text", text: `answered with ${apiKey}` }] : [],
+						api: "test-auth-api",
+						provider: "rotating-provider",
+						model: "test-model",
+						usage: {
+							input: 0,
+							output: 0,
+							cacheRead: 0,
+							cacheWrite: 0,
+							totalTokens: 0,
+							cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+						},
+						stopReason: errorMessage === undefined ? "stop" : "error",
+						...(errorMessage && { errorMessage }),
+						timestamp: Date.now(),
+					};
+				}
+
+				/**
+				 * Registers a provider whose key comes from a counting fake command (`key-1`, `key-2`, ...)
+				 * and whose stream answers each request with `respond(apiKey)`.
+				 */
+				async function rotatingProvider(
+					respond: (
+						apiKey: string | undefined,
+						options: SimpleStreamOptions | undefined,
+					) => Promise<{ status?: number; errorMessage?: string }>,
+				) {
+					const counterFile = join(tempDir, "counter");
+					writeFileSync(counterFile, "0");
+					const counterPath = toShPath(counterFile);
+					const registry = await createModelRegistry(authStorage, modelsJsonPath);
+					const keys: Array<string | undefined> = [];
+					registry.registerProvider("rotating-provider", {
+						...providerConfig("https://example.com/v1", [{ id: "test-model" }], "test-auth-api"),
+						apiKey: `!sh -c 'count=$(cat "${counterPath}"); echo $((count + 1)) > "${counterPath}"; echo "key-$((count + 1))"'`,
+						streamSimple: (_model, _context, options) => {
+							const stream = createAssistantMessageEventStream();
+							keys.push(options?.apiKey);
+							void (async () => {
+								const outcome = await respond(options?.apiKey, options);
+								const partial = reply(options?.apiKey);
+								stream.push({ type: "start", partial });
+								if (outcome.status !== undefined) {
+									await options?.onResponse?.(
+										{ status: outcome.status, headers: {} },
+										registry.find("rotating-provider", "test-model")!,
+									);
+								}
+								const message = reply(options?.apiKey, outcome.errorMessage);
+								stream.push(
+									outcome.errorMessage !== undefined
+										? { type: "error", reason: "error", error: message }
+										: { type: "done", reason: "stop", message },
+								);
+								stream.end(message);
+							})();
+							return stream;
+						},
+					});
+					const model = registry.find("rotating-provider", "test-model")!;
+					const run = async (options?: SimpleStreamOptions, simple = true) => {
+						const events: AssistantMessageEvent["type"][] = [];
+						const runtime = getModelRuntime(registry);
+						const stream = simple
+							? runtime.streamSimple(model, emptyContext, options)
+							: runtime.stream(model, emptyContext, options);
+						for await (const event of stream) events.push(event.type);
+						return { events, result: await stream.result() };
+					};
+					return { registry, keys, run, commandRuns: () => readFileSync(counterFile, "utf-8").trim() };
+				}
+
+				test.each([
+					["a 401 error message", { errorMessage: "401 invalid x-api-key" }, true],
+					["a 403 response status", { status: 403, errorMessage: "Request failed" }, true],
+					["a 401 on a raw stream", { errorMessage: "Error: status code 401" }, false],
+				])("%s drops the cached key and retries once with a fresh one", async (_name, rejection, simple) => {
+					const provider = await rotatingProvider(async (apiKey) => (apiKey === "key-1" ? rejection : {}));
+
+					const { events, result } = await provider.run(undefined, simple);
+
+					expect(provider.keys).toEqual(["key-1", "key-2"]);
+					expect(provider.commandRuns()).toBe("2");
+					expect(events).toEqual(["start", "done"]);
+					expect(result).toMatchObject({ stopReason: "stop", content: [{ text: "answered with key-2" }] });
+					// The fresh key is cached like any other.
+					await provider.run();
+					expect(provider.keys).toEqual(["key-1", "key-2", "key-2"]);
+				});
+
+				test("a persistent 401 is retried once, not looped", async () => {
+					const provider = await rotatingProvider(async () => ({ errorMessage: "401 authentication_error" }));
+
+					const { events, result } = await provider.run();
+
+					expect(provider.keys).toEqual(["key-1", "key-2"]);
+					expect(provider.commandRuns()).toBe("2");
+					expect(events).toEqual(["start", "error"]);
+					expect(result).toMatchObject({ stopReason: "error", errorMessage: "401 authentication_error" });
+				});
+
+				test("calls the caller's onResponse handler", async () => {
+					const provider = await rotatingProvider(async () => ({ status: 200 }));
+					const statuses: number[] = [];
+
+					await provider.run({ onResponse: (response) => void statuses.push(response.status) });
+
+					expect(statuses).toEqual([200]);
+				});
+
+				test.each([
+					["a non-auth error", { errorMessage: "500 overloaded" }, undefined, ["key-1"], "1"],
+					["an error without a message", { errorMessage: "" }, undefined, ["key-1"], "1"],
+					[
+						"a 401 on a caller-supplied key",
+						{ errorMessage: "401 invalid api key" },
+						"caller-key",
+						["caller-key"],
+						"0",
+					],
+				] satisfies [string, { errorMessage: string }, string | undefined, string[], string][])(
+					"%s is passed through without a retry",
+					async (_name, outcome, apiKey, keys, commandRuns) => {
+						const provider = await rotatingProvider(async () => outcome);
+
+						const { events, result } = await provider.run(apiKey ? { apiKey } : undefined);
+
+						expect(provider.keys).toEqual(keys);
+						expect(provider.commandRuns()).toBe(commandRuns);
+						expect(events).toEqual(["start", "error"]);
+						expect(result.stopReason).toBe("error");
+						expect(result.errorMessage ?? "").toBe(outcome.errorMessage);
+					},
+				);
+
+				test("a stream that reports only through its result still completes", async () => {
+					const registry = await createModelRegistry(authStorage, modelsJsonPath);
+					registry.registerProvider("result-only-provider", {
+						...providerConfig("https://example.com/v1", [{ id: "test-model" }], "test-auth-api"),
+						apiKey: "literal-key-value",
+						streamSimple: (_model, _context, options) => {
+							const stream = createAssistantMessageEventStream();
+							stream.end(reply(options?.apiKey));
+							return stream;
+						},
+					});
+
+					const model = registry.find("result-only-provider", "test-model")!;
+					const result = await getModelRuntime(registry).streamSimple(model, emptyContext).result();
+
+					expect(result).toMatchObject({
+						stopReason: "stop",
+						content: [{ text: "answered with literal-key-value" }],
+					});
+				});
+
+				test("a 401 on a provider without a command key is passed through", async () => {
+					const registry = await createModelRegistry(authStorage, modelsJsonPath);
+					const keys: Array<string | undefined> = [];
+					registry.registerProvider("literal-provider", {
+						...providerConfig("https://example.com/v1", [{ id: "test-model" }], "test-auth-api"),
+						apiKey: "literal-key-value",
+						streamSimple: (_model, _context, options) => {
+							keys.push(options?.apiKey);
+							const stream = createAssistantMessageEventStream();
+							const message = reply(options?.apiKey, "401 unauthorized");
+							stream.push({ type: "error", reason: "error", error: message });
+							stream.end(message);
+							return stream;
+						},
+					});
+
+					const model = registry.find("literal-provider", "test-model")!;
+					const result = await getModelRuntime(registry).streamSimple(model, emptyContext).result();
+
+					expect(keys).toEqual(["literal-key-value"]);
+					expect(result.errorMessage).toBe("401 unauthorized");
+				});
+			});
+
+			test.each([
+				["a full reload", undefined],
+				["a provider refresh", ["custom-provider"]],
+			])("%s of a changed models.json drops cached command keys (pi-harness#456)", async (_name, providers) => {
+				const counterFile = join(tempDir, "counter");
+				writeFileSync(counterFile, "0");
+				const counterPath = toShPath(counterFile);
+				const provider = providerWithApiKey(
+					`!sh -c 'count=$(cat "${counterPath}"); echo $((count + 1)) > "${counterPath}"; echo "key-$((count + 1))"'`,
+				);
+				writeRawModelsJson({ "custom-provider": provider });
+				const registry = await createModelRegistry(authStorage, modelsJsonPath);
+				const runtime = getModelRuntime(registry);
+
+				expect(await registry.getApiKeyForProvider("custom-provider")).toBe("key-1");
+				await runtime.refresh({ allowNetwork: false, providers });
+				// Another runtime starting in this process loads the same file and keeps the cache too.
+				await createModelRegistry(authStorage, modelsJsonPath);
+				expect(await registry.getApiKeyForProvider("custom-provider")).toBe("key-1");
+
+				writeRawModelsJson({ "custom-provider": { ...provider, baseUrl: "https://example.com/v2" } });
+				await runtime.refresh({ allowNetwork: false, providers });
+				expect(await registry.getApiKeyForProvider("custom-provider")).toBe("key-2");
 			});
 
 			test("commands are re-executed across registry instances", async () => {

@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { normalizeContext } from "@earendil-works/pi-ai";
@@ -8,6 +8,11 @@ import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import type { ModelsJsonProvider } from "../src/core/model-config.ts";
 import { clearApiKeyCache, type ModelRegistry, type ProviderConfigInput } from "../src/core/model-registry.ts";
+import {
+	COMMAND_SECRET_RETRY_DELAYS_MS,
+	COMMAND_SECRET_TTL_MS,
+	commandSecretDeps,
+} from "../src/core/resolve-config-value.ts";
 import { createModelRegistry } from "./model-runtime-test-utils.ts";
 
 describe("ModelRegistry", () => {
@@ -1530,6 +1535,17 @@ describe("ModelRegistry", () => {
 	});
 
 	describe("API key resolution", () => {
+		// Request-time `!command` keys retry with backoff and cache for a TTL; a fake
+		// clock and sleep keep both deterministic and free of real waits (pi-harness#456).
+		let clock: number;
+		let sleep: ReturnType<typeof vi.spyOn>;
+
+		beforeEach(() => {
+			clock = 1_000_000;
+			vi.spyOn(commandSecretDeps, "now").mockImplementation(() => clock);
+			sleep = vi.spyOn(commandSecretDeps, "sleep").mockResolvedValue(undefined);
+		});
+
 		/** Create provider config with custom apiKey */
 		function providerWithApiKey(apiKey: string) {
 			return {
@@ -1774,7 +1790,28 @@ describe("ModelRegistry", () => {
 		});
 
 		describe("request-time resolution", () => {
-			test("command is executed on every provider lookup", async () => {
+			test("command output is reused within the TTL and re-run after it (pi-harness#456)", async () => {
+				const counterFile = join(tempDir, "counter");
+				writeFileSync(counterFile, "0");
+
+				const counterPath = toShPath(counterFile);
+				const command = `!sh -c 'count=$(cat "${counterPath}"); echo $((count + 1)) > "${counterPath}"; echo "key-$((count + 1))"'`;
+				writeRawModelsJson({
+					"custom-provider": providerWithApiKey(command),
+				});
+
+				const registry = await createModelRegistry(authStorage, modelsJsonPath);
+				expect(await registry.getApiKeyForProvider("custom-provider")).toBe("key-1");
+				clock += COMMAND_SECRET_TTL_MS - 1;
+				expect(await registry.getApiKeyForProvider("custom-provider")).toBe("key-1");
+				expect(readFileSync(counterFile, "utf-8").trim()).toBe("1");
+
+				clock += 1;
+				expect(await registry.getApiKeyForProvider("custom-provider")).toBe("key-2");
+				expect(readFileSync(counterFile, "utf-8").trim()).toBe("2");
+			});
+
+			test("concurrent lookups share one command run (pi-harness#456)", async () => {
 				const counterFile = join(tempDir, "counter");
 				writeFileSync(counterFile, "0");
 
@@ -1785,12 +1822,60 @@ describe("ModelRegistry", () => {
 				});
 
 				const registry = await createModelRegistry(authStorage, modelsJsonPath);
-				await registry.getApiKeyForProvider("custom-provider");
-				await registry.getApiKeyForProvider("custom-provider");
-				await registry.getApiKeyForProvider("custom-provider");
+				const keys = await Promise.all(
+					Array.from({ length: 5 }, () => registry.getApiKeyForProvider("custom-provider")),
+				);
 
-				const count = parseInt(readFileSync(counterFile, "utf-8").trim(), 10);
-				expect(count).toBe(3);
+				expect(keys).toEqual(Array(5).fill("key-value"));
+				expect(readFileSync(counterFile, "utf-8").trim()).toBe("1");
+			});
+
+			test("a transient command failure is retried with backoff (pi-harness#456)", async () => {
+				const counterFile = join(tempDir, "counter");
+				writeFileSync(counterFile, "0");
+
+				const counterPath = toShPath(counterFile);
+				// Fails its first two runs, like a secret helper racing its own token refresh.
+				const command = `!sh -c 'count=$(cat "${counterPath}"); count=$((count + 1)); echo $count > "${counterPath}"; if [ $count -lt 3 ]; then echo "busy $count" >&2; exit 75; fi; echo "key-value"'`;
+				writeRawModelsJson({
+					"custom-provider": providerWithApiKey(command),
+				});
+
+				const registry = await createModelRegistry(authStorage, modelsJsonPath);
+
+				expect(await registry.getApiKeyForProvider("custom-provider")).toBe("key-value");
+				expect(readFileSync(counterFile, "utf-8").trim()).toBe("3");
+				expect(sleep.mock.calls).toEqual(COMMAND_SECRET_RETRY_DELAYS_MS.map((ms) => [ms]));
+			});
+
+			test("a resolved command key is never persisted or logged (pi-harness#456)", async () => {
+				const secret = "fake-secret-0123456789abcdefXYZ";
+				const agentDir = join(tempDir, "agent");
+				mkdirSync(agentDir);
+				const fileAuthStorage = AuthStorage.create(join(agentDir, "auth.json"));
+				const logged: unknown[] = [];
+				for (const method of ["log", "info", "warn", "error", "debug"] as const) {
+					vi.spyOn(console, method).mockImplementation((...args: unknown[]) => {
+						logged.push(...args);
+					});
+				}
+				writeRawModelsJson({
+					"custom-provider": providerWithApiKey(`!printf '%s' '${secret}'`),
+				});
+
+				const registry = await createModelRegistry(fileAuthStorage, modelsJsonPath);
+				const model = registry.find("custom-provider", "test-model");
+				expect(model).toBeDefined();
+				expect(await registry.getApiKeyAndHeaders(model!)).toMatchObject({ ok: true, apiKey: secret });
+				expect(await registry.getApiKeyForProvider("custom-provider")).toBe(secret);
+
+				const written = readdirSync(tempDir, { recursive: true, withFileTypes: true })
+					.filter((entry) => entry.isFile())
+					.map((entry) => readFileSync(join(entry.parentPath, entry.name), "utf-8"));
+				// models.json holds the command, not its output.
+				expect(written.some((content) => content.includes(`printf '%s' '${secret}'`))).toBe(true);
+				expect(written.filter((content) => content.includes(secret) && !content.includes("printf"))).toEqual([]);
+				expect(JSON.stringify(logged)).not.toContain(secret);
 			});
 
 			test("commands are re-executed across registry instances", async () => {
@@ -1808,6 +1893,12 @@ describe("ModelRegistry", () => {
 
 				const registry2 = await createModelRegistry(authStorage, modelsJsonPath);
 				await registry2.getApiKeyForProvider("custom-provider");
+				expect(readFileSync(counterFile, "utf-8").trim()).toBe("1");
+
+				// The TTL cache is per provider and command, not per registry: past it, a new registry re-runs.
+				clock += COMMAND_SECRET_TTL_MS;
+				const registry3 = await createModelRegistry(authStorage, modelsJsonPath);
+				await registry3.getApiKeyForProvider("custom-provider");
 
 				const count = parseInt(readFileSync(counterFile, "utf-8").trim(), 10);
 				expect(count).toBe(2);
@@ -1845,8 +1936,9 @@ describe("ModelRegistry", () => {
 				expect(key1).toBeUndefined();
 				expect(key2).toBeUndefined();
 
+				// Each lookup makes every attempt; a failure is never cached.
 				const count = parseInt(readFileSync(counterFile, "utf-8").trim(), 10);
-				expect(count).toBe(2);
+				expect(count).toBe(6);
 			});
 
 			test("provider auth status reports apiKey environment variables from models.json", async () => {
@@ -2034,7 +2126,7 @@ describe("ModelRegistry", () => {
 				).toEqual([copilotModel.id]);
 			});
 
-			test("getApiKeyAndHeaders resolves authHeader on every request", async () => {
+			test("getApiKeyAndHeaders resolves authHeader again once the cached key expires", async () => {
 				const tokenFile = join(tempDir, "token");
 				writeFileSync(tokenFile, "token-1");
 				const tokenPath = toShPath(tokenFile);
@@ -2058,7 +2150,9 @@ describe("ModelRegistry", () => {
 				});
 
 				writeFileSync(tokenFile, "token-2");
+				expect(await registry.getApiKeyAndHeaders(model!)).toMatchObject({ apiKey: "token-1" });
 
+				clock += COMMAND_SECRET_TTL_MS;
 				const auth2 = await registry.getApiKeyAndHeaders(model!);
 				expect(auth2).toEqual({
 					ok: true,
@@ -2139,6 +2233,31 @@ describe("ModelRegistry", () => {
 				expect(auth.ok).toBe(false);
 				if (!auth.ok) {
 					expect(auth.error).toContain('Failed to resolve API key for provider "custom-provider"');
+				}
+			});
+
+			test("getApiKeyAndHeaders names the exit code and redacted stderr of a failed command (pi-harness#456)", async () => {
+				const stdoutSecret = "stdout-secret-0123456789abcdef";
+				writeRawModelsJson({
+					"custom-provider": {
+						...providerWithApiKey(
+							`!sh -c 'echo ${stdoutSecret}; echo "refresh failed for token=abc123 key sk-fake-0123456789abcdefghij" >&2; exit 4'`,
+						),
+						authHeader: true,
+					},
+				});
+
+				const registry = await createModelRegistry(authStorage, modelsJsonPath);
+				const auth = await registry.getApiKeyAndHeaders(registry.find("custom-provider", "test-model")!);
+
+				expect(auth.ok).toBe(false);
+				if (!auth.ok) {
+					expect(auth.error).toContain("command exited with code 4");
+					expect(auth.error).toContain("stderr: refresh failed for token=[REDACTED] key [REDACTED]");
+					expect(auth.error).toContain("failed 3 attempts");
+					expect(auth.error).not.toContain("abc123");
+					expect(auth.error).not.toContain("sk-fake-0123456789abcdefghij");
+					expect(auth.error).not.toContain(stdoutSecret);
 				}
 			});
 		});

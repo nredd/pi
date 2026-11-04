@@ -3,7 +3,7 @@
  * Used by auth-storage.ts and model-registry.ts.
  */
 
-import { execSync, spawnSync } from "child_process";
+import { type SpawnSyncReturns, spawnSync } from "child_process";
 import { getShellConfig } from "../utils/shell.ts";
 
 // Cache for shell command results (persists for process lifetime)
@@ -150,59 +150,122 @@ export function resolveConfigValue(config: string, env?: Record<string, string>)
 	return resolveTemplate(reference.parts, env);
 }
 
-function executeWithConfiguredShell(command: string): { executed: boolean; value: string | undefined } {
+/** What one run of a `!command` config value produced. */
+export interface CommandRun {
+	/** Exit code, or `null` when the command was killed or never started. */
+	status: number | null;
+	signal: NodeJS.Signals | null;
+	stdout: string;
+	stderr: string;
+	/** Set when the command could not be started or timed out. */
+	error?: Error;
+}
+
+/** Runs the shell text of a `!command` (without the `!`). */
+export type CommandRunner = (command: string) => CommandRun | Promise<CommandRun>;
+
+/** A `!command` attempt that failed: the reason the error text carries. */
+type CommandFailure = { failure: string };
+
+const COMMAND_TIMEOUT_MS = 10_000;
+/** Longest stderr tail an error carries. */
+const COMMAND_STDERR_CHARS = 1_000;
+
+function toCommandRun(result: SpawnSyncReturns<string>): CommandRun {
+	return {
+		status: result.status,
+		signal: result.signal,
+		stdout: result.stdout ?? "",
+		stderr: result.stderr ?? "",
+		error: result.error,
+	};
+}
+
+/** The configured Windows shell's run, or `undefined` when that shell is unavailable. */
+function runWithConfiguredShell(command: string): CommandRun | undefined {
+	let result: SpawnSyncReturns<string>;
 	try {
 		const { shell, args, commandTransport } = getShellConfig();
 		const commandFromStdin = commandTransport === "stdin";
-		const result = spawnSync(shell, commandFromStdin ? args : [...args, command], {
+		result = spawnSync(shell, commandFromStdin ? args : [...args, command], {
 			encoding: "utf-8",
 			input: commandFromStdin ? command : undefined,
-			timeout: 10000,
-			stdio: [commandFromStdin ? "pipe" : "ignore", "pipe", "ignore"],
+			timeout: COMMAND_TIMEOUT_MS,
+			stdio: [commandFromStdin ? "pipe" : "ignore", "pipe", "pipe"],
 			shell: false,
 			windowsHide: true,
 		});
-
-		if (result.error) {
-			const error = result.error as NodeJS.ErrnoException;
-			if (error.code === "ENOENT") {
-				return { executed: false, value: undefined };
-			}
-			return { executed: true, value: undefined };
-		}
-
-		if (result.status !== 0) {
-			return { executed: true, value: undefined };
-		}
-
-		const value = (result.stdout ?? "").trim();
-		return { executed: true, value: value || undefined };
-	} catch {
-		return { executed: false, value: undefined };
-	}
-}
-
-function executeWithDefaultShell(command: string): string | undefined {
-	try {
-		const output = execSync(command, {
-			encoding: "utf-8",
-			timeout: 10000,
-			stdio: ["ignore", "pipe", "ignore"],
-		});
-		return output.trim() || undefined;
 	} catch {
 		return undefined;
 	}
+	if ((result.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT") return undefined;
+	return toCommandRun(result);
+}
+
+/** Run a `!command` once with the platform shell. stdout and stderr are captured, never echoed. */
+function runCommand(command: string): CommandRun {
+	const configured = process.platform === "win32" ? runWithConfiguredShell(command) : undefined;
+	return (
+		configured ??
+		toCommandRun(
+			spawnSync(command, {
+				encoding: "utf-8",
+				timeout: COMMAND_TIMEOUT_MS,
+				stdio: ["ignore", "pipe", "pipe"],
+				shell: true,
+				windowsHide: true,
+			}),
+		)
+	);
+}
+
+// A credential that leaks into stderr or into the command text is replaced before
+// either reaches an error message. Three shapes: an auth scheme with its value, a
+// `key=value` / `token: value` pair, and any long opaque run of token characters
+// with both letters and digits (API keys, JWT segments, hex digests, UUIDs).
+// Dots and slashes end a run, so hostnames, URLs and paths stay readable.
+const AUTH_SCHEME_RE = /\b(Bearer|Basic|Token)\s+[^\s"',;]+/gi;
+const SECRET_ASSIGNMENT_RE =
+	/\b([\w-]*(?:api[_-]?key|token|secret|password|passwd|credential|authorization)[\w-]*["']?\s*[:=]\s*["']?)(?!(?:Bearer|Basic|Token)\s)[^\s"',;]+/gi;
+const OPAQUE_TOKEN_RE = /[A-Za-z0-9_+=-]{20,}/g;
+const REDACTED = "[REDACTED]";
+
+/** `text` with anything that looks like a credential replaced by `[REDACTED]`. */
+export function redactSecrets(text: string): string {
+	return text
+		.replace(AUTH_SCHEME_RE, `$1 ${REDACTED}`)
+		.replace(SECRET_ASSIGNMENT_RE, `$1${REDACTED}`)
+		.replace(OPAQUE_TOKEN_RE, (run) => (/[A-Za-z]/.test(run) && /\d/.test(run) ? REDACTED : run));
+}
+
+/** The secret a run printed, or why it produced none. Never includes stdout in a failure. */
+function commandOutcome(run: CommandRun): { value: string } | CommandFailure {
+	const value = run.stdout.trim();
+	let failure: string;
+	if (run.error && run.status === null) {
+		failure = `could not run the command (${run.error.message})`;
+	} else if (run.status !== 0) {
+		failure = run.signal ? `command was killed by ${run.signal}` : `command exited with code ${run.status}`;
+	} else if (value) {
+		return { value };
+	} else {
+		failure = "command exited 0 but printed no secret (empty output)";
+	}
+	const stderr = run.stderr.trim();
+	return stderr
+		? { failure: `${failure}; stderr: ${redactSecrets(stderr.slice(-COMMAND_STDERR_CHARS))}` }
+		: { failure };
+}
+
+function commandError(description: string, commandConfig: string, failure: string): Error {
+	return new Error(
+		`Failed to resolve ${description} from shell command: ${redactSecrets(commandConfig.slice(1))} (${failure})`,
+	);
 }
 
 function executeCommandUncached(commandConfig: string): string | undefined {
-	const command = commandConfig.slice(1);
-	return process.platform === "win32"
-		? (() => {
-				const configuredResult = executeWithConfiguredShell(command);
-				return configuredResult.executed ? configuredResult.value : executeWithDefaultShell(command);
-			})()
-		: executeWithDefaultShell(command);
+	const outcome = commandOutcome(runCommand(commandConfig.slice(1)));
+	return "value" in outcome ? outcome.value : undefined;
 }
 
 function executeCommand(commandConfig: string): string | undefined {
@@ -226,28 +289,98 @@ export function resolveConfigValueUncached(config: string, env?: Record<string, 
 	return resolveTemplate(reference.parts, env);
 }
 
+/**
+ * Resolve a config value or throw an error naming what failed: a missing
+ * environment variable, or a `!command` that exited non-zero, was killed,
+ * could not start, or printed nothing (with its redacted stderr). Runs a
+ * command once, uncached.
+ */
 export function resolveConfigValueOrThrow(config: string, description: string, env?: Record<string, string>): string {
-	const resolvedValue = resolveConfigValueUncached(config, env);
-	if (resolvedValue !== undefined) {
-		return resolvedValue;
-	}
-
 	const reference = parseConfigValueReference(config);
 	if (reference.type === "command") {
-		throw new Error(`Failed to resolve ${description} from shell command: ${reference.config.slice(1)}`);
+		const outcome = commandOutcome(runCommand(reference.config.slice(1)));
+		if ("value" in outcome) return outcome.value;
+		throw commandError(description, reference.config, outcome.failure);
 	}
+	const resolvedValue = resolveTemplate(reference.parts, env);
+	if (resolvedValue !== undefined) return resolvedValue;
+	// A template resolves to undefined only when one of its variables is unset.
+	const missing = getMissingConfigValueEnvVarNames(config, env);
+	const source = missing.length === 1 ? "environment variable" : "environment variables";
+	throw new Error(`Failed to resolve ${description} from ${source}: ${missing.join(", ")}`);
+}
 
-	if (reference.type === "template") {
-		const missingEnvVars = getMissingConfigValueEnvVarNames(config, env);
-		if (missingEnvVars.length === 1) {
-			throw new Error(`Failed to resolve ${description} from environment variable: ${missingEnvVars[0]}`);
+/** Attempts per request-time `!command` resolution before the request fails. */
+export const COMMAND_SECRET_ATTEMPTS = 3;
+/** Wait before each retry of a failed request-time `!command`, in order. */
+export const COMMAND_SECRET_RETRY_DELAYS_MS: readonly number[] = [200, 800];
+/** How long a request-time `!command` result is reused, per description (provider) and command. */
+export const COMMAND_SECRET_TTL_MS = 30_000;
+
+/** Effects of request-time `!command` resolution, injectable by tests. */
+export interface CommandSecretDeps {
+	run: CommandRunner;
+	sleep: (ms: number) => Promise<void>;
+	now: () => number;
+}
+
+/** The live effects. Tests replace members with `vi.spyOn` to avoid real sleeps and clocks. */
+export const commandSecretDeps: CommandSecretDeps = {
+	run: runCommand,
+	sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+	now: () => Date.now(),
+};
+
+// In-memory only: a resolved secret is never written to disk or logged.
+const commandSecretCache = new Map<string, { value: string; expiresAt: number }>();
+const commandSecretInFlight = new Map<string, Promise<string>>();
+
+async function resolveCommandSecret(
+	commandConfig: string,
+	description: string,
+	cacheKey: string,
+	deps: CommandSecretDeps,
+): Promise<string> {
+	let failure = "";
+	for (let attempt = 0; attempt < COMMAND_SECRET_ATTEMPTS; attempt++) {
+		if (attempt > 0) await deps.sleep(COMMAND_SECRET_RETRY_DELAYS_MS[attempt - 1]);
+		const outcome = commandOutcome(await deps.run(commandConfig.slice(1)));
+		if ("value" in outcome) {
+			commandSecretCache.set(cacheKey, { value: outcome.value, expiresAt: deps.now() + COMMAND_SECRET_TTL_MS });
+			return outcome.value;
 		}
-		if (missingEnvVars.length > 1) {
-			throw new Error(`Failed to resolve ${description} from environment variables: ${missingEnvVars.join(", ")}`);
-		}
+		failure = outcome.failure;
 	}
+	throw commandError(description, commandConfig, `${failure}; failed ${COMMAND_SECRET_ATTEMPTS} attempts`);
+}
 
-	throw new Error(`Failed to resolve ${description}`);
+/**
+ * Request-time variant of {@link resolveConfigValueOrThrow}. A `!command` that
+ * fails is retried up to {@link COMMAND_SECRET_ATTEMPTS} times with short
+ * backoff, since secret helpers fail transiently under concurrency. Its output
+ * is reused for {@link COMMAND_SECRET_TTL_MS} per `description` and command, and
+ * concurrent callers share one run. Failures are never cached. Environment and
+ * literal values resolve exactly as in the synchronous variant.
+ */
+export async function resolveConfigValueOrThrowWithRetry(
+	config: string,
+	description: string,
+	env?: Record<string, string>,
+	deps: CommandSecretDeps = commandSecretDeps,
+): Promise<string> {
+	const reference = parseConfigValueReference(config);
+	if (reference.type !== "command") return resolveConfigValueOrThrow(config, description, env);
+	const cacheKey = `${description}\0${reference.config}`;
+	const cached = commandSecretCache.get(cacheKey);
+	if (cached && cached.expiresAt > deps.now()) return cached.value;
+	commandSecretCache.delete(cacheKey);
+	const pending = commandSecretInFlight.get(cacheKey);
+	if (pending) return pending;
+	const run = resolveCommandSecret(reference.config, description, cacheKey, deps).finally(() => {
+		commandSecretInFlight.delete(cacheKey);
+	});
+	commandSecretInFlight.set(cacheKey, run);
+	return run;
 }
 
 /**
@@ -281,7 +414,8 @@ export function resolveHeadersOrThrow(
 	return Object.keys(resolved).length > 0 ? resolved : undefined;
 }
 
-/** Clear the config value command cache. Exported for testing. */
+/** Clear both config value command caches. Exported for testing. */
 export function clearConfigValueCache(): void {
 	commandResultCache.clear();
+	commandSecretCache.clear();
 }

@@ -33,7 +33,7 @@ import {
 	getConfigValueEnvVarNames,
 	isCommandConfigValue,
 	isConfigValueConfigured,
-	resolveConfigValueOrThrow,
+	resolveConfigValueOrThrowWithRetry,
 	resolveHeadersOrThrow,
 } from "./resolve-config-value.ts";
 
@@ -464,7 +464,7 @@ function composeApiKeyAuth(
 						: undefined;
 			} else if (rawKey !== undefined) {
 				const env = await configContextEnv([rawKey], input.ctx);
-				const key = resolveConfigValueOrThrow(rawKey, `API key for provider "${providerId}"`, env);
+				const key = await resolveConfigValueOrThrowWithRetry(rawKey, `API key for provider "${providerId}"`, env);
 				result = inherited
 					? await inherited.resolve({ ...input, credential: { type: "api_key", key } })
 					: { auth: { apiKey: key }, source: "configured API key" };

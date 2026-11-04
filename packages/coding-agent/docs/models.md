@@ -62,7 +62,7 @@ Use [`models.json`](configuration.md#agent-directory) when an endpoint speaks an
 }
 ```
 
-The dummy key makes the model available to Pi; Ollama ignores it. For an authenticated endpoint, `apiKey` and header values can use `$NAME` or `${NAME}` environment interpolation, a literal value, or a leading `!command`. Commands in `models.json` run at request time and are not cached by Pi.
+The dummy key makes the model available to Pi; Ollama ignores it. For an authenticated endpoint, `apiKey` and header values can use `$NAME` or `${NAME}` environment interpolation, a literal value, or a leading `!command`. Commands in `models.json` run at request time. An `apiKey` command that fails (non-zero exit, killed, or empty output) is retried twice, after 200 ms and 800 ms, before the request fails; the error names the exit code or empty output and includes the command's stderr, with anything that looks like a credential replaced by `[REDACTED]`. A resolved `apiKey` is reused for 30 seconds per provider and command, and concurrent requests share one run. It is held in memory only, never written to disk or logged, and failures are never cached. Header commands run on every request without retry.
 
 Opening `/model` reloads the file. A `models` entry adds or replaces a model with the same ID on that provider. Use `modelOverrides` to change metadata for an existing built-in or extension-provided model without replacing the provider's model list. Unknown override IDs are ignored.
 

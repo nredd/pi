@@ -2040,6 +2040,21 @@ export class AgentSession {
 		if (!handlerEditedTools) result.systemPromptOptions.selectedTools = this.getActiveToolNames();
 
 		const messages: AgentMessage[] = [];
+		// A resumed transcript may declare tools that this runtime did not register. The
+		// agent loop will remove their declarations before the request, but that machine-
+		// readable delta alone does not explain the lost capabilities to people or models.
+		const missingTools = (getCurrentSystemMessage(this.agent.state.messages)?.toolsAdded ?? [])
+			.map((tool) => tool.name)
+			.filter((name) => !this._toolRegistry.has(name));
+		if (missingTools.length > 0 && this._sessionStartEvent.reason !== "fork") {
+			messages.push({
+				role: "custom",
+				customType: "unregistered-tools-notice",
+				content: `Tools no longer available: ${missingTools.join(", ")}. They are not registered or are excluded in this session; check the active profile and extensions.`,
+				display: true,
+				timestamp: Date.now(),
+			});
+		}
 		if (startingMessages) {
 			messages.push(...startingMessages);
 		} else if (trigger.messageType === "custom") {

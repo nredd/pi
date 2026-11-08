@@ -490,13 +490,14 @@ export class AgentSession {
 	 * `setActiveToolsByName()` deactivates a tool or the next agent run starts.
 	 */
 	private _pendingToolNames = new Set<string>();
-	/** Restored MCP tools still unregistered when a run started; reported by the next run if still gone. */
-	private _lateMcpToolNames = new Set<string>();
 	/**
-	 * Restored MCP tools not registered yet. Unlike `_pendingToolNames`, setActiveTools() calls do not
-	 * clear it; only the next run consumes it.
+	 * True until the first run after this session's tool runtime was (re)built: construction,
+	 * `reload()`, or a transcript restore. That run holds back declared MCP tools that are not
+	 * registered yet, because their servers may still be connecting.
 	 */
-	private _restoredMcpToolNames = new Set<string>();
+	private _isFirstRunSinceRebuild = true;
+	/** MCP tools held back by the first run and still unregistered; the next run reports them if still gone. */
+	private _heldBackMcpToolNames = new Set<string>();
 	private _usesDefaultTools: boolean;
 	private _defaultToolModifiers: string[];
 	/** Matches the `--tools` entries: tool names or patterns. */
@@ -1925,8 +1926,7 @@ export class AgentSession {
 	 */
 	private _restoreToolsFromTranscript(modifiers: readonly string[] = []): void {
 		this._pendingToolNames.clear();
-		this._lateMcpToolNames.clear();
-		this._restoredMcpToolNames.clear();
+		this._markRuntimeRebuilt();
 		const current = getCurrentSystemMessage(this.sessionManager.buildSessionContext().messages);
 		if (!current) return;
 		const names = applyToolModifiers(
@@ -1934,8 +1934,13 @@ export class AgentSession {
 			modifiers,
 		);
 		this._pendingToolNames = new Set(names.filter((name) => this._isAllowedTool(name)));
-		this._restoredMcpToolNames = new Set([...this._pendingToolNames].filter(isMcpToolName));
 		this._setActiveTools(names);
+	}
+
+	/** Give the next run MCP grace again; see `_isFirstRunSinceRebuild`. */
+	private _markRuntimeRebuilt(): void {
+		this._isFirstRunSinceRebuild = true;
+		this._heldBackMcpToolNames.clear();
 	}
 
 	// =========================================================================
@@ -2040,9 +2045,8 @@ export class AgentSession {
 		}
 
 		const selectedToolsBefore = this._baseSystemPromptOptions.selectedTools;
-		// Handlers may call setActiveTools(), which clears the pending set; the restored MCP set survives.
-		const pendingMcp = this._restoredMcpToolNames;
-		this._restoredMcpToolNames = new Set();
+		const hasMcpGrace = this._isFirstRunSinceRebuild;
+		this._isFirstRunSinceRebuild = false;
 		const result = await this._extensionRunner.emitBeforeAgentStart(trigger, this._baseSystemPromptOptions);
 		// Handlers may edit event.systemPromptOptions.selectedTools or call setActiveTools(),
 		// which updates the live loadout instead. An explicit edit wins; otherwise the live
@@ -2056,10 +2060,12 @@ export class AgentSession {
 		// Report declared tools this runtime no longer registers (resume, reload, fork). Restored MCP
 		// tools whose server may still be connecting get one run of grace, then are reported if gone.
 		const declared = (getCurrentSystemMessage(this.agent.state.messages)?.toolsAdded ?? []).map((tool) => tool.name);
-		const missingTools = [...new Set([...declared, ...this._lateMcpToolNames])].filter(
-			(name) => !this._toolRegistry.has(name) && !pendingMcp.has(name),
+		const unregistered = [...new Set([...declared, ...this._heldBackMcpToolNames])].filter(
+			(name) => !this._toolRegistry.has(name),
 		);
-		this._lateMcpToolNames = new Set([...pendingMcp].filter((name) => !this._toolRegistry.has(name)));
+		const isHeldBack = (name: string) => hasMcpGrace && isMcpToolName(name) && this._isAllowedTool(name);
+		const missingTools = unregistered.filter((name) => !isHeldBack(name));
+		this._heldBackMcpToolNames = new Set(unregistered.filter(isHeldBack));
 		if (missingTools.length > 0) {
 			messages.push({
 				role: "custom",
@@ -4154,7 +4160,6 @@ export class AgentSession {
 				}
 			}
 		}
-		for (const name of this._lateMcpToolNames) if (this._toolRegistry.has(name)) this._lateMcpToolNames.delete(name);
 		// Pending tools that are registered now become active.
 		nextActiveToolNames.push(...this._pendingToolNames);
 
@@ -4248,12 +4253,8 @@ export class AgentSession {
 		// during the session stay disabled unless the setting newly adds them.
 		const addedDefaultTools = getDefaultTools().filter((name) => !previousDefaultTools.has(name));
 		// Tools the new extensions register later, such as MCP tools, are pending until then.
-		this._lateMcpToolNames.clear();
-		this._restoredMcpToolNames.clear();
-		for (const name of this.getActiveToolNames()) {
-			this._pendingToolNames.add(name);
-			if (isMcpToolName(name)) this._restoredMcpToolNames.add(name);
-		}
+		this._markRuntimeRebuilt();
+		for (const name of this.getActiveToolNames()) this._pendingToolNames.add(name);
 		this._buildRuntime({
 			activeToolNames: [...this.getActiveToolNames(), ...addedDefaultTools],
 			flagValues: previousFlagValues,

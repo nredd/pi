@@ -25,7 +25,7 @@ let cwd: string;
 let sourceFile: string;
 
 function registerFixtureTools(pi: ExtensionAPI, exposure?: "deferred"): void {
-	for (const name of [...TOOL_NAMES, MCP_TOOL])
+	for (const name of [...TOOL_NAMES, MCP_TOOL]) {
 		pi.registerTool({
 			name,
 			label: name,
@@ -34,6 +34,7 @@ function registerFixtureTools(pi: ExtensionAPI, exposure?: "deferred"): void {
 			parameters: Type.Object({}),
 			execute: async () => ({ content: [{ type: "text", text: "fixture" }], details: {} }),
 		});
+	}
 }
 
 const directTools: ExtensionFactory = (pi) => registerFixtureTools(pi);
@@ -132,7 +133,7 @@ test("resuming with missing tools warns the user and model once", async () => {
 		expect(JSON.stringify(requests[0])).toContain("no longer available");
 		host.harness.setResponses([fauxAssistantMessage("again")]);
 		await host.harness.session.prompt("third");
-		// Only the MCP tool's later notice follows, so the TOOL_NAMES are not repeated.
+		// The second turn reports MCP_TOOL, but TOOL_NAMES were already reported on the first.
 		expect(noticeTexts(host.harness.session).filter((text) => text.includes("ssh_exec"))).toHaveLength(1);
 	} finally {
 		await host.dispose();
@@ -183,10 +184,12 @@ test("MCP tools that register after the first prompt are never reported", async 
 test("an MCP tool that never registers is reported once, on the turn after the grace turn", async () => {
 	const harness = await resumeAndPrompt([], "first");
 	try {
-		expect(noticeTexts(harness.session).filter((text) => text.includes(MCP_TOOL))).toEqual([]);
+		const mcpNotices = () => noticeTexts(harness.session).filter((text) => text.includes(MCP_TOOL));
+		expect(mcpNotices()).toEqual([]);
 		await prompt(harness, "second");
 		await prompt(harness, "third");
-		expect(noticeTexts(harness.session).filter((text) => text.includes(MCP_TOOL))).toHaveLength(1);
+		await prompt(harness, "fourth");
+		expect(mcpNotices()).toHaveLength(1);
 	} finally {
 		harness.cleanup();
 	}
@@ -216,7 +219,77 @@ test("a session_start setActiveTools() call does not defeat the MCP grace turn",
 	}
 });
 
-test("navigating the tree drops the late MCP tool of the abandoned branch", async () => {
+test("explicit --tools resume still gives a late MCP tool its grace turn", async () => {
+	let connect: (() => void) | undefined;
+	const lateMcp: ExtensionFactory = (pi) => {
+		pi.on("session_start", () => {
+			connect = () => registerFixtureTools(pi);
+		});
+	};
+	const harness = await resumeAndPrompt([lateMcp], "before the server connects", {
+		initialActiveToolNames: ["read", "bash"],
+		allowedToolNames: ["read", "bash"],
+	});
+	try {
+		expect(noticeTexts(harness.session).join("")).not.toContain(MCP_TOOL);
+		connect?.();
+		await prompt(harness, "after the server connects");
+		expect(noticeTexts(harness.session).join("")).not.toContain(MCP_TOOL);
+		expect(harness.session.getAllTools().map((tool) => tool.name)).toContain(MCP_TOOL);
+	} finally {
+		harness.cleanup();
+	}
+});
+
+test("a --tools pattern matching the MCP tool gives it the same grace turn", async () => {
+	let connect: (() => void) | undefined;
+	const lateMcp: ExtensionFactory = (pi) => {
+		pi.on("session_start", () => {
+			connect = () => registerFixtureTools(pi);
+		});
+	};
+	const harness = await resumeAndPrompt([lateMcp], "before the server connects", {
+		initialActiveToolNames: ["read", "mcp__late__*"],
+		allowedToolNames: ["read", "mcp__late__*"],
+	});
+	try {
+		expect(noticeTexts(harness.session).join("")).not.toContain(MCP_TOOL);
+		connect?.();
+		await prompt(harness, "after the server connects");
+		expect(noticeTexts(harness.session).join("")).not.toContain(MCP_TOOL);
+		expect(harness.session.getAllTools().map((tool) => tool.name)).toContain(MCP_TOOL);
+	} finally {
+		harness.cleanup();
+	}
+});
+
+test("a --tools allowlist unregisters a non-MCP tool, so it is reported", async () => {
+	const harness = await resumeAndPrompt([directTools], "allowlisted", {
+		initialActiveToolNames: ["read", "monitor_start"],
+		allowedToolNames: ["read", "monitor_start"],
+	});
+	try {
+		expect(noticeTexts(harness.session)).toHaveLength(1);
+		expect(noticeTexts(harness.session)[0]).toContain("ssh_exec");
+	} finally {
+		harness.cleanup();
+	}
+});
+
+test("navigating the tree reports declared non-MCP tools that are not registered", async () => {
+	const harness = await resume([]);
+	try {
+		const earlier = harness.sessionManager.getEntries()[0];
+		if (!earlier) throw new Error("no entries");
+		await harness.session.navigateTree(earlier.id);
+		await prompt(harness, "after navigation");
+		expect(noticeTexts(harness.session).join("")).toContain("ssh_exec");
+	} finally {
+		harness.cleanup();
+	}
+});
+
+test("navigating the tree gives an unregistered MCP tool of the target branch a grace turn", async () => {
 	const harness = await resumeAndPrompt([], "first resumed prompt");
 	try {
 		const earlier = harness.sessionManager.getEntries()[0];
@@ -229,10 +302,16 @@ test("navigating the tree drops the late MCP tool of the abandoned branch", asyn
 	}
 });
 
-test("reload gives restored MCP tools a fresh grace turn", async () => {
+test("reload gives an MCP tool that was unregistered before it a fresh grace turn", async () => {
 	const factories: ExtensionFactory[] = [];
-	const harness = await resumeAndPrompt(factories, "before reload", { extensionFactories: factories });
+	// The MCP tool is not active, so only the declaration keeps it in the report.
+	const harness = await resumeAndPrompt(factories, "before reload", {
+		extensionFactories: factories,
+		initialActiveToolNames: ["read"],
+		allowedToolNames: ["read"],
+	});
 	try {
+		expect(harness.session.getAllTools().map((tool) => tool.name)).not.toContain(MCP_TOOL);
 		await harness.session.reload();
 		await prompt(harness, "after reload");
 		expect(noticeTexts(harness.session).join("")).not.toContain(MCP_TOOL);
@@ -294,8 +373,8 @@ test("a forked session warns about tools its runtime cannot register", async () 
 		await prompt(parent, "second");
 		expect(parent.session.getAllTools().map((tool) => tool.name)).toContain("ssh_exec");
 		const entryId = runtime.session.getUserMessagesForForking()[1]?.entryId;
-		expect(entryId).toBeDefined();
-		expect(await runtime.fork(entryId!)).toEqual({ cancelled: false, selectedText: "second" });
+		if (!entryId) throw new Error("no user message to fork from");
+		expect(await runtime.fork(entryId)).toEqual({ cancelled: false, selectedText: "second" });
 		expect(runtime.session).not.toBe(parent.session);
 		await runtime.session.bindExtensions({});
 		expect(runtime.session.getAllTools().map((tool) => tool.name)).not.toContain("ssh_exec");

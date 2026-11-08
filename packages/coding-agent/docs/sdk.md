@@ -31,12 +31,16 @@ Read current state through `session.messages`, `session.model`, `session.thinkin
 
 `session.systemPrompt` is read-only and returns the current effective system prompt, including changes that have not yet been sent to the model. Tool changes are declared to the model before the next request.
 
-A resumed, reloaded, or forked session can carry tool declarations for tools its runtime no longer registers, e.g. an extension that was removed or failed to load, or `--exclude-tools ssh_exec`. The next turn then includes a visible `unregistered-tools-notice` custom message, e.g. `Tools no longer available: ssh_exec`. The notice does not enable tools or change permissions. Rules:
+A resumed, reloaded, or forked session, or one that navigated the tree, can declare tools its runtime no longer registers, e.g. an extension was removed or failed to load, or `--exclude-tools ssh_exec`. The next turn then includes a visible `unregistered-tools-notice` custom message. The notice does not enable tools or change permissions.
+
+Example: `Tools no longer available: ssh_exec`.
+
+Rules:
 
 - A tool is reported only when it is not in the session's tool registry. Registered tools are never reported, even if inactive, deferred, or kept off the model's tool list by a `--tools` allowlist.
-- A restored MCP tool (`mcp__*` or an MCP resource tool) that is not registered when the prompt starts gets one turn of grace, because MCP servers connect after the first prompt starts. It is reported on the next turn if it is still not registered.
-- `--tools` unregisters the non-MCP tools it does not match, and `--exclude-tools` unregisters the tools it names, so both are reported. Only MCP tools kept registered without being matched by `--tools` are exempt.
-- The notice is sent once, on the first turn that finds the tool missing.
+- MCP servers connect after the first prompt starts. On the first run after the session's tools were (re)built (creation, `reload()`, resume, or tree navigation), an unregistered MCP tool (`mcp__*` or an MCP resource tool) is held back, not reported, if `--tools` and `--exclude-tools` allow it. If it is still unregistered on the next run, it is reported then.
+- `--tools` unregisters the non-MCP tools it does not match, and `--exclude-tools` unregisters the tools it names. Both are reported. An MCP tool that `--exclude-tools` names, or that a `--tools` list containing `mcp__*` entries does not match, is reported without grace.
+- Each tool is reported once, on the first run that finds it missing.
 
 <a id="sessionmanager-api"></a>
 

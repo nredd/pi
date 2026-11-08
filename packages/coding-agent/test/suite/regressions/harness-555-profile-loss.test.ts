@@ -204,6 +204,43 @@ test("a before_agent_start setActiveTools() call does not defeat the MCP grace t
 	}
 });
 
+test("a session_start setActiveTools() call does not defeat the MCP grace turn", async () => {
+	const startLoadout: ExtensionFactory = (pi) => {
+		pi.on("session_start", () => pi.setActiveTools(["read"]));
+	};
+	const harness = await resumeAndPrompt([startLoadout], "session_start sets the loadout");
+	try {
+		expect(noticeTexts(harness.session).join("")).not.toContain(MCP_TOOL);
+	} finally {
+		harness.cleanup();
+	}
+});
+
+test("navigating the tree drops the late MCP tool of the abandoned branch", async () => {
+	const harness = await resumeAndPrompt([], "first resumed prompt");
+	try {
+		const earlier = harness.sessionManager.getEntries()[0];
+		if (!earlier) throw new Error("no entries");
+		await harness.session.navigateTree(earlier.id);
+		await prompt(harness, "after navigation");
+		expect(noticeTexts(harness.session).join("")).not.toContain(MCP_TOOL);
+	} finally {
+		harness.cleanup();
+	}
+});
+
+test("reload gives restored MCP tools a fresh grace turn", async () => {
+	const factories: ExtensionFactory[] = [];
+	const harness = await resumeAndPrompt(factories, "before reload", { extensionFactories: factories });
+	try {
+		await harness.session.reload();
+		await prompt(harness, "after reload");
+		expect(noticeTexts(harness.session).join("")).not.toContain(MCP_TOOL);
+	} finally {
+		harness.cleanup();
+	}
+});
+
 test("--exclude-tools unregisters a tool, so it is reported", async () => {
 	const harness = await resumeAndPrompt([directTools], "excluded", { excludedToolNames: ["ssh_exec"] });
 	try {

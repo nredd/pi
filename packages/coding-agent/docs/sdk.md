@@ -35,6 +35,7 @@ A resumed, reloaded, or forked session can carry tool declarations for tools its
 
 - A tool is reported only when it is not in the session's tool registry. Registered tools are never reported, even if inactive, deferred, or kept off the model's tool list by a `--tools` allowlist.
 - A restored MCP tool (`mcp__*` or an MCP resource tool) that is not registered when the prompt starts gets one turn of grace, because MCP servers connect after the first prompt starts. It is reported on the next turn if it is still not registered.
+- `--tools` unregisters the non-MCP tools it does not match, and `--exclude-tools` unregisters the tools it names, so both are reported. Only MCP tools kept registered without being matched by `--tools` are exempt.
 - The notice is sent once, on the first turn that finds the tool missing.
 
 <a id="sessionmanager-api"></a>

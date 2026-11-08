@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Breaking Changes
+
+- `route(request, ctx)` of `registerVirtualModel()` now receives a `ModelRouteContext` instead of the registrant's `ExtensionContext`. Routes that read `ctx.cwd`, `ctx.sessionManager` or similar must use `ctx.session`, which refuses use after its session is reloaded or disposed.
+
 ### Fixed
 
 - Virtual-model routes run in the requesting session's context. A route registered by an extension that was later disposed, reloaded or failed startup no longer refuses requests from other live sessions with a stale-context error. Each request is bound to its own session generation, so a requester's own reload, or a session disposed while a route is still deciding, refuses that request before provider dispatch (direct, agent continuation and summarization) while fresh requests and sibling sessions keep routing. The registered route receives the requester's context and a gated model registry, and `ctx.appendEntry()` from a route writes to the requester's session.
@@ -13,7 +17,6 @@
 
 ### Changed
 
-- `route(request, ctx)` of `registerVirtualModel()` now receives a `ModelRouteContext` instead of the registrant's `ExtensionContext`. Routes that read `ctx.cwd`, `ctx.sessionManager` or similar must use `ctx.session`, which refuses use after its session is reloaded or disposed.
 - Settled tool blocks and all thinking blocks show a `▸`/`▾` disclosure marker in both TUI modes, and clicking anywhere in the block toggles it in fullscreen mode. Modified clicks, drag selection, and links keep their behavior.
 - Collapsed built-in `bash`, `edit`, `write`, `grep`, `find`, and `ls` results show a one-line summary instead of an output preview.
 - Transcript framing: a dashed `┄` rule separates entries instead of a blank line, a solid `─` rule opens every user turn after the first, assistant prose carries a `│` rule in `borderAccent` (replacing its `outputPad` indent), and collapsed thinking rows read `Thinking · <first sentence>`.

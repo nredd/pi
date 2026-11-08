@@ -2233,6 +2233,7 @@ describe("runToolCall", () => {
 	});
 });
 
+// Refs #581: a request-only gate must compose with the persistent one and never leak into later turns.
 describe("per-request provider gate", () => {
 	/** Runs two requests; only the first one's `prepareRequest` supplies a request gate. */
 	async function runTwoRequests(requestGate: () => Promise<() => void>, trace: string[]) {

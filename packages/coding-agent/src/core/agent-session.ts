@@ -3731,7 +3731,8 @@ export class AgentSession {
 		let failure: ExtensionStartupError | undefined;
 		let emitted = false;
 		try {
-			await before?.();
+			// Like a handler, `before` cannot wait on the window it runs inside.
+			await this._inSessionStartHandler.run(true, async () => await before?.());
 			emitted = true;
 			await this._inSessionStartHandler.run(true, async () => await this._extensionRunner.emit(event));
 		} catch (error) {
@@ -4319,6 +4320,7 @@ export class AgentSession {
 		}
 	}
 
+	/** Rebuild the runtime inside reload's hold. `endHold` must run once the new runner is installed. */
 	private async _reloadRuntime(
 		options: { beforeSessionStart?: () => void | Promise<void> } | undefined,
 		generation: number,

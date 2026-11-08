@@ -664,3 +664,26 @@ it("fails a request awaited by reload's own resource loading instead of deadlock
 		h.cleanup();
 	}
 });
+
+it("fails a request awaited by beforeSessionStart instead of deadlocking reload", async () => {
+	const h = await createHarness({ useModelRuntimeStream: true, models: [{ id: "physical" }] });
+	const registry = h.session.extensionRunner.createContext().modelRegistry;
+	let outcome: unknown;
+	try {
+		await h.session.bindExtensions({ mode: "print" });
+		h.setResponses([fauxAssistantMessage("must not dispatch")]);
+		await within(
+			h.session.reload({
+				beforeSessionStart: async () => {
+					await Promise.resolve();
+					outcome = await registry.complete(registry.find("faux", "physical")!, { messages: [] });
+				},
+			}),
+			"reload",
+		);
+		expect(outcome).toMatchObject({ stopReason: "error" });
+		expect(h.getPendingResponseCount()).toBe(1);
+	} finally {
+		h.cleanup();
+	}
+});

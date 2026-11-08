@@ -29,7 +29,7 @@ The [complete minimal example](../examples/sdk/01-minimal.ts) also streams text 
 
 Read current state through `session.messages`, `session.model`, `session.thinkingLevel`, `session.systemPrompt`, and `session.getActiveToolNames()`.
 
-`session.systemPrompt` is read-only and returns the current effective system prompt, including changes that have not yet been sent to the model. Tool changes are declared to the model before the next request. If a prior declaration names tools that the current session does not register or excludes, the next turn also carries a visible `unregistered-tools-notice` custom message naming them. The notice does not enable tools or change permissions; registered deferred tools are not reported as missing.
+`session.systemPrompt` is read-only and returns the current effective system prompt, including changes that have not yet been sent to the model. Tool changes are declared to the model before the next request. If a prior declaration names tools that the current session does not register or excludes, the next turn also carries a visible `unregistered-tools-notice` custom message naming them. This applies to resumed, reloaded, and forked sessions alike. The notice does not enable tools or change permissions. It is not sent for: registered tools, including deferred ones; registered MCP tools that a `--tools` allowlist keeps registered but does not let the session declare; and restored MCP tools (`mcp__*` and the MCP resource tools) that are not registered yet when the prompt starts, because MCP tools register after the first prompt starts and can be loaded again through `tool_search`.
 
 <a id="sessionmanager-api"></a>
 

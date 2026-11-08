@@ -2040,13 +2040,18 @@ export class AgentSession {
 		if (!handlerEditedTools) result.systemPromptOptions.selectedTools = this.getActiveToolNames();
 
 		const messages: AgentMessage[] = [];
-		// A resumed transcript may declare tools that this runtime did not register. The
-		// agent loop will remove their declarations before the request, but that machine-
-		// readable delta alone does not explain the lost capabilities to people or models.
+		// A resumed transcript may declare tools that this runtime did not register. The agent
+		// loop removes their declarations before the request, but that machine-readable delta
+		// alone does not explain the lost capabilities to people or models.
+		// Extension tools register while bindExtensions() runs, so one still missing is gone. MCP
+		// servers connect afterwards and the first prompt does not wait for servers without direct
+		// tools: a restored MCP tool that is still pending may yet register and can then be loaded
+		// again, so it is not reported. `_startRun()` clears the pending set only after this runs.
+		// Forked sessions are reported too: the fork's tools come from this runtime, not the parent.
 		const missingTools = (getCurrentSystemMessage(this.agent.state.messages)?.toolsAdded ?? [])
 			.map((tool) => tool.name)
-			.filter((name) => !this._toolRegistry.has(name));
-		if (missingTools.length > 0 && this._sessionStartEvent.reason !== "fork") {
+			.filter((name) => !this._toolRegistry.has(name) && !(this._pendingToolNames.has(name) && isMcpToolName(name)));
+		if (missingTools.length > 0) {
 			messages.push({
 				role: "custom",
 				customType: "unregistered-tools-notice",

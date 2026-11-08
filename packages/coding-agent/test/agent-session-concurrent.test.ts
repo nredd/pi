@@ -448,6 +448,7 @@ describe("AgentSession concurrent prompt guard", () => {
 					systemPromptOptions: BuildSystemPromptOptions,
 				) => Promise<{ messages: []; systemPromptOptions: NormalizedBuildSystemPromptOptions }>;
 				invalidate: (message?: string) => void;
+				createContext: () => { cwd: string };
 			};
 		};
 		sessionWithRunner._extensionRunner = {
@@ -469,6 +470,7 @@ describe("AgentSession concurrent prompt guard", () => {
 				systemPromptOptions: normalizeBuildSystemPromptOptions(systemPromptOptions),
 			}),
 			invalidate: () => {},
+			createContext: () => ({ cwd: tempDir }),
 		};
 
 		await session.prompt("hi");
@@ -594,6 +596,7 @@ describe("AgentSession concurrent prompt guard", () => {
 					systemPromptOptions: BuildSystemPromptOptions,
 				) => Promise<{ messages: []; systemPromptOptions: NormalizedBuildSystemPromptOptions }>;
 				invalidate: (message?: string) => void;
+				createContext: () => { cwd: string };
 			};
 		};
 		sessionWithRunner._extensionRunner = {
@@ -611,6 +614,7 @@ describe("AgentSession concurrent prompt guard", () => {
 				systemPromptOptions: normalizeBuildSystemPromptOptions(systemPromptOptions),
 			}),
 			invalidate: () => {},
+			createContext: () => ({ cwd: tempDir }),
 		};
 
 		await session.prompt("hi");

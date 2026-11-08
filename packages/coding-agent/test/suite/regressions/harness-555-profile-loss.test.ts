@@ -1,7 +1,7 @@
 import { copyFileSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fauxAssistantMessage, fauxToolCall, type TranscriptContext } from "@earendil-works/pi-ai";
+import { fauxAssistantMessage, fauxToolCall, type ImageContent, type TranscriptContext } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { afterEach, beforeEach, expect, test } from "vitest";
 import type { AgentSession } from "../../../src/core/agent-session.ts";
@@ -314,6 +314,54 @@ test("reload gives an MCP tool that was unregistered before it a fresh grace tur
 		expect(harness.session.getAllTools().map((tool) => tool.name)).not.toContain(MCP_TOOL);
 		await harness.session.reload();
 		await prompt(harness, "after reload");
+		expect(noticeTexts(harness.session).join("")).not.toContain(MCP_TOOL);
+		await prompt(harness, "second after reload");
+		expect(noticeTexts(harness.session).filter((text) => text.includes(MCP_TOOL))).toHaveLength(1);
+		await prompt(harness, "third after reload");
+		expect(noticeTexts(harness.session).filter((text) => text.includes(MCP_TOOL))).toHaveLength(1);
+	} finally {
+		harness.cleanup();
+	}
+});
+
+test("navigating to a branch that declares a held-back MCP tool keeps it held, then reports it once", async () => {
+	const harness = await resumeAndPrompt([], "first resumed prompt");
+	try {
+		const earlier = harness.sessionManager.getEntries()[0];
+		if (!earlier) throw new Error("no entries");
+		await harness.session.navigateTree(earlier.id);
+		await prompt(harness, "after navigation");
+		await prompt(harness, "second after navigation");
+		await prompt(harness, "third after navigation");
+		expect(noticeTexts(harness.session).filter((text) => text.includes(MCP_TOOL))).toHaveLength(1);
+	} finally {
+		harness.cleanup();
+	}
+});
+
+test("navigating to a branch that does not declare a held-back MCP tool drops it", async () => {
+	const harness = await resumeAndPrompt([], "first resumed prompt");
+	try {
+		// A second root branch whose transcript declares no tools.
+		harness.sessionManager.resetLeaf();
+		const otherRoot = harness.sessionManager.appendMessage({ role: "user", content: "other", timestamp: Date.now() });
+		harness.sessionManager.appendMessage(fauxAssistantMessage("other reply"));
+		await harness.session.navigateTree(otherRoot);
+		await prompt(harness, "empty branch");
+		await prompt(harness, "again");
+		expect(noticeTexts(harness.session).join("")).not.toContain(MCP_TOOL);
+	} finally {
+		harness.cleanup();
+	}
+});
+
+test("a run that fails while starting keeps the MCP grace turn", async () => {
+	const harness = await resume([]);
+	try {
+		// Handler errors do not propagate, so fail image normalization (after before_agent_start).
+		const broken = { type: "image", data: undefined, mimeType: "image/png" } as unknown as ImageContent;
+		await expect(harness.session.prompt("fails", { images: [broken] })).rejects.toThrow();
+		await prompt(harness, "retry");
 		expect(noticeTexts(harness.session).join("")).not.toContain(MCP_TOOL);
 	} finally {
 		harness.cleanup();

@@ -1928,6 +1928,11 @@ export class AgentSession {
 		this._pendingToolNames.clear();
 		this._markRuntimeRebuilt();
 		const current = getCurrentSystemMessage(this.sessionManager.buildSessionContext().messages);
+		// Held-back MCP tools survive a rebuild, but only while the restored branch declares them.
+		const declared = new Set((current?.toolsAdded ?? []).map((tool) => tool.name));
+		for (const name of this._heldBackMcpToolNames) {
+			if (!declared.has(name)) this._heldBackMcpToolNames.delete(name);
+		}
 		if (!current) return;
 		const names = applyToolModifiers(
 			(current.toolsAdded ?? []).map((tool) => tool.name),
@@ -1940,7 +1945,6 @@ export class AgentSession {
 	/** Give the next run MCP grace again; see `_isFirstRunSinceRebuild`. */
 	private _markRuntimeRebuilt(): void {
 		this._isFirstRunSinceRebuild = true;
-		this._heldBackMcpToolNames.clear();
 	}
 
 	// =========================================================================
@@ -2005,6 +2009,7 @@ export class AgentSession {
 		// The run records the loadout in the transcript; restored tools that did not register by now
 		// are dropped, so a tool that never registers does not stay pending.
 		this._pendingToolNames.clear();
+		this._isFirstRunSinceRebuild = false;
 		try {
 			await this.agent.prompt(messages);
 			while (!this._agentRunAbortRequested) {
@@ -2045,8 +2050,8 @@ export class AgentSession {
 		}
 
 		const selectedToolsBefore = this._baseSystemPromptOptions.selectedTools;
+		// Consumed by the run path once preparation succeeds, so a failed start keeps its grace.
 		const hasMcpGrace = this._isFirstRunSinceRebuild;
-		this._isFirstRunSinceRebuild = false;
 		const result = await this._extensionRunner.emitBeforeAgentStart(trigger, this._baseSystemPromptOptions);
 		// Handlers may edit event.systemPromptOptions.selectedTools or call setActiveTools(),
 		// which updates the live loadout instead. An explicit edit wins; otherwise the live

@@ -29,7 +29,13 @@ The [complete minimal example](../examples/sdk/01-minimal.ts) also streams text 
 
 Read current state through `session.messages`, `session.model`, `session.thinkingLevel`, `session.systemPrompt`, and `session.getActiveToolNames()`.
 
-`session.systemPrompt` is read-only and returns the current effective system prompt, including changes that have not yet been sent to the model. Tool changes are declared to the model before the next request. If a prior declaration names tools that the current session does not register or excludes, the next turn also carries a visible `unregistered-tools-notice` custom message naming them. This applies to resumed, reloaded, and forked sessions alike. The notice does not enable tools or change permissions. It is not sent for: registered tools, including deferred ones; registered MCP tools that a `--tools` allowlist keeps registered but does not let the session declare; and restored MCP tools (`mcp__*` and the MCP resource tools) that are not registered yet when the prompt starts, because MCP tools register after the first prompt starts and can be loaded again through `tool_search`.
+`session.systemPrompt` is read-only and returns the current effective system prompt, including changes that have not yet been sent to the model. Tool changes are declared to the model before the next request.
+
+A resumed, reloaded, or forked session can carry tool declarations for tools its runtime no longer registers, e.g. an extension that was removed or failed to load, or `--exclude-tools ssh_exec`. The next turn then includes a visible `unregistered-tools-notice` custom message, e.g. `Tools no longer available: ssh_exec`. The notice does not enable tools or change permissions. Rules:
+
+- A tool is reported only when it is not in the session's tool registry. Registered tools are never reported, even if inactive, deferred, or kept off the model's tool list by a `--tools` allowlist.
+- A restored MCP tool (`mcp__*` or an MCP resource tool) that is not registered when the prompt starts gets one turn of grace, because MCP servers connect after the first prompt starts. It is reported on the next turn if it is still not registered.
+- The notice is sent once, on the first turn that finds the tool missing.
 
 <a id="sessionmanager-api"></a>
 

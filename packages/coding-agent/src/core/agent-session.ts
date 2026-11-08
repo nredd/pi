@@ -490,6 +490,8 @@ export class AgentSession {
 	 * `setActiveToolsByName()` deactivates a tool or the next agent run starts.
 	 */
 	private _pendingToolNames = new Set<string>();
+	/** Restored MCP tools still unregistered when a run started; reported by the next run if still gone. */
+	private _lateMcpToolNames = new Set<string>();
 	private _usesDefaultTools: boolean;
 	private _defaultToolModifiers: string[];
 	/** Matches the `--tools` entries: tool names or patterns. */
@@ -2030,6 +2032,8 @@ export class AgentSession {
 		}
 
 		const selectedToolsBefore = this._baseSystemPromptOptions.selectedTools;
+		// Handlers may call setActiveTools(), which clears the pending set.
+		const pendingMcp = new Set([...this._pendingToolNames].filter(isMcpToolName));
 		const result = await this._extensionRunner.emitBeforeAgentStart(trigger, this._baseSystemPromptOptions);
 		// Handlers may edit event.systemPromptOptions.selectedTools or call setActiveTools(),
 		// which updates the live loadout instead. An explicit edit wins; otherwise the live
@@ -2040,22 +2044,18 @@ export class AgentSession {
 		if (!handlerEditedTools) result.systemPromptOptions.selectedTools = this.getActiveToolNames();
 
 		const messages: AgentMessage[] = [];
-		// A resumed transcript may declare tools that this runtime did not register. The agent
-		// loop removes their declarations before the request, but that machine-readable delta
-		// alone does not explain the lost capabilities to people or models.
-		// Extension tools register while bindExtensions() runs, so one still missing is gone. MCP
-		// servers connect afterwards and the first prompt does not wait for servers without direct
-		// tools: a restored MCP tool that is still pending may yet register and can then be loaded
-		// again, so it is not reported. `_startRun()` clears the pending set only after this runs.
-		// Forked sessions are reported too: the fork's tools come from this runtime, not the parent.
-		const missingTools = (getCurrentSystemMessage(this.agent.state.messages)?.toolsAdded ?? [])
-			.map((tool) => tool.name)
-			.filter((name) => !this._toolRegistry.has(name) && !(this._pendingToolNames.has(name) && isMcpToolName(name)));
+		// Report declared tools this runtime no longer registers (resume, reload, fork). Restored MCP
+		// tools whose server may still be connecting get one run of grace, then are reported if gone.
+		const declared = (getCurrentSystemMessage(this.agent.state.messages)?.toolsAdded ?? []).map((tool) => tool.name);
+		const missingTools = [...new Set([...declared, ...this._lateMcpToolNames])].filter(
+			(name) => !this._toolRegistry.has(name) && !pendingMcp.has(name),
+		);
+		this._lateMcpToolNames = new Set([...pendingMcp].filter((name) => !this._toolRegistry.has(name)));
 		if (missingTools.length > 0) {
 			messages.push({
 				role: "custom",
 				customType: "unregistered-tools-notice",
-				content: `Tools no longer available: ${missingTools.join(", ")}. They are not registered or are excluded in this session; check the active profile and extensions.`,
+				content: `Tools no longer available: ${missingTools.join(", ")}. They are not registered in this session (extension missing, failed to load, or excluded).`,
 				display: true,
 				timestamp: Date.now(),
 			});

@@ -9,7 +9,7 @@ import {
 	normalizeContext,
 	type SimpleStreamOptions,
 } from "@earendil-works/pi-ai";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import type { ExtensionFactory } from "../src/core/extensions/types.ts";
 import { DefaultResourceLoader } from "../src/core/resource-loader.ts";
@@ -197,6 +197,26 @@ describe("createAgentSession stream options", () => {
 			fixture.session.agent.state.messages = fixture.session.agent.state.messages.slice(1);
 			expect(fixture.session.cacheWarmingStatus?.reason).toBe("conversation context changed");
 		} finally {
+			fixture.dispose();
+		}
+	});
+
+	// Refs nredd/pi-harness#581: reload retires the turn gate that warming used to hold.
+	it("keeps warming the cache after an idle reload", async () => {
+		const fixture = await createCacheWarmingSession();
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+		try {
+			await fixture.session.prompt("test");
+			expect(fixture.providerCalls()).toBe(1);
+			await fixture.session.reload();
+			await vi.advanceTimersByTimeAsync(300_000);
+
+			expect(fixture.providerCalls()).toBe(2);
+			expect(
+				fixture.session.sessionManager.getEntries().some((e) => e.type === "usage" && e.kind === "cache_warm"),
+			).toBe(true);
+		} finally {
+			vi.useRealTimers();
 			fixture.dispose();
 		}
 	});

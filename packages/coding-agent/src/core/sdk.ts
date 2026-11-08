@@ -425,7 +425,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			// shallow-copy the messages array or refresh the model object without changing
 			// the provider request, so top-level object identity is not a valid cache key.
 			if (options?.sessionId === sessionManager.getSessionId()) {
-				cacheWarmer.start({ model, context, options: requestOptions }, cacheContextIsCurrent(model));
+				// The turn's request gate is bound to the runner that prepared it, which reload()
+				// retires. Warming outlives reloads, so it keeps only the session's persistent gate.
+				const warmOptions = { ...requestOptions, beforeProviderRequest: agent.beforeProviderRequest };
+				cacheWarmer.start({ model, context, options: warmOptions }, cacheContextIsCurrent(model));
 			}
 			return modelRuntime.streamSimple(model, context, requestOptions);
 		},

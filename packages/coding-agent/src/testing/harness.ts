@@ -148,6 +148,8 @@ export interface HarnessOptions {
 	sessionStartEvent?: SessionStartEvent;
 	/** Working directory of the session and its extensions, owned by the caller. Default: `tempDir`. */
 	cwd?: string;
+	/** Outer request preparation that the session composes with its own. */
+	prepareRequest?: ConstructorParameters<typeof Agent>[0]["prepareRequest"];
 }
 
 export interface Harness {
@@ -252,6 +254,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 			tools: [],
 		},
 		convertToLlm,
+		prepareRequest: options.prepareRequest,
 		onPayload: async (payload) => {
 			const runner = extensionRunnerRef.current;
 			if (!runner?.hasHandlers("before_provider_request")) {

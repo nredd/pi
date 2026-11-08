@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- `AgentRequestUpdate.beforeProviderRequest`: a gate for a single provider request, composed with the loop's persistent `beforeProviderRequest` and not carried into later turns.
+
 ## [1.3.0] - 2026-10-15
 
 ## [1.2.0] - 2026-10-12

@@ -23,6 +23,8 @@ import {
 	type Provider,
 	type ThinkingLevelMap,
 } from "@earendil-works/pi-ai";
+import type { ExtensionContext } from "./extensions/types.ts";
+import type { ModelRegistry } from "./model-registry.ts";
 import type { SessionEntry } from "./session-manager.ts";
 
 /** API id of virtual catalog entries. Requests for it fail unless routed first. */
@@ -81,6 +83,16 @@ export interface ModelRoute<TState = unknown> {
 	state?: TState;
 }
 
+/** Request-owned routing services, never the session that registered the route. */
+export interface ModelRouteContext {
+	/** Registry of the requesting session, including its provider gates; raw runtime calls use the runtime registry. */
+	modelRegistry: ModelRegistry;
+	/** Requesting session context. Absent for raw ModelRuntime calls, which have no session. */
+	session?: ExtensionContext;
+	/** Append a custom entry to the requesting session and notify its subscribers. Absent for raw runtime calls. */
+	appendEntry?: (customType: string, data?: unknown) => void;
+}
+
 export interface VirtualModelDefinition<TState = unknown> {
 	/** Provider the virtual model is listed under. May be a provider with physical models. */
 	provider: string;
@@ -98,7 +110,7 @@ export interface VirtualModelDefinition<TState = unknown> {
 	/** Input types accepted for selection. Defaults to text and images; routed models without image support get placeholders. */
 	input?: ("text" | "image")[];
 	/** Pick the physical model, which must have credentials, and thinking level for one request. */
-	route(request: ModelRouteRequest<TState>): ModelRoute<TState> | Promise<ModelRoute<TState>>;
+	route(request: ModelRouteRequest<TState>, ctx: ModelRouteContext): ModelRoute<TState> | Promise<ModelRoute<TState>>;
 }
 
 /** Whether a model or message names a virtual model. Failed routing leaves the virtual model on its message. */

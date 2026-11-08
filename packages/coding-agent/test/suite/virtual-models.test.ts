@@ -2,8 +2,12 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { type FauxResponseStep, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ExtensionContext } from "../../src/core/extensions/index.ts";
-import { type ModelRoute, type ModelRouteRequest, VIRTUAL_MODEL_STATE_ENTRY } from "../../src/core/virtual-models.ts";
+import {
+	type ModelRoute,
+	type ModelRouteContext,
+	type ModelRouteRequest,
+	VIRTUAL_MODEL_STATE_ENTRY,
+} from "../../src/core/virtual-models.ts";
 import { createHarness, type Harness, type HarnessOptions } from "./harness.ts";
 
 const echoTool: AgentTool = {
@@ -14,7 +18,7 @@ const echoTool: AgentTool = {
 	execute: async () => ({ content: [{ type: "text", text: "echoed" }], details: {} }),
 };
 
-type Route = (request: ModelRouteRequest, ctx: ExtensionContext) => ModelRoute;
+type Route = (request: ModelRouteRequest, ctx: ModelRouteContext) => ModelRoute;
 
 /** Router used by these tests: new user turns pick by thinking level, everything else stays put. */
 const defaultRoute: Route = (request, ctx) => {

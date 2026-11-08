@@ -64,6 +64,15 @@ Registration follows the same queuing and reload rules as `pi.registerProvider()
 
 `route(request, ctx)` runs before every request made with the virtual model and returns `{ model, thinkingLevel }`. The model can be any physical model in the catalog whose provider has credentials; look it up with `ctx.modelRegistry`. A virtual model cannot route to another virtual model. Pi clamps the thinking level to the returned model.
 
+`ctx` is a `ModelRouteContext`, not the registering extension's `ExtensionContext`:
+
+- `modelRegistry` belongs to the requesting session and preserves its provider-request gates, including nested classification and streaming. A raw `ModelRuntime` call has no session and receives a runtime-scoped registry instead, without session gates.
+- `session`, when present, is the requesting session's current `ExtensionContext`. Read its branch, working directory or UI there, e.g. `ctx.session?.sessionManager.getBranch()`. `appendEntry(type, data)`, also present only for session requests, appends to that session and emits `entry_appended`.
+- Registrations still belong to the shared model runtime: the last definition for a provider and ID wins, including before `session_start`, and can outlive its registering session. Disposing that registrant neither resurrects an older definition nor invalidates another session's route.
+- Do not close over the registrant's `pi`, event context or gated registry for routing. Ordinary extension contexts remain invalid after disposal/replacement/reload. Session requests and nested routing calls cannot dispatch after the requester is disposed. Retained routing registries also reject after their own requesting runner is reloaded or replaced, even though the stable session model view can serve fresh requests. Each request captures its requesting runner before asynchronous preparation and rechecks it synchronously immediately before physical provider dispatch, even when routing already finished before authentication or header transforms paused. This applies to direct physical and virtual calls, nested routing calls, agent turns and summaries. A stable session model view captures the new runner for each fresh call after reload; reloading a different session does not invalidate the requester.
+
+Migration: code using `ctx.modelRegistry` is unchanged. Move other context reads to `ctx.session` and handle its absence for raw runtime calls. Use `ctx.appendEntry?.(...)` rather than a captured `pi.appendEntry(...)` for decision attribution. Deploy extensions relying on this contract with the matching core; older hosts supply the registrant's context, not request ownership.
+
 | Field | Meaning |
 |---|---|
 | `model`, `thinkingLevel` | The selected virtual model and level |
@@ -107,7 +116,7 @@ pi.registerVirtualModel<{ phase: "plan" | "build" }>({
 - State follows the session tree, so forks and `/tree` navigation see the state of their branch. It survives compaction.
 - `direct` requests have no state, and Pi ignores state they return.
 
-The transcript already records the selection and every dispatched model, and `ctx.sessionManager.getBranch()` exposes both.
+The transcript already records the selection and every dispatched model, and `ctx.session?.sessionManager.getBranch()` exposes both for session-owned requests.
 
 Routers can call other models through `ctx.modelRegistry`, for example `ctx.modelRegistry.classify()` with a classifier model from `ctx.modelRegistry.findOfType("classifier", provider, id)`. The call adds latency before the first token of the turn.
 

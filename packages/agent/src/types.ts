@@ -177,7 +177,10 @@ export interface PrepareRequestContext {
 }
 
 /** Replacement runtime state for the provider request being prepared. */
-export type AgentRequestUpdate = Omit<AgentLoopTurnUpdate, "messages">;
+export type AgentRequestUpdate = Omit<AgentLoopTurnUpdate, "messages"> & {
+	/** Additional provider gate for this request only; composed with the loop's persistent gate. */
+	beforeProviderRequest?: () => Promise<() => void>;
+};
 
 /**
  * Called immediately before every conversational provider request, including the first.

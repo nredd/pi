@@ -407,6 +407,7 @@ export {
 } from "./core/trust-manager.ts";
 export {
 	type ModelRoute,
+	type ModelRouteContext,
 	type ModelRouteReason,
 	type ModelRouteRequest,
 	VIRTUAL_MODEL_STATE_ENTRY,

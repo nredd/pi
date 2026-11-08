@@ -119,7 +119,7 @@ import { ExtensionStartupError, isExtensionStartupError } from "./extensions/sta
 import { createToolNameMatcher, isMcpToolName } from "./mcp-servers.ts";
 import { type BashExecutionMessage, type CustomMessage, convertToLlm } from "./messages.ts";
 import { ModelRegistry } from "./model-registry.ts";
-import type { ModelRuntime } from "./model-runtime.ts";
+import { type ModelRuntime, withRequestGeneration } from "./model-runtime.ts";
 import { NestedToolCallRunner } from "./nested-tool-calls.ts";
 import { expandPromptTemplate, type PromptTemplate } from "./prompt-templates.ts";
 import type { ResourceExtensionPaths, ResourceLoader } from "./resource-loader.ts";
@@ -157,6 +157,7 @@ import {
 	getBranchSelection,
 	getVirtualModelState,
 	isVirtualModel,
+	type ModelRouteContext,
 	VIRTUAL_MODEL_STATE_ENTRY,
 	type VirtualModelStateData,
 } from "./virtual-models.ts";
@@ -553,10 +554,11 @@ export class AgentSession {
 	 * The agent's stream function with this session's startup gate on the request options.
 	 * Summaries build their own options outside the agent loop, so they get the gate here.
 	 */
-	private _gatedSummarizationStream(): AgentSession["agent"]["streamFunction"] {
+	private _gatedSummarizationStream(session: ModelRouteContext["session"]): AgentSession["agent"]["streamFunction"] {
 		const stream = this.agent.streamFunction;
+		const beforeProviderRequest = withRequestGeneration(this._providerRequestGate, session);
 		return (model, context, options) =>
-			stream(model, context, { ...options, beforeProviderRequest: this._providerRequestGate } as typeof options);
+			stream(model, context, { ...options, beforeProviderRequest } as typeof options);
 	}
 	/** Session-owned model view, used for every extension-originated provider request. */
 	private _models!: Models;
@@ -593,7 +595,9 @@ export class AgentSession {
 		this._customTools = config.customTools ?? [];
 		this._cwd = config.cwd;
 		this._modelRuntime = config.modelRuntime;
-		this._models = this._modelRuntime.withBeforeProviderRequest(this._providerRequestGate);
+		this._models = this._modelRuntime.withBeforeProviderRequest(this._providerRequestGate, () =>
+			this._createModelRouteContext(),
+		);
 		// Rides on the agent loop's request options like `sessionId`, so a replaced `streamFunction` keeps it.
 		this.agent.beforeProviderRequest = this._providerRequestGate;
 		this._cacheWarmer = config.cacheWarmer;
@@ -632,6 +636,24 @@ export class AgentSession {
 
 	get modelRuntime(): ModelRuntime {
 		return this._modelRuntime;
+	}
+
+	/** Services owned by the requester, independent of whichever session registered the route. */
+	private _createModelRouteContext(session = this._extensionRunner.createContext()): ModelRouteContext {
+		// Unlike the stable session view, retained routing services belong to this runner generation.
+		const models = this._modelRuntime.withBeforeProviderRequest(
+			withRequestGeneration(this._providerRequestGate, session),
+			() => this._createModelRouteContext(session),
+		);
+		return {
+			modelRegistry: new ModelRegistry(this._modelRuntime, models),
+			session,
+			appendEntry: (customType, data) => {
+				const manager = session.sessionManager; // Checks the requesting runner's liveness.
+				const entry = manager.getEntry(this.sessionManager.appendCustomEntry(customType, data));
+				if (entry) this._emit({ type: "entry_appended", entry });
+			},
+		};
 	}
 
 	private async _getRequiredRequestAuth(
@@ -683,23 +705,27 @@ export class AgentSession {
 		headers?: Record<string, string>;
 		env?: Record<string, string>;
 		thinkingLevel: ThinkingLevel;
+		streamFn: AgentSession["agent"]["streamFunction"];
 	}> {
 		this._assertExtensionsStarted();
+		const routeContext = this._createModelRouteContext();
+		const streamFn = this._gatedSummarizationStream(routeContext.session);
 		// Route a virtual model first: summaries size their input and output from the model they get.
 		const { model, thinkingLevel } = isVirtualModel(selectedModel)
 			? await this._modelRuntime.resolveModel(selectedModel, convertToLlm(this.messages), {
 					reason: "direct",
 					thinkingLevel: this.thinkingLevel,
 					signal,
+					routeContext: () => routeContext,
 				})
 			: { model: selectedModel, thinkingLevel: this.thinkingLevel };
 		if (this.agent.streamFunction === streamSimple) {
-			return { ...(await this._getRequiredRequestAuth(model, signal)), thinkingLevel };
+			return { ...(await this._getRequiredRequestAuth(model, signal)), thinkingLevel, streamFn };
 		}
 
 		try {
 			const result = await this._modelRuntime.getAuth(model, { signal });
-			if (!result) return { model, thinkingLevel };
+			if (!result) return { model, thinkingLevel, streamFn };
 			const requestModel = result.auth.baseUrl ? { ...model, baseUrl: result.auth.baseUrl } : model;
 			return {
 				model: requestModel,
@@ -707,10 +733,11 @@ export class AgentSession {
 				headers: withoutDeletedHeaders(result.auth.headers),
 				env: result.env,
 				thinkingLevel,
+				streamFn,
 			};
 		} catch (error) {
 			if (signal?.aborted) throw error;
-			return { model, thinkingLevel };
+			return { model, thinkingLevel, streamFn };
 		}
 	}
 
@@ -918,10 +945,12 @@ export class AgentSession {
 				);
 				return { previous, context: previous?.context ?? canonicalContext, projection };
 			};
+			const routeContext = this._createModelRouteContext();
 			let { previous, context, projection } = await prepare();
+			const beforeProviderRequest = withRequestGeneration(previous?.beforeProviderRequest, routeContext.session);
 			const model = previous?.model ?? this.agent.state.model;
 			const thinkingLevel = previous?.thinkingLevel ?? this.agent.state.thinkingLevel;
-			if (!isVirtualModel(model)) return { ...previous, context, model, thinkingLevel };
+			if (!isVirtualModel(model)) return { ...previous, context, model, thinkingLevel, beforeProviderRequest };
 
 			// The selection stays in agent state; only this request uses the routed model. A routing
 			// failure rejects, which ends the run with an error response. Only messages the user wrote
@@ -935,6 +964,7 @@ export class AgentSession {
 				signal,
 				failed,
 				state,
+				routeContext: () => routeContext,
 			});
 			if (route.state !== undefined && route.state !== state) {
 				const data: VirtualModelStateData = { provider: model.provider, modelId: model.id, state: route.state };
@@ -949,7 +979,13 @@ export class AgentSession {
 				await this._runAutoCompaction("threshold", false);
 				({ previous, context } = await prepare());
 			}
-			return { ...previous, context, model: route.model, thinkingLevel: route.thinkingLevel };
+			return {
+				...previous,
+				context,
+				model: route.model,
+				thinkingLevel: route.thinkingLevel,
+				beforeProviderRequest: withRequestGeneration(previous?.beforeProviderRequest, routeContext.session),
+			};
 		};
 	}
 
@@ -3081,7 +3117,7 @@ export class AgentSession {
 			customInstructions,
 			signal,
 			request.thinkingLevel,
-			this._gatedSummarizationStream(),
+			request.streamFn,
 			request.env,
 			this.settingsManager.getRetrySettings(),
 			this._summarizationRetryCallbacks({ source: "compaction", reason }),
@@ -3808,6 +3844,7 @@ export class AgentSession {
 	 * treat the former as fatal do not.
 	 */
 	private _assertExtensionsStarted(): void {
+		if (this._disposed) throw new Error("Session is disposed and cannot send provider requests.");
 		const failure = this._extensionStartupFailure;
 		if (failure) {
 			throw new ExtensionStartupError(
@@ -4648,7 +4685,6 @@ export class AgentSession {
 					customInstructions,
 					replaceInstructions,
 					reserveTokens: branchSummarySettings.reserveTokens,
-					streamFn: this._gatedSummarizationStream(),
 					retry: this.settingsManager.getRetrySettings(),
 					callbacks: this._summarizationRetryCallbacks({ source: "branchSummary" }),
 				});
@@ -4923,7 +4959,6 @@ export class AgentSession {
 			messages: this.messages,
 			hint: options.hint,
 			signal: options.signal,
-			streamFn: this._gatedSummarizationStream(),
 			retry: this.settingsManager.getRetrySettings(),
 			sessionId: this.sessionId,
 		});

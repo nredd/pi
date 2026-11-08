@@ -531,6 +531,8 @@ export class AgentSession {
 	private _startupGeneration = 0;
 	/** Marks provider calls made by the currently executing session_start handler. */
 	private readonly _inSessionStartHandler = new AsyncLocalStorage<boolean>();
+	/** Marks work running inside reload's provider-request hold; `active` clears when the hold ends. */
+	private readonly _inReloadHold = new AsyncLocalStorage<{ active: boolean }>();
 	/** A success must start after this generation to clear the fatal startup latch. */
 	private _startupFailureRecoveryGeneration = 0;
 	/** Counts fatal emissions; a replayed action dequeued before one is discarded, not delivered. */
@@ -564,8 +566,11 @@ export class AgentSession {
 	private _models!: Models;
 	/** Last-moment startup check and synchronous dispatch recheck for this session's provider requests. */
 	private readonly _providerRequestGate = async (): Promise<() => void> => {
-		// A handler awaiting its own request cannot wait for the handler to settle.
-		if (this._inSessionStartHandler.getStore()) this._assertExtensionsStarted();
+		// A handler awaiting its own request cannot wait for the handler to settle. The same holds
+		// for reload's own settings and resource loading while its hold is open.
+		if (this._inSessionStartHandler.getStore() || this._inReloadHold.getStore()?.active) {
+			this._assertExtensionsStarted();
+		}
 		await this._waitForExtensionsStarted();
 		this._assertExtensionsStarted();
 		return () => this._assertExtensionsStarted();
@@ -4293,14 +4298,24 @@ export class AgentSession {
 		const previousFlagValues = oldRunner.getFlagValues();
 		await emitSessionShutdownEvent(oldRunner, { type: "session_shutdown", reason: "reload" });
 		// Hold provider requests until the new runner exists, so none resolves the invalidated one.
+		// The hold ends once the runner is installed and never spans extension handlers, which may
+		// await requests of their own. Work inside it fails fast instead of waiting on itself.
 		this._beginStartupPending();
-		try {
-			oldRunner.invalidate();
-			await this._reloadRuntime(options, generation, previousFlagValues);
-		} finally {
+		const hold = { active: true };
+		const endHold = () => {
+			if (!hold.active) return;
+			hold.active = false;
 			this._startupPending--;
 			this._releaseStartupWaiters();
 			this._settleDeferredStartupActions();
+		};
+		try {
+			await this._inReloadHold.run(hold, async () => {
+				oldRunner.invalidate();
+				await this._reloadRuntime(options, generation, previousFlagValues, endHold);
+			});
+		} finally {
+			endHold();
 		}
 	}
 
@@ -4308,6 +4323,7 @@ export class AgentSession {
 		options: { beforeSessionStart?: () => void | Promise<void> } | undefined,
 		generation: number,
 		previousFlagValues: Map<string, boolean | string>,
+		endHold: () => void,
 	): Promise<void> {
 		const getDefaultTools = () =>
 			this._usesDefaultTools
@@ -4333,12 +4349,17 @@ export class AgentSession {
 			includeAllExtensionTools: true,
 		});
 
-		if (this._extensionsBound) {
-			await this._emitSessionStart(
+		if (!this._extensionsBound) {
+			endHold();
+		} else {
+			// session_start opens its own pending window synchronously, so the gate never reopens.
+			const started = this._emitSessionStart(
 				{ type: "session_start", reason: "reload" },
 				generation,
 				options?.beforeSessionStart,
 			);
+			endHold();
+			await started;
 			this._extensionRunner.reportUnhandledMcpServers();
 			await this.extendResourcesFromExtensions("reload");
 		}

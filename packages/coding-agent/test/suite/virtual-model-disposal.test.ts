@@ -602,3 +602,65 @@ it("rejects a request held by a reload when the session is disposed", async () =
 		h.cleanup();
 	}
 });
+
+/** Fails fast instead of hanging if a regression deadlocks the promise. */
+async function within<T>(promise: Promise<T>, label: string): Promise<T> {
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const timeout = new Promise<never>((_, reject) => {
+		timer = setTimeout(() => reject(new Error(`${label} timed out`)), 3000);
+	});
+	try {
+		return await Promise.race([promise, timeout]);
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
+// Refs #581: the reload hold must not span handlers that await requests of their own.
+it("does not deadlock reload on a resources_discover handler awaiting a model request", async () => {
+	let armed = false;
+	let request: Promise<unknown> | undefined;
+	const h = await createHarness({
+		useModelRuntimeStream: true,
+		models: [{ id: "physical" }],
+		extensionFactories: [
+			(pi) => {
+				pi.on("resources_discover", async (_event, ctx) => {
+					if (!armed) return;
+					const model = ctx.modelRegistry.find("faux", "physical")!;
+					request = ctx.modelRegistry.complete(model, { messages: [] });
+					await request;
+				});
+			},
+		],
+	});
+	try {
+		await h.session.bindExtensions({ mode: "print" });
+		armed = true;
+		h.setResponses([fauxAssistantMessage("discovered")]);
+		await within(h.session.reload(), "reload");
+		expect(await within(request!, "request")).toMatchObject({ stopReason: "stop" });
+		expect(h.getPendingResponseCount()).toBe(0);
+		await within(h.session.reload(), "second reload");
+	} finally {
+		h.cleanup();
+	}
+});
+
+it("fails a request awaited by reload's own resource loading instead of deadlocking", async () => {
+	const h = await createHarness({ useModelRuntimeStream: true, models: [{ id: "physical" }] });
+	const loader = (h.session as unknown as { _resourceLoader: ReloadableLoader })._resourceLoader;
+	const registry = h.session.extensionRunner.createContext().modelRegistry;
+	let outcome: unknown;
+	vi.spyOn(loader, "reload").mockImplementation(async () => {
+		outcome = await registry.complete(registry.find("faux", "physical")!, { messages: [] });
+	});
+	try {
+		h.setResponses([fauxAssistantMessage("must not dispatch")]);
+		await within(h.session.reload(), "reload");
+		expect(outcome).toMatchObject({ stopReason: "error" });
+		expect(h.getPendingResponseCount()).toBe(1);
+	} finally {
+		h.cleanup();
+	}
+});

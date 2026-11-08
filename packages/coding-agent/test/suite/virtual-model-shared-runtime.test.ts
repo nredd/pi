@@ -5,7 +5,7 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { type ApiProvider, getApiProvider, registerApiProvider } from "@earendil-works/pi-ai/compat";
 import { Type } from "typebox";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, test } from "vitest";
 import { DefaultResourceLoader } from "../../src/core/resource-loader.ts";
 import { SessionManager } from "../../src/core/session-manager.ts";
 import { createHarness, type Harness, type HarnessOptions } from "./harness.ts";
@@ -54,91 +54,117 @@ async function loaderFor(extPath: string, root: string): Promise<DefaultResource
 	return loader;
 }
 
-// Refs nredd/pi-harness#581: a background session shares a ModelRuntime with its parent; sibling
-// registrants come and go while it does tool activity, retries and resumes.
-it("keeps a child's tool, retry and resume requests routable while siblings dispose and reload", async () => {
+// Refs nredd/pi-harness#581: a background session shares a ModelRuntime with its parent. Each case
+// makes a sibling the last registrant of `router/owner` (last-writer-wins), then reloads and
+// disposes it *before* the request under test, so the request's route ctx is a stale one.
+async function setup() {
 	const root = mkdtempSync(join(tmpdir(), "pi-581-"));
 	dirs.push(root);
 	const extPath = join(root, "router.ts");
 	writeFileSync(extPath, ROUTER_SOURCE);
 	const routes: Array<string | undefined> = [];
 	(globalThis as { __routes581?: unknown }).__routes581 = routes;
-	try {
-		const host = async (options: HarnessOptions) => {
-			const harness = await createHarness({
-				useModelRuntimeStream: true,
-				models: [{ id: "physical" }],
-				cwd: root,
-				resourceLoader: await loaderFor(extPath, root),
-				...options,
-			});
-			harnesses.push(harness);
-			await harness.session.bindExtensions({ mode: "print" });
-			return harness;
-		};
-		const tool: AgentTool = {
-			name: "noop",
-			label: "Noop",
-			description: "Noop",
-			parameters: Type.Object({}),
-			execute: async () => ({ content: [{ type: "text", text: "done" }], details: {} }),
-		};
-		const parent = await host({});
-		transport = getApiProvider(parent.faux.api);
-		const shared = { modelRuntime: parent.session.modelRuntime, fauxProvider: parent.faux };
-		const sessionDir = join(root, "sessions");
-		const childManager = SessionManager.create(root, sessionDir);
-		const child = await host({
-			...shared,
-			tools: [tool],
-			sessionManager: childManager,
-			settings: { retry: { enabled: true, maxRetries: 3, baseDelayMs: 1 } },
+	const host = async (options: HarnessOptions) => {
+		const harness = await createHarness({
+			useModelRuntimeStream: true,
+			models: [{ id: "physical" }],
+			cwd: root,
+			resourceLoader: await loaderFor(extPath, root),
+			...options,
 		});
-		const router = parent.session.modelRuntime.getModel("router", "owner")!;
-		await child.session.setModel(router);
-
-		// Tool activity, with a sibling registrant disposed mid-run.
+		harnesses.push(harness);
+		await harness.session.bindExtensions({ mode: "print" });
+		return harness;
+	};
+	const parent = await host({});
+	transport = getApiProvider(parent.faux.api);
+	const shared = { modelRuntime: parent.session.modelRuntime, fauxProvider: parent.faux };
+	const sessionDir = join(root, "sessions");
+	const childManager = SessionManager.create(root, sessionDir);
+	/** A sibling that registers last, reloads (re-registering), then disposes: its registrant goes stale. */
+	const staleSibling = async () => {
 		const sibling = await host(shared);
-		child.setResponses([
-			fauxAssistantMessage(fauxToolCall("noop", {}), { stopReason: "toolUse" }),
-			fauxAssistantMessage("after tool"),
-		]);
+		await sibling.session.reload();
 		sibling.session.dispose();
-		await child.session.prompt("use the tool");
-		expect(child.session.getLastAssistantText()).toBe("after tool");
+	};
+	const tool: AgentTool = {
+		name: "noop",
+		label: "Noop",
+		description: "Noop",
+		parameters: Type.Object({}),
+		// Disposes a sibling *during* the tool's execute.
+		execute: async () => {
+			await staleSibling();
+			return { content: [{ type: "text", text: "done" }], details: {} };
+		},
+	};
+	const child = await host({
+		...shared,
+		tools: [tool],
+		sessionManager: childManager,
+		settings: { retry: { enabled: true, maxRetries: 3, baseDelayMs: 1 } },
+	});
+	const router = parent.session.modelRuntime.getModel("router", "owner")!;
+	await child.session.setModel(router);
+	return { host, shared, sessionDir, childManager, child, router, routes, staleSibling };
+}
 
-		// Retry after a transient error, with the parent reloading in between.
-		await parent.session.reload();
-		child.setResponses([
-			fauxAssistantMessage("", { stopReason: "error", errorMessage: "overloaded_error" }),
-			fauxAssistantMessage("recovered"),
-		]);
-		await child.session.prompt("retry me");
-		expect(child.session.getLastAssistantText()).toBe("recovered");
-
-		// Resume from the session file while another sibling is reloaded.
-		const file = childManager.getSessionFile()!;
-		child.session.dispose();
-		const sibling2 = await host(shared);
-		await sibling2.session.reload();
-		const resumed = await host({ ...shared, sessionManager: SessionManager.open(file, sessionDir) });
-		await resumed.session.setModel(router);
-		resumed.setResponses([fauxAssistantMessage("resumed")]);
-		await resumed.session.prompt("resume");
-		expect(resumed.session.getLastAssistantText()).toBe("resumed");
-
-		const stale = [child, resumed].flatMap((h) =>
+function staleErrors(...hosts: Harness[]): Array<string | undefined> {
+	return hosts
+		.flatMap((h) =>
 			h.events.flatMap((e) =>
 				e.type === "message_end" && e.message.role === "assistant" && e.message.stopReason === "error"
 					? [e.message.errorMessage]
 					: [],
 			),
-		);
-		expect(stale.filter((m) => m?.includes("stale"))).toEqual([]);
-		expect(routes.length).toBeGreaterThanOrEqual(5);
-		expect(routes.filter((id) => id === childManager.getSessionId()).length).toBeGreaterThanOrEqual(4);
-		expect(routes.at(-1)).toBe(resumed.sessionManager.getSessionId());
-	} finally {
-		delete (globalThis as { __routes581?: unknown }).__routes581;
-	}
+		)
+		.filter((m) => m?.includes("stale"));
+}
+
+afterEach(() => {
+	delete (globalThis as { __routes581?: unknown }).__routes581;
+});
+
+test("routes a child's post-tool request after a sibling is disposed during the tool", async () => {
+	const { child, childManager, routes } = await setup();
+	child.setResponses([
+		fauxAssistantMessage(fauxToolCall("noop", {}), { stopReason: "toolUse" }),
+		fauxAssistantMessage("after tool"),
+	]);
+	await child.session.prompt("use the tool");
+	expect(child.session.getLastAssistantText()).toBe("after tool");
+	expect(staleErrors(child)).toEqual([]);
+	expect(routes).toEqual([childManager.getSessionId(), childManager.getSessionId()]);
+});
+
+test("routes a child's retry after a sibling goes stale between the failure and the retry", async () => {
+	const { child, childManager, routes, staleSibling } = await setup();
+	child.setResponses([
+		async () => {
+			await staleSibling();
+			return fauxAssistantMessage("", { stopReason: "error", errorMessage: "overloaded_error" });
+		},
+		fauxAssistantMessage("recovered"),
+	]);
+	await child.session.prompt("retry me");
+	expect(child.session.getLastAssistantText()).toBe("recovered");
+	expect(staleErrors(child)).toEqual([]);
+	expect(routes).toEqual([childManager.getSessionId(), childManager.getSessionId()]);
+});
+
+test("routes a resumed session after a sibling reloads and disposes following its creation", async () => {
+	const { host, shared, sessionDir, childManager, child, router, routes, staleSibling } = await setup();
+	child.setResponses([fauxAssistantMessage("first")]);
+	await child.session.prompt("first");
+	const file = childManager.getSessionFile()!;
+	child.session.dispose();
+	const resumed = await host({ ...shared, sessionManager: SessionManager.open(file, sessionDir) });
+	await resumed.session.setModel(router);
+	// The resumed session's own registration is no longer the last one by the time it prompts.
+	await staleSibling();
+	resumed.setResponses([fauxAssistantMessage("resumed")]);
+	await resumed.session.prompt("resume");
+	expect(resumed.session.getLastAssistantText()).toBe("resumed");
+	expect(staleErrors(child, resumed)).toEqual([]);
+	expect(routes.at(-1)).toBe(resumed.sessionManager.getSessionId());
 });

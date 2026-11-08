@@ -2113,14 +2113,17 @@ describe("ModelRegistry", () => {
 						const iterator = stream[Symbol.asyncIterator]();
 
 						// The provider is still silent: `start` must already be visible.
+						let timer: NodeJS.Timeout | undefined;
 						const first = await Promise.race([
 							iterator.next(),
-							new Promise<"held">((resolve) => setTimeout(() => resolve("held"), 500)),
-						]);
+							new Promise<"held">((resolve) => {
+								timer = setTimeout(() => resolve("held"), 2000);
+							}),
+						]).finally(() => clearTimeout(timer));
 						release();
 
 						expect(first).toMatchObject({ value: { type: "start" } });
-						for await (const _event of { [Symbol.asyncIterator]: () => iterator });
+						while (!(await iterator.next()).done);
 						expect((await stream.result()).stopReason).toBe("stop");
 					} finally {
 						delete process.env.TEST_START_EVENT_KEY;

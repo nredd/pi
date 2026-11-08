@@ -498,3 +498,107 @@ it("refuses retained routing registries after their own requester reloads but pe
 		h.cleanup();
 	}
 });
+
+type ReloadableLoader = { reload(): Promise<void> };
+
+// Refs #581: between invalidating the old runner and building the new one, a fresh request
+// through the stable session view must wait for the new runner instead of failing stale.
+it("holds a fresh request made during reload until the new runner exists", async () => {
+	const h = await createHarness({ useModelRuntimeStream: true, models: [{ id: "physical" }] });
+	const loader = (h.session as unknown as { _resourceLoader: ReloadableLoader })._resourceLoader;
+	const reload = loader.reload.bind(loader);
+	let entered = false;
+	let release: () => void = () => {};
+	const held = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	vi.spyOn(loader, "reload").mockImplementation(async () => {
+		entered = true;
+		await held;
+		await reload();
+	});
+	try {
+		const registry = h.session.extensionRunner.createContext().modelRegistry;
+		const model = registry.find("faux", "physical")!;
+		h.setResponses([fauxAssistantMessage("fresh")]);
+		const reloading = h.session.reload();
+		await expect.poll(() => entered).toBe(true);
+		const request = registry.complete(model, { messages: [] });
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		expect(h.getPendingResponseCount()).toBe(1);
+		release();
+		await reloading;
+		expect(await request).toMatchObject({ stopReason: "stop" });
+		expect(h.getPendingResponseCount()).toBe(0);
+	} finally {
+		release();
+		h.cleanup();
+	}
+});
+
+it("does not hang a request held by a reload that fails", async () => {
+	const h = await createHarness({ useModelRuntimeStream: true, models: [{ id: "physical" }] });
+	const loader = (h.session as unknown as { _resourceLoader: ReloadableLoader })._resourceLoader;
+	let entered = false;
+	let fail: () => void = () => {};
+	const held = new Promise<void>((_, reject) => {
+		fail = () => reject(new Error("reload failed"));
+	});
+	vi.spyOn(loader, "reload").mockImplementation(async () => {
+		entered = true;
+		await held;
+	});
+	try {
+		const registry = h.session.extensionRunner.createContext().modelRegistry;
+		const model = registry.find("faux", "physical")!;
+		h.setResponses([fauxAssistantMessage("must not dispatch")]);
+		const reloading = h.session.reload().then(
+			() => undefined,
+			(error: unknown) => error,
+		);
+		await expect.poll(() => entered).toBe(true);
+		const request = registry.complete(model, { messages: [] });
+		fail();
+		expect(await reloading).toMatchObject({ message: "reload failed" });
+		expect(await request).toMatchObject({ stopReason: "error", errorMessage: expect.stringContaining("stale") });
+		expect(h.getPendingResponseCount()).toBe(1);
+	} finally {
+		fail();
+		h.cleanup();
+	}
+});
+
+it("rejects a request held by a reload when the session is disposed", async () => {
+	const h = await createHarness({ useModelRuntimeStream: true, models: [{ id: "physical" }] });
+	const loader = (h.session as unknown as { _resourceLoader: ReloadableLoader })._resourceLoader;
+	const reload = loader.reload.bind(loader);
+	let entered = false;
+	let release: () => void = () => {};
+	const held = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	vi.spyOn(loader, "reload").mockImplementation(async () => {
+		entered = true;
+		await held;
+		await reload();
+	});
+	try {
+		const registry = h.session.extensionRunner.createContext().modelRegistry;
+		const model = registry.find("faux", "physical")!;
+		h.setResponses([fauxAssistantMessage("must not dispatch")]);
+		const reloading = h.session.reload().then(
+			() => undefined,
+			() => undefined,
+		);
+		await expect.poll(() => entered).toBe(true);
+		const request = registry.complete(model, { messages: [] });
+		h.session.dispose();
+		release();
+		await reloading;
+		expect(await request).toMatchObject({ stopReason: "error", errorMessage: expect.stringContaining("disposed") });
+		expect(h.getPendingResponseCount()).toBe(1);
+	} finally {
+		release();
+		h.cleanup();
+	}
+});

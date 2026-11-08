@@ -3722,11 +3722,7 @@ export class AgentSession {
 		generation: number,
 		before?: () => void | Promise<void>,
 	): Promise<void> {
-		if (this._startupPending++ === 0) {
-			this._startupSettled = new Promise((resolve) => {
-				this._resolveStartupSettled = resolve;
-			});
-		}
+		this._beginStartupPending();
 		let failure: ExtensionStartupError | undefined;
 		let emitted = false;
 		try {
@@ -3755,14 +3751,26 @@ export class AgentSession {
 			} else if (emitted && generation > this._startupFailureRecoveryGeneration) {
 				this._extensionStartupFailure = undefined;
 			}
-			if (this._startupPending === 0) {
-				const resolve = this._resolveStartupSettled;
-				this._startupSettled = undefined;
-				this._resolveStartupSettled = undefined;
-				resolve?.();
-			}
+			this._releaseStartupWaiters();
 			this._settleDeferredStartupActions();
 		}
+	}
+
+	private _beginStartupPending(): void {
+		if (this._startupPending++ === 0) {
+			this._startupSettled = new Promise((resolve) => {
+				this._resolveStartupSettled = resolve;
+			});
+		}
+	}
+
+	/** Wake request gates once no startup or reload window is pending. */
+	private _releaseStartupWaiters(): void {
+		if (this._startupPending !== 0) return;
+		const resolve = this._resolveStartupSettled;
+		this._startupSettled = undefined;
+		this._resolveStartupSettled = undefined;
+		resolve?.();
 	}
 
 	/**
@@ -4284,7 +4292,23 @@ export class AgentSession {
 		const oldRunner = this._extensionRunner;
 		const previousFlagValues = oldRunner.getFlagValues();
 		await emitSessionShutdownEvent(oldRunner, { type: "session_shutdown", reason: "reload" });
-		oldRunner.invalidate();
+		// Hold provider requests until the new runner exists, so none resolves the invalidated one.
+		this._beginStartupPending();
+		try {
+			oldRunner.invalidate();
+			await this._reloadRuntime(options, generation, previousFlagValues);
+		} finally {
+			this._startupPending--;
+			this._releaseStartupWaiters();
+			this._settleDeferredStartupActions();
+		}
+	}
+
+	private async _reloadRuntime(
+		options: { beforeSessionStart?: () => void | Promise<void> } | undefined,
+		generation: number,
+		previousFlagValues: Map<string, boolean | string>,
+	): Promise<void> {
 		const getDefaultTools = () =>
 			this._usesDefaultTools
 				? applyToolModifiers(

@@ -147,7 +147,10 @@ describe("createAgentSession stream options", () => {
 		}
 	}
 
-	async function createCacheWarmingSession(populate?: (manager: SessionManager, model: Model<Api>) => void) {
+	async function createCacheWarmingSession(
+		populate?: (manager: SessionManager, model: Model<Api>) => void,
+		extensionFactory?: ExtensionFactory,
+	) {
 		const model: Model<Api> = {
 			...createModel("anthropic-messages"),
 			cost: { input: 10, output: 50, cacheRead: 0.25, cacheWrite: 12.5 },
@@ -166,13 +169,22 @@ describe("createAgentSession stream options", () => {
 		});
 		const sessionManager = SessionManager.inMemory(cwd);
 		populate?.(sessionManager, model);
+		const settingsManager = SettingsManager.inMemory({ cacheWarming: "idle" });
+		const resourceLoader = new DefaultResourceLoader({
+			cwd,
+			agentDir,
+			settingsManager,
+			extensionFactories: extensionFactory ? [extensionFactory] : [],
+		});
+		await resourceLoader.reload();
 		const { session } = await createAgentSession({
 			cwd,
 			agentDir,
 			model,
 			modelRuntime: getModelRuntime(modelRegistry),
-			settingsManager: SettingsManager.inMemory({ cacheWarming: "idle" }),
+			settingsManager,
 			sessionManager,
+			resourceLoader,
 		});
 		return {
 			session,
@@ -215,6 +227,33 @@ describe("createAgentSession stream options", () => {
 			expect(
 				fixture.session.sessionManager.getEntries().some((e) => e.type === "usage" && e.kind === "cache_warm"),
 			).toBe(true);
+		} finally {
+			vi.useRealTimers();
+			fixture.dispose();
+		}
+	});
+
+	// Refs nredd/pi-harness#581: warm requests must not keep the pre-reload runner's header handlers.
+	it("runs the reloaded extension's before_provider_headers on warm requests", async () => {
+		const ran: number[] = [];
+		let generation = 0;
+		const fixture = await createCacheWarmingSession(undefined, (pi) => {
+			const mine = ++generation;
+			pi.on("before_provider_headers", () => {
+				ran.push(mine);
+			});
+		});
+		vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+		try {
+			await fixture.session.prompt("test");
+			expect(ran).toEqual([1]);
+			await fixture.session.reload();
+			expect(generation).toBe(2);
+			ran.length = 0;
+			await vi.advanceTimersByTimeAsync(300_000);
+
+			expect(fixture.providerCalls()).toBe(2);
+			expect(ran).toEqual([2]);
 		} finally {
 			vi.useRealTimers();
 			fixture.dispose();

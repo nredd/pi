@@ -485,13 +485,33 @@ export class ModelRuntime implements Models {
 		routeContext?: () => ModelRouteContext,
 	): Models {
 		const withGate = <T extends object | undefined>(options: T): T & BeforeProviderRequestOptions => {
-			// Capture once, before auth/transforms can await a reload. The stable view remains
-			// reusable, but every call through it owns its original runner until dispatch.
-			const context = routeContext?.();
+			// Captured once per call, before auth/transforms can await a reload, so the call owns
+			// its original runner until dispatch. A reload in progress holds the gate until its
+			// new runner exists, so the capture waits for that instead of taking the invalidated one.
+			// The wait ignores gate failures: the dispatch gate reports those itself.
+			let captured: ModelRouteContext | undefined;
+			const settled = beforeProviderRequest()
+				.then(
+					() => undefined,
+					() => undefined,
+				)
+				.then(() => {
+					try {
+						captured = routeContext?.();
+						return { context: captured };
+					} catch (error) {
+						return { error };
+					}
+				});
 			return {
 				...options,
-				beforeProviderRequest: withRequestGeneration(beforeProviderRequest, context?.session),
-				routeContext: context ? () => context : undefined,
+				beforeProviderRequest: async () => {
+					const outcome = await settled;
+					if ("error" in outcome) throw outcome.error;
+					const recheck = await beforeProviderRequest();
+					return await withRequestGeneration(async () => recheck, outcome.context?.session)();
+				},
+				routeContext: routeContext ? () => captured ?? routeContext() : undefined,
 			};
 		};
 		return {
@@ -890,6 +910,9 @@ export class ModelRuntime implements Models {
 			// Requests outside the agent loop are routed here. Callers sized them before routing, so
 			// cap the output budget to the routed model.
 			return lazyStream(model, async () => {
+				// Routing reads the route context, which must not predate a reload in progress.
+				// A refusal is left to the dispatch gate, after routing as before.
+				await options?.beforeProviderRequest?.().catch(() => undefined);
 				const route = await this.resolveModel(model, transcript.messages, {
 					reason: "direct",
 					thinkingLevel: options?.reasoning ?? "off",

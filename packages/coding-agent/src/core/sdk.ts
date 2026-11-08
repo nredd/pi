@@ -344,7 +344,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		const providerRetrySettings = settingsManager.getProviderRetrySettings();
 		const httpIdleTimeoutMs = settingsManager.getHttpIdleTimeoutMs();
 		const effectiveTimeoutMs = httpIdleTimeoutMs === 0 ? 2147483647 : httpIdleTimeoutMs;
-		const headerRunner = extensionRunnerRef.current;
 		return {
 			...options,
 			timeoutMs: options.timeoutMs ?? providerRetrySettings.timeoutMs ?? effectiveTimeoutMs,
@@ -358,6 +357,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 					options.sessionId,
 					requestHeaders,
 				);
+				// Resolved per call: warm requests outlive the runner that built these options.
+				const headerRunner = extensionRunnerRef.current;
 				return headerRunner?.hasHandlers("before_provider_headers")
 					? headerRunner.emitBeforeProviderHeaders(headers ?? {})
 					: (headers ?? {});

@@ -396,6 +396,15 @@ function configuredApiKey(
 
 const apiKeyDescription = (providerId: string) => `API key for provider "${providerId}"`;
 
+/** Whether the provider's configured API key is a `!command`, i.e. one a rejection can re-resolve. */
+export function hasConfiguredCommandApiKey(
+	config: ModelsJsonProvider | undefined,
+	extension: ProviderConfigInput | undefined,
+): boolean {
+	const rawKey = configuredApiKey(config, extension);
+	return rawKey !== undefined && isCommandConfigValue(rawKey);
+}
+
 /**
  * Drop the cached result of a provider's configured `!command` API key if it is still the
  * rejected key, so the next request runs the command again. Returns whether the configured

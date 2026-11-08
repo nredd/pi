@@ -2081,6 +2081,55 @@ describe("ModelRegistry", () => {
 					},
 				);
 
+				test.each([
+					["a literal key", "literal-key-value"],
+					["an environment variable key", "TEST_START_EVENT_KEY"],
+				])("%s emits start before the first token", async (_name, apiKey) => {
+					process.env.TEST_START_EVENT_KEY = "env-key-value";
+					try {
+						const registry = await createModelRegistry(authStorage, modelsJsonPath);
+						let release!: () => void;
+						const gate = new Promise<void>((resolve) => {
+							release = resolve;
+						});
+						registry.registerProvider("start-provider", {
+							...providerConfig("https://example.com/v1", [{ id: "test-model" }], "test-auth-api"),
+							apiKey,
+							streamSimple: (_model, _context, options) => {
+								const stream = createAssistantMessageEventStream();
+								void (async () => {
+									const partial = reply(options?.apiKey);
+									stream.push({ type: "start", partial });
+									await gate;
+									const message = reply(options?.apiKey);
+									stream.push({ type: "done", reason: "stop", message });
+									stream.end(message);
+								})();
+								return stream;
+							},
+						});
+						const model = registry.find("start-provider", "test-model")!;
+						const stream = getModelRuntime(registry).streamSimple(model, emptyContext);
+						const iterator = stream[Symbol.asyncIterator]();
+
+						// The provider is still silent: `start` must already be visible.
+						let timer: NodeJS.Timeout | undefined;
+						const first = await Promise.race([
+							iterator.next(),
+							new Promise<"held">((resolve) => {
+								timer = setTimeout(() => resolve("held"), 2000);
+							}),
+						]).finally(() => clearTimeout(timer));
+						release();
+
+						expect(first).toMatchObject({ value: { type: "start" } });
+						while (!(await iterator.next()).done);
+						expect((await stream.result()).stopReason).toBe("stop");
+					} finally {
+						delete process.env.TEST_START_EVENT_KEY;
+					}
+				});
+
 				test("a stream that reports only through its result still completes", async () => {
 					const registry = await createModelRegistry(authStorage, modelsJsonPath);
 					registry.registerProvider("result-only-provider", {

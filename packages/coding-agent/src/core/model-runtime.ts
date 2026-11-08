@@ -78,6 +78,7 @@ import {
 	type CompatibilityRequestConfig,
 	composeModelProvider,
 	configuredRequestAuthStatus,
+	hasConfiguredCommandApiKey,
 	invalidateConfiguredApiKey,
 	type ProviderConfigInput,
 	resolveCompatibilityRequestConfig,
@@ -840,24 +841,25 @@ export class ModelRuntime implements Models {
 		const first = await attempt();
 		// Only a rejected configured `!command` key is worth re-resolving: a caller's, stored or
 		// inherited key would come back unchanged, and must not cost the command key its cache.
+		const providerConfig = this.config.getProvider(model.provider);
+		const extensionConfig = this.extensionProviders.get(model.provider);
+		const retryable =
+			first.authSource === "configured API key" && hasConfiguredCommandApiKey(providerConfig, extensionConfig);
 		const retryAfterRejection = (event: AssistantMessageEvent) =>
-			first.authSource === "configured API key" &&
+			retryable &&
 			isAuthRejection(event, first.status()) &&
-			invalidateConfiguredApiKey(
-				model.provider,
-				this.config.getProvider(model.provider),
-				this.extensionProviders.get(model.provider),
-				first.apiKey,
-			);
+			invalidateConfiguredApiKey(model.provider, providerConfig, extensionConfig, first.apiKey);
 		// The stream whose events were forwarded; its result is the request's result.
 		let source = first.events;
 		const events = (async function* () {
-			// `start` is held back until the first other event, so a retry before any output
-			// leaves no trace. Once output has been forwarded the request is never retried.
+			// Only a request that can be retried holds `start` back until the first other event, so a
+			// retry before any output leaves no trace. Every other request forwards `start` at once:
+			// consumers (activity, stall detection) must not wait for the first token. Once output
+			// has been forwarded the request is never retried.
 			const held: AssistantMessageEvent[] = [];
 			let forwarded = false;
 			for await (const event of first.events) {
-				if (!forwarded && event.type === "start") {
+				if (retryable && !forwarded && event.type === "start") {
 					held.push(event);
 					continue;
 				}

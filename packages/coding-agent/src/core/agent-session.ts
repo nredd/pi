@@ -984,7 +984,7 @@ export class AgentSession {
 				context,
 				model: route.model,
 				thinkingLevel: route.thinkingLevel,
-				beforeProviderRequest: withRequestGeneration(previous?.beforeProviderRequest, routeContext.session),
+				beforeProviderRequest,
 			};
 		};
 	}
@@ -3839,9 +3839,9 @@ export class AgentSession {
 	}
 
 	/**
-	 * Refuse to reach a provider while session_start is pending or failed fatally. A failure
-	 * throws `ExtensionStartupError`; a pending startup throws a plain `Error`, so callers that
-	 * treat the former as fatal do not.
+	 * Refuse to reach a provider after disposal, while session_start is pending, or after it failed
+	 * fatally. A failure throws `ExtensionStartupError`; disposal and a pending startup throw a
+	 * plain `Error`, so callers that treat the former as fatal do not.
 	 */
 	private _assertExtensionsStarted(): void {
 		if (this._disposed) throw new Error("Session is disposed and cannot send provider requests.");

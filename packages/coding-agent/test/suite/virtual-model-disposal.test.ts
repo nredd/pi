@@ -1,4 +1,4 @@
-import { fauxAssistantMessage } from "@earendil-works/pi-ai";
+import { createProvider, fauxAssistantMessage, type ImageModel } from "@earendil-works/pi-ai";
 import { fauxProvider } from "@earendil-works/pi-ai/providers/faux";
 import { expect, it, vi } from "vitest";
 import type { ModelRouteContext } from "../../src/core/virtual-models.ts";
@@ -90,6 +90,54 @@ it("refuses an in-flight route invalidated by its requester's reload before fina
 		pause = false;
 		await h.session.prompt("fresh route");
 		expect(h.session.getLastAssistantText()).toBe("fresh");
+	} finally {
+		release();
+		h.cleanup();
+	}
+});
+
+// Refs #581: disposing the requester during an asynchronous route refuses the result, too.
+it("refuses an in-flight route whose requester is disposed before final dispatch", async () => {
+	let entered: () => void = () => {};
+	let release: () => void = () => {};
+	const routing = new Promise<void>((resolve) => {
+		entered = resolve;
+	});
+	const held = new Promise<void>((resolve) => {
+		release = resolve;
+	});
+	const h = await createHarness({
+		useModelRuntimeStream: true,
+		models: [{ id: "physical" }],
+		settings: { retry: { enabled: false } },
+		extensionFactories: [
+			(pi) => {
+				pi.registerVirtualModel({
+					provider: "router",
+					id: "owner",
+					name: "Owner",
+					async route(_request, ctx) {
+						const model = ctx.modelRegistry.find("faux", "physical")!;
+						entered();
+						await held;
+						return { model, thinkingLevel: "off" };
+					},
+				});
+			},
+		],
+	});
+	try {
+		await h.session.setModel(h.session.modelRuntime.getModel("router", "owner")!);
+		h.setResponses([fauxAssistantMessage("must not dispatch")]);
+		const prompt = h.session.prompt("dispose while routing").then(
+			() => "completed",
+			(error: unknown) => String(error),
+		);
+		await routing;
+		h.session.dispose();
+		release();
+		await prompt;
+		expect(h.getPendingResponseCount()).toBe(1);
 	} finally {
 		release();
 		h.cleanup();
@@ -242,6 +290,58 @@ it("rechecks the captured generation synchronously after the existing final gate
 			errorMessage: expect.stringContaining("stale"),
 		});
 		expect(h.getPendingResponseCount()).toBe(1);
+	} finally {
+		h.cleanup();
+	}
+});
+
+// Refs #581: image generation shares the same synchronous generation recheck.
+it("refuses image generation once its requester is invalidated after the final gate", async () => {
+	const h = await createHarness({ useModelRuntimeStream: true, models: [{ id: "physical" }] });
+	try {
+		const generated = vi.fn();
+		const model: ImageModel<"test-images"> = {
+			type: "image",
+			id: "painter",
+			name: "Painter",
+			api: "test-images",
+			provider: "image-owner",
+			baseUrl: "https://images.example.invalid/v1",
+			input: ["text"],
+			output: ["image"],
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+		};
+		h.session.modelRuntime.registerNativeProvider(
+			createProvider({
+				id: "image-owner",
+				auth: { apiKey: { name: "Key", resolve: async () => ({ auth: {} }) } },
+				models: [model],
+				images: {
+					"test-images": {
+						generateImages: async (target) => {
+							generated();
+							return {
+								api: target.api,
+								provider: target.provider,
+								model: target.id,
+								output: [],
+								stopReason: "stop",
+								timestamp: 0,
+							};
+						},
+					},
+				},
+			}),
+		);
+		const session = h.session.extensionRunner.createContext();
+		const models = h.session.modelRuntime.withBeforeProviderRequest(
+			async () => () => h.session.extensionRunner.invalidate(),
+			() => ({ session, modelRegistry: session.modelRegistry }),
+		);
+		const result = await models.generateImages(model, { input: [{ type: "text", text: "a circle" }] });
+		expect(result.stopReason).toBe("error");
+		expect(result.errorMessage).toContain("stale");
+		expect(generated).not.toHaveBeenCalled();
 	} finally {
 		h.cleanup();
 	}

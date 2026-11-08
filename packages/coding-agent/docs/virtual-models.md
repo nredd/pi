@@ -71,6 +71,17 @@ Registration follows the same queuing and reload rules as `pi.registerProvider()
 - Registrations still belong to the shared model runtime: the last definition for a provider and ID wins, including before `session_start`, and can outlive its registering session. Disposing that registrant neither resurrects an older definition nor invalidates another session's route.
 - Do not close over the registrant's `pi`, event context or gated registry for routing. Ordinary extension contexts remain invalid after disposal/replacement/reload. Session requests and nested routing calls cannot dispatch after the requester is disposed. Retained routing registries also reject after their own requesting runner is reloaded or replaced, even though the stable session model view can serve fresh requests. Each request captures its requesting runner before asynchronous preparation and rechecks it synchronously immediately before physical provider dispatch, even when routing already finished before authentication or header transforms paused. This applies to direct physical and virtual calls, nested routing calls, agent turns and summaries. A stable session model view captures the new runner for each fresh call after reload; reloading a different session does not invalidate the requester.
 
+Breaking change for extension authors: `route`'s second argument used to be the registrant's `ExtensionContext` (`ctx.cwd`, `ctx.sessionManager`, `ctx.ui`, `ctx.appendEntry`, ...). It is now a `ModelRouteContext` (exported from the package root) with only `modelRegistry`, `session` and `appendEntry`. Those registrant fields are gone from `ctx`, and the registrant's context goes stale on reload or disposal, which used to refuse requests from other live sessions.
+
+```ts
+// before
+route: (request, ctx) => ctx.sessionManager.getBranch()
+// after
+route: (request, ctx) => ctx.session?.sessionManager.getBranch() ?? []
+```
+
+Also new: `AgentRequestUpdate.beforeProviderRequest` in `@earendil-works/pi-agent-core` lets a `prepareRequest` hook gate a single provider request. It composes with the loop's persistent `beforeProviderRequest` and does not carry into later turns. Session routing uses it; plain SDK users need no change.
+
 Migration: code using `ctx.modelRegistry` is unchanged. Move other context reads to `ctx.session` and handle its absence for raw runtime calls. Use `ctx.appendEntry?.(...)` rather than a captured `pi.appendEntry(...)` for decision attribution. Deploy extensions relying on this contract with the matching core; older hosts supply the registrant's context, not request ownership.
 
 | Field | Meaning |

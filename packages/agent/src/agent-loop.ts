@@ -238,8 +238,23 @@ async function runLoop(
 				};
 			}
 
+			// Request-local guards must not leak into the next turn's configuration.
+			const requestGate = requestUpdate?.beforeProviderRequest;
+			const requestConfig = requestGate
+				? {
+						...config,
+						beforeProviderRequest: async () => {
+							const recheck = await config.beforeProviderRequest?.();
+							const recheckRequest = await requestGate();
+							return () => {
+								recheck?.();
+								recheckRequest();
+							};
+						},
+					}
+				: config;
 			// Stream assistant response
-			const message = await streamAssistantResponse(currentContext, config, signal, emit, streamFunction);
+			const message = await streamAssistantResponse(currentContext, requestConfig, signal, emit, streamFunction);
 			newMessages.push(message);
 
 			if (message.stopReason === "error" || message.stopReason === "aborted") {

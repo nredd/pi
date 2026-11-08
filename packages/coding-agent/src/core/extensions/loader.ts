@@ -499,11 +499,11 @@ function createExtensionAPI(
 
 		registerVirtualModel<TState>(model: ExtensionVirtualModel<TState>) {
 			assertActive();
-			// Routing runs after the runner binds, so the context is created per request. The state
-			// comes from the session branch that this router wrote.
+			// A registration belongs to the shared model runtime. Only the request supplies its
+			// session context; capturing this extension runtime would bind every sibling to it.
 			const definition: VirtualModelDefinition = {
 				...model,
-				route: (request) => model.route(request as ModelRouteRequest<TState>, runtime.createContext()),
+				route: (request, ctx) => model.route(request as ModelRouteRequest<TState>, ctx),
 			};
 			applyRuntimeChange(() => runtime.registerVirtualModel(definition, extension.path));
 		},

@@ -99,7 +99,7 @@ import type {
 	ReadToolInput,
 	WriteToolInput,
 } from "../tools/index.ts";
-import type { ModelRoute, ModelRouteRequest, VirtualModelDefinition } from "../virtual-models.ts";
+import type { ModelRoute, ModelRouteContext, ModelRouteRequest, VirtualModelDefinition } from "../virtual-models.ts";
 
 export type { ExecOptions, ExecResult } from "../exec.ts";
 export type { BuildSystemPromptOptions, NormalizedBuildSystemPromptOptions } from "../system-prompt.ts";
@@ -1933,8 +1933,8 @@ export interface ExtensionAPI {
 
 /** Virtual model registered via pi.registerVirtualModel(). */
 export interface ExtensionVirtualModel<TState = unknown> extends Omit<VirtualModelDefinition<TState>, "route"> {
-	/** Like `VirtualModelDefinition.route`, with an extension context. */
-	route(request: ModelRouteRequest<TState>, ctx: ExtensionContext): ModelRoute<TState> | Promise<ModelRoute<TState>>;
+	/** Request-owned services. `ctx.session` is absent for raw runtime calls; never captures the registrant. */
+	route(request: ModelRouteRequest<TState>, ctx: ModelRouteContext): ModelRoute<TState> | Promise<ModelRoute<TState>>;
 }
 
 /** Configuration for registering a provider via pi.registerProvider(). */

@@ -71,6 +71,7 @@ import { getAgentDir } from "../config.ts";
 import { operationSignal, raceWithAbortSignal } from "../utils/abort.ts";
 import { AuthStorage as DefaultAuthStorage } from "./auth-storage.ts";
 import { ModelConfig } from "./model-config.ts";
+import { ModelRegistry } from "./model-registry.ts";
 import { FileModelsStore, InMemoryCodingAgentModelsStore } from "./models-store.ts";
 import {
 	type AuthStatus,
@@ -91,6 +92,7 @@ import {
 	findLatestResponse,
 	isVirtualModel,
 	type ModelRoute,
+	type ModelRouteContext,
 	type ModelRouteReason,
 	type VirtualModelDefinition,
 	withVirtualModels,
@@ -152,6 +154,23 @@ export interface ModelRuntimeAuthOverrides extends AuthOperationOptions {
 export interface BeforeProviderRequestOptions {
 	/** Resolves to a synchronous final check that runs immediately before provider dispatch. */
 	beforeProviderRequest?: () => Promise<() => void>;
+	/** Session-owned routing context, evaluated when routing starts, not at registration. */
+	routeContext?: () => ModelRouteContext;
+}
+
+/** Compose the existing provider gate with the captured requester's runner generation. */
+export function withRequestGeneration(
+	beforeProviderRequest: BeforeProviderRequestOptions["beforeProviderRequest"],
+	session: ModelRouteContext["session"],
+): NonNullable<BeforeProviderRequestOptions["beforeProviderRequest"]> {
+	return async () => {
+		const recheck = await beforeProviderRequest?.();
+		void session?.cwd;
+		return () => {
+			recheck?.();
+			void session?.cwd;
+		};
+	};
 }
 
 export type CredentialSynchronizationOperation = "login" | "logout" | "setRuntimeApiKey" | "removeRuntimeApiKey";
@@ -461,11 +480,40 @@ export class ModelRuntime implements Models {
 	}
 
 	/** A session-owned view that gates only its provider requests; raw runtime users remain ungated. */
-	withBeforeProviderRequest(beforeProviderRequest: () => Promise<() => void>): Models {
-		const withGate = <T extends object | undefined>(options: T): T & BeforeProviderRequestOptions => ({
-			...options,
-			beforeProviderRequest,
-		});
+	withBeforeProviderRequest(
+		beforeProviderRequest: () => Promise<() => void>,
+		routeContext?: () => ModelRouteContext,
+	): Models {
+		const withGate = <T extends object | undefined>(options: T): T & BeforeProviderRequestOptions => {
+			// Captured once per call, before auth/transforms can await a reload, so the call owns
+			// its original runner until dispatch. A reload in progress holds the gate until its
+			// new runner exists, so the capture waits for that instead of taking the invalidated one.
+			// The wait ignores gate failures: the dispatch gate reports those itself.
+			let captured: ModelRouteContext | undefined;
+			const settled = beforeProviderRequest()
+				.then(
+					() => undefined,
+					() => undefined,
+				)
+				.then(() => {
+					try {
+						captured = routeContext?.();
+						return { context: captured };
+					} catch (error) {
+						return { error };
+					}
+				});
+			return {
+				...options,
+				beforeProviderRequest: async () => {
+					const outcome = await settled;
+					if ("error" in outcome) throw outcome.error;
+					const recheck = await beforeProviderRequest();
+					return await withRequestGeneration(async () => recheck, outcome.context?.session)();
+				},
+				routeContext: routeContext ? () => captured ?? routeContext() : undefined,
+			};
+		};
 		return {
 			getProviders: () => this.getProviders(),
 			getProvider: (id) => this.getProvider(id),
@@ -735,6 +783,7 @@ export class ModelRuntime implements Models {
 		const {
 			transformHeaders,
 			beforeProviderRequest: _beforeProviderRequest,
+			routeContext: _routeContext,
 			...rawProviderOptions
 		} = (options ?? {}) as TOptions & BeforeProviderRequestOptions;
 		const providerOptions = rawProviderOptions as Omit<TOptions, "transformHeaders"> & ProviderRequestOptions<TModel>;
@@ -861,10 +910,14 @@ export class ModelRuntime implements Models {
 			// Requests outside the agent loop are routed here. Callers sized them before routing, so
 			// cap the output budget to the routed model.
 			return lazyStream(model, async () => {
+				// Routing reads the route context, which must not predate a reload in progress.
+				// A refusal is left to the dispatch gate, after routing as before.
+				await options?.beforeProviderRequest?.().catch(() => undefined);
 				const route = await this.resolveModel(model, transcript.messages, {
 					reason: "direct",
 					thinkingLevel: options?.reasoning ?? "off",
 					signal: options?.signal,
+					routeContext: options?.routeContext,
 				});
 				const { maxTokens: limit } = route.model;
 				const maxTokens = options?.maxTokens && limit > 0 ? Math.min(options.maxTokens, limit) : options?.maxTokens;
@@ -1131,7 +1184,10 @@ export class ModelRuntime implements Models {
 			throw new Error(`Virtual model ${providerId}/${id} conflicts with a physical model.`);
 		}
 		const models = this.virtualModels.get(providerId) ?? new Map<string, RegisteredVirtualModel>();
-		models.set(id, { model: createVirtualModel(definition), route: (request) => definition.route(request) });
+		models.set(id, {
+			model: createVirtualModel(definition),
+			route: (request, ctx) => definition.route(request, ctx),
+		});
 		this.virtualModels.set(providerId, models);
 		if (!this.recomposeProvider(providerId) && !this.snapshot.configuredProviders.has(providerId)) {
 			// A provider of only virtual models needs no credentials. Mark it configured now: session
@@ -1171,23 +1227,32 @@ export class ModelRuntime implements Models {
 			signal?: AbortSignal;
 			failed?: AssistantMessage;
 			state?: unknown;
+			routeContext?: () => ModelRouteContext;
 		},
 	): Promise<ModelRoute> {
 		const name = `Virtual model ${model.provider}/${model.id}`;
 		const virtual = this.virtualModels.get(model.provider)?.get(model.id);
 		if (!virtual) throw new Error(`${name} is not registered.`);
-		const { failed, ...request } = options;
+		const { failed, routeContext, ...request } = options;
 		const latest = findLatestResponse(messages);
 		const previousModel = latest && this.getPhysicalModel(latest.provider, latest.model);
 		// A failed routing attempt names the virtual model; there is no physical request to report.
 		const failedModel = failed && this.getPhysicalModel(failed.provider, failed.model);
-		const route = await virtual.route({
-			...request,
-			model,
-			previous: previousModel && { model: previousModel, thinkingLevel: latest?.thinkingLevel },
-			failed: failedModel && failed && { model: failedModel, thinkingLevel: failed.thinkingLevel, message: failed },
-			messages,
-		});
+		const ctx: ModelRouteContext = routeContext?.() ?? { modelRegistry: new ModelRegistry(this) };
+		void ctx.session?.cwd; // Refuse a request whose runner was already replaced.
+		const route = await virtual.route(
+			{
+				...request,
+				model,
+				previous: previousModel && { model: previousModel, thinkingLevel: latest?.thinkingLevel },
+				failed: failedModel &&
+					failed && { model: failedModel, thinkingLevel: failed.thinkingLevel, message: failed },
+				messages,
+			},
+			ctx,
+		);
+		// Routing can await nested models or other work while its requester reloads.
+		void ctx.session?.cwd;
 		const target = this.getPhysicalModel(route.model.provider, route.model.id);
 		const routed = `${name} routed to ${route.model.provider}/${route.model.id}`;
 		if (!target) throw new Error(`${routed}, which is not a physical model.`);

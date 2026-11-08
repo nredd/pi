@@ -730,16 +730,13 @@ describe("ExtensionStartupError", () => {
 			expect(harness.faux.state.callCount).toBe(0);
 		});
 
-		it("holds a compaction summary paused in the header transform while a reload is pending", async () => {
-			// No abort fires for a reload that merely takes time, so only the request's own gate
-			// keeps the summary from dispatching before the handlers finish.
+		// Refs nredd/pi-harness#581: pending startup still gates dispatch, and completed reload stales the old summary.
+		it("refuses a compaction summary paused in the header transform across its requester's reload", async () => {
+			// No abort fires for a successful reload. Keep the startup gate, then reject the
+			// old request's generation rather than dispatching when startup finishes.
 			let finishStartup: (() => void) | undefined;
 			const state = { slow: false };
 			let releaseTransform: (() => void) | undefined;
-			let transformStarted: (() => void) | undefined;
-			const transformPending = new Promise<void>((resolve) => {
-				transformStarted = resolve;
-			});
 			const harness = await harnessWith({
 				useModelRuntimeStream: true,
 				extensionFactories: [
@@ -780,7 +777,6 @@ describe("ExtensionStartupError", () => {
 				stream(model, context, {
 					...options,
 					transformHeaders: async (headers: ProviderHeaders) => {
-						transformStarted?.();
 						await new Promise<void>((resolve) => {
 							releaseTransform = resolve;
 						});
@@ -789,14 +785,18 @@ describe("ExtensionStartupError", () => {
 				} satisfies ModelsSimpleStreamOptions as typeof options);
 			harness.setResponses([fauxAssistantMessage("summary")]);
 
-			const compaction = harness.session.compact();
-			await transformPending;
-			state.slow = true;
-			const reload = harness.session.reload();
-			await vi.waitFor(() => expect(finishStartup).toBeDefined());
-			// reload() reset the API providers; the summary needs a transport to reach once allowed.
-			const recoveredProvider = registerFauxProvider({ api: harness.faux.api });
+			const compaction = harness.session.compact().then(
+				() => undefined,
+				(error: unknown) => error,
+			);
+			let recoveredProvider: ReturnType<typeof registerFauxProvider> | undefined;
 			try {
+				await vi.waitFor(() => expect(releaseTransform).toBeDefined());
+				state.slow = true;
+				const reload = harness.session.reload();
+				await vi.waitFor(() => expect(finishStartup).toBeDefined());
+				// Keep a valid faux transport: stale ownership, not missing transport, must refuse dispatch.
+				recoveredProvider = registerFauxProvider({ api: harness.faux.api });
 				recoveredProvider.setResponses([fauxAssistantMessage("summary")]);
 				releaseTransform?.();
 				// Give the summary every chance to dispatch while the handler is still running.
@@ -806,10 +806,13 @@ describe("ExtensionStartupError", () => {
 
 				finishStartup?.();
 				await reload;
-				await compaction;
-				expect(recoveredProvider.state.callCount).toBe(1);
+				expect(await compaction).toMatchObject({ message: expect.stringContaining("stale") });
+				expect(recoveredProvider.state.callCount).toBe(0);
+				expect(recoveredProvider.getPendingResponseCount()).toBe(1);
 			} finally {
-				recoveredProvider.unregister();
+				releaseTransform?.();
+				finishStartup?.();
+				recoveredProvider?.unregister();
 			}
 		});
 

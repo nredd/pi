@@ -2,8 +2,12 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { type FauxResponseStep, fauxAssistantMessage, fauxToolCall } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ExtensionContext } from "../../src/core/extensions/index.ts";
-import { type ModelRoute, type ModelRouteRequest, VIRTUAL_MODEL_STATE_ENTRY } from "../../src/core/virtual-models.ts";
+import {
+	type ModelRoute,
+	type ModelRouteContext,
+	type ModelRouteRequest,
+	VIRTUAL_MODEL_STATE_ENTRY,
+} from "../../src/core/virtual-models.ts";
 import { createHarness, type Harness, type HarnessOptions } from "./harness.ts";
 
 const echoTool: AgentTool = {
@@ -14,7 +18,7 @@ const echoTool: AgentTool = {
 	execute: async () => ({ content: [{ type: "text", text: "echoed" }], details: {} }),
 };
 
-type Route = (request: ModelRouteRequest, ctx: ExtensionContext) => ModelRoute;
+type Route = (request: ModelRouteRequest, ctx: ModelRouteContext) => ModelRoute;
 
 /** Router used by these tests: new user turns pick by thinking level, everything else stays put. */
 const defaultRoute: Route = (request, ctx) => {
@@ -254,6 +258,42 @@ describe("AgentSession virtual models", () => {
 		expect(harness.eventsOfType("compaction_start").map((event) => event.reason)).toEqual(["threshold"]);
 		expect(compactedBeforeSmall).toBe(true);
 		expect(dispatched().at(-1)).toBe("faux/small:off");
+	});
+
+	// Refs nredd/pi-harness#581: compaction re-prepares the request; the latest outer gate must run.
+	it("runs the outer request gate prepared after a threshold compaction", async () => {
+		const gates: number[] = [];
+		let prepared = 0;
+		const { harness } = await createRoutedHarness(defaultRoute, {
+			settings: { compaction: { keepRecentTokens: 1, reserveTokens: 0 } },
+			useModelRuntimeStream: true,
+			prepareRequest: async () => {
+				const id = ++prepared;
+				return {
+					beforeProviderRequest: async () => {
+						gates.push(id);
+						return () => {};
+					},
+				};
+			},
+			extensionFactories: [
+				(pi) => {
+					pi.on("session_before_compact", async ({ preparation: { firstKeptEntryId, tokensBefore } }) => ({
+						compaction: { summary: "compacted", firstKeptEntryId, tokensBefore },
+					}));
+				},
+			],
+		});
+		harness.setResponses([fauxAssistantMessage("y".repeat(8000)), fauxAssistantMessage("small answer")]);
+		await harness.session.prompt("hello");
+		const firstRequestGates = gates.length;
+		harness.session.setThinkingLevel("low");
+		await harness.session.prompt("next");
+
+		expect(harness.eventsOfType("compaction_start").map((event) => event.reason)).toEqual(["threshold"]);
+		// The second prompt prepares twice (before and after compaction); only the latest gate dispatches.
+		expect(prepared).toBe(firstRequestGates + 2);
+		expect(gates.slice(firstRequestGates)).toEqual([prepared]);
 	});
 
 	it("compacts between turns of a run when the next request is routed to a smaller window", async () => {

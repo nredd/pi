@@ -730,7 +730,7 @@ describe("ExtensionStartupError", () => {
 			expect(harness.faux.state.callCount).toBe(0);
 		});
 
-		// Refs #581: pending startup still gates dispatch, and completed reload stales the old summary.
+		// Refs nredd/pi-harness#581: pending startup still gates dispatch, and completed reload stales the old summary.
 		it("refuses a compaction summary paused in the header transform across its requester's reload", async () => {
 			// No abort fires for a successful reload. Keep the startup gate, then reject the
 			// old request's generation rather than dispatching when startup finishes.

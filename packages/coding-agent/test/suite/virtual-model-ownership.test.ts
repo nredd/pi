@@ -15,7 +15,7 @@ async function host(options: HarnessOptions = {}) {
 	return harness;
 }
 
-// Refs #581: route registrations outlive registrants on a shared ModelRuntime.
+// Refs nredd/pi-harness#581: route registrations outlive registrants on a shared ModelRuntime.
 it("uses the requester's context and gated registry, not a disposed or fatally failed registrant", async () => {
 	const contexts: ModelRouteContext[] = [];
 	let captured: ExtensionContext | undefined;
@@ -65,7 +65,7 @@ it("uses the requester's context and gated registry, not a disposed or fatally f
 	expect(contexts.at(-1)?.session).toBeUndefined();
 });
 
-// Refs #581: nested routing requests must keep the requesting session's startup gate.
+// Refs nredd/pi-harness#581: nested routing requests must keep the requesting session's startup gate.
 it("refuses nested and final provider dispatch while the requester is starting", async () => {
 	let nestedError: string | undefined;
 	let finalError: string | undefined;
@@ -96,7 +96,7 @@ it("refuses nested and final provider dispatch while the requester is starting",
 	expect(parent.getPendingResponseCount()).toBe(1);
 });
 
-// Refs #581: genuine replacement is still last-writer-wins, not resurrected on disposal.
+// Refs nredd/pi-harness#581: genuine replacement is still last-writer-wins, not resurrected on disposal.
 it("keeps the replacement definition and requester identity after an unstarted registrant dies", async () => {
 	const owner: string[] = [];
 	const router =

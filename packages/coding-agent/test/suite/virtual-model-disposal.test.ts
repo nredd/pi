@@ -4,7 +4,7 @@ import { expect, it, vi } from "vitest";
 import type { ModelRouteContext } from "../../src/core/virtual-models.ts";
 import { createHarness } from "./harness.ts";
 
-// Refs #581: a request-owned registry must not become an escape from requester disposal.
+// Refs nredd/pi-harness#581: a request-owned registry must not become an escape from requester disposal.
 it("refuses nested provider calls through a routing registry after its requester is disposed", async () => {
 	let routed: ModelRouteContext | undefined;
 	const h = await createHarness({
@@ -42,7 +42,7 @@ it("refuses nested provider calls through a routing registry after its requester
 	}
 });
 
-// Refs #581: reloading during an asynchronous route must not dispatch its stale result.
+// Refs nredd/pi-harness#581: reloading during an asynchronous route must not dispatch its stale result.
 it("refuses an in-flight route invalidated by its requester's reload before final dispatch", async () => {
 	let entered: () => void = () => {};
 	let release: () => void = () => {};
@@ -96,7 +96,7 @@ it("refuses an in-flight route invalidated by its requester's reload before fina
 	}
 });
 
-// Refs #581: disposing the requester during an asynchronous route refuses the result, too.
+// Refs nredd/pi-harness#581: disposing the requester during an asynchronous route refuses the result, too.
 it("refuses an in-flight route whose requester is disposed before final dispatch", async () => {
 	let entered: () => void = () => {};
 	let release: () => void = () => {};
@@ -144,7 +144,7 @@ it("refuses an in-flight route whose requester is disposed before final dispatch
 	}
 });
 
-// Refs #581: routing finishing does not make a request survive its requester's reload.
+// Refs nredd/pi-harness#581: routing finishing does not make a request survive its requester's reload.
 it.each(["virtual", "nested", "physical", "stream", "complete"] as const)(
 	"refuses a stable registry's %s request reloaded during physical header preparation",
 	async (kind) => {
@@ -207,7 +207,7 @@ it.each(["virtual", "nested", "physical", "stream", "complete"] as const)(
 	},
 );
 
-// Refs #581: the Models API keeps request generations through deferred preparation, too.
+// Refs nredd/pi-harness#581: the Models API keeps request generations through deferred preparation, too.
 it.each(["streamDeferred", "fetchDeferred", "cancelDeferred"] as const)(
 	"refuses stale %s preparation without touching the faux provider",
 	async (method) => {
@@ -275,7 +275,7 @@ it.each(["streamDeferred", "fetchDeferred", "cancelDeferred"] as const)(
 	},
 );
 
-// Refs #581: no await may separate the generation recheck from the physical dispatch.
+// Refs nredd/pi-harness#581: no await may separate the generation recheck from the physical dispatch.
 it("rechecks the captured generation synchronously after the existing final gate", async () => {
 	const h = await createHarness({ useModelRuntimeStream: true, models: [{ id: "physical" }] });
 	try {
@@ -295,7 +295,7 @@ it("rechecks the captured generation synchronously after the existing final gate
 	}
 });
 
-// Refs #581: image generation shares the same synchronous generation recheck.
+// Refs nredd/pi-harness#581: image generation shares the same synchronous generation recheck.
 it("refuses image generation once its requester is invalidated after the final gate", async () => {
 	const h = await createHarness({ useModelRuntimeStream: true, models: [{ id: "physical" }] });
 	try {
@@ -347,7 +347,7 @@ it("refuses image generation once its requester is invalidated after the final g
 	}
 });
 
-// Refs #581: registrant and sibling reloads do not invalidate the requester's generation.
+// Refs nredd/pi-harness#581: registrant and sibling reloads do not invalidate the requester's generation.
 it("permits a request paused in physical preparation while an independent sibling reloads", async () => {
 	let entered = false;
 	let release: () => void = () => {};
@@ -384,7 +384,7 @@ it("permits a request paused in physical preparation while an independent siblin
 	}
 });
 
-// Refs #581: the agent and every summarizer must retain ownership after routing, too.
+// Refs nredd/pi-harness#581: the agent and every summarizer must retain ownership after routing, too.
 it.each(["agent", "summary"] as const)("refuses %s dispatch reloaded during physical authentication", async (kind) => {
 	let entered = false;
 	let pause = true;
@@ -454,7 +454,7 @@ it.each(["agent", "summary"] as const)("refuses %s dispatch reloaded during phys
 	}
 });
 
-// Refs #581: a retained routing registry belongs to that request's runner, not future reloads.
+// Refs nredd/pi-harness#581: a retained routing registry belongs to that request's runner, not future reloads.
 it("refuses retained routing registries after their own requester reloads but permits a fresh request", async () => {
 	let routed: ModelRouteContext | undefined;
 	const h = await createHarness({
@@ -501,7 +501,7 @@ it("refuses retained routing registries after their own requester reloads but pe
 
 type ReloadableLoader = { reload(): Promise<void> };
 
-// Refs #581: between invalidating the old runner and building the new one, a fresh request
+// Refs nredd/pi-harness#581: between invalidating the old runner and building the new one, a fresh request
 // through the stable session view must wait for the new runner instead of failing stale.
 it("holds a fresh request made during reload until the new runner exists", async () => {
 	const h = await createHarness({ useModelRuntimeStream: true, models: [{ id: "physical" }] });
@@ -616,7 +616,7 @@ async function within<T>(promise: Promise<T>, label: string): Promise<T> {
 	}
 }
 
-// Refs #581: the reload hold must not span handlers that await requests of their own.
+// Refs nredd/pi-harness#581: the reload hold must not span handlers that await requests of their own.
 it("does not deadlock reload on a resources_discover handler awaiting a model request", async () => {
 	let armed = false;
 	let request: Promise<unknown> | undefined;

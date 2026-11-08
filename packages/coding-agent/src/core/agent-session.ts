@@ -498,6 +498,8 @@ export class AgentSession {
 	private _isFirstRunSinceRebuild = true;
 	/** MCP tools held back by the first run and still unregistered; the next run reports them if still gone. */
 	private _heldBackMcpToolNames = new Set<string>();
+	/** `_heldBackMcpToolNames` for the run being prepared; committed once the run starts, so a failed start reports nothing. */
+	private _stagedHeldBackMcpToolNames = new Set<string>();
 	private _usesDefaultTools: boolean;
 	private _defaultToolModifiers: string[];
 	/** Matches the `--tools` entries: tool names or patterns. */
@@ -2010,6 +2012,7 @@ export class AgentSession {
 		// are dropped, so a tool that never registers does not stay pending.
 		this._pendingToolNames.clear();
 		this._isFirstRunSinceRebuild = false;
+		this._heldBackMcpToolNames = this._stagedHeldBackMcpToolNames;
 		try {
 			await this.agent.prompt(messages);
 			while (!this._agentRunAbortRequested) {
@@ -2070,7 +2073,7 @@ export class AgentSession {
 		);
 		const isHeldBack = (name: string) => hasMcpGrace && isMcpToolName(name) && this._isAllowedTool(name);
 		const missingTools = unregistered.filter((name) => !isHeldBack(name));
-		this._heldBackMcpToolNames = new Set(unregistered.filter(isHeldBack));
+		this._stagedHeldBackMcpToolNames = new Set(unregistered.filter(isHeldBack));
 		if (missingTools.length > 0) {
 			messages.push({
 				role: "custom",

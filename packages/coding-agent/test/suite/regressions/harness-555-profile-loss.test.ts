@@ -302,6 +302,7 @@ test("navigating the tree gives an unregistered MCP tool of the target branch a 
 	}
 });
 
+// nredd/pi-harness#555
 test("reload gives an MCP tool that was unregistered before it a fresh grace turn", async () => {
 	const factories: ExtensionFactory[] = [];
 	// The MCP tool is not active, so only the declaration keeps it in the report.
@@ -324,6 +325,7 @@ test("reload gives an MCP tool that was unregistered before it a fresh grace tur
 	}
 });
 
+// nredd/pi-harness#555
 test("navigating to a branch that declares a held-back MCP tool keeps it held, then reports it once", async () => {
 	const harness = await resumeAndPrompt([], "first resumed prompt");
 	try {
@@ -339,6 +341,7 @@ test("navigating to a branch that declares a held-back MCP tool keeps it held, t
 	}
 });
 
+// nredd/pi-harness#555
 test("navigating to a branch that does not declare a held-back MCP tool drops it", async () => {
 	const harness = await resumeAndPrompt([], "first resumed prompt");
 	try {
@@ -355,6 +358,7 @@ test("navigating to a branch that does not declare a held-back MCP tool drops it
 	}
 });
 
+// nredd/pi-harness#555
 test("a run that fails while starting keeps the MCP grace turn", async () => {
 	const harness = await resume([]);
 	try {
@@ -363,6 +367,11 @@ test("a run that fails while starting keeps the MCP grace turn", async () => {
 		await expect(harness.session.prompt("fails", { images: [broken] })).rejects.toThrow();
 		await prompt(harness, "retry");
 		expect(noticeTexts(harness.session).join("")).not.toContain(MCP_TOOL);
+		// The report is now due; a failed start must not swallow it.
+		await expect(harness.session.prompt("fails again", { images: [broken] })).rejects.toThrow();
+		expect(noticeTexts(harness.session).join("")).not.toContain(MCP_TOOL);
+		await prompt(harness, "last");
+		expect(noticeTexts(harness.session).filter((text) => text.includes(MCP_TOOL))).toHaveLength(1);
 	} finally {
 		harness.cleanup();
 	}

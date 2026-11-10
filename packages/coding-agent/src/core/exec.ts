@@ -3,6 +3,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
 import { waitForChildProcess } from "../utils/child-process.ts";
 
 /**
@@ -44,6 +45,10 @@ export async function execCommand(
 			stdio: ["ignore", "pipe", "pipe"],
 		});
 
+		// Streams deliver arbitrary byte chunks: decoding each on its own turns a multibyte
+		// character split across two chunks into U+FFFD, so decode statefully.
+		const stdoutDecoder = new StringDecoder("utf8");
+		const stderrDecoder = new StringDecoder("utf8");
 		let stdout = "";
 		let stderr = "";
 		let killed = false;
@@ -79,11 +84,11 @@ export async function execCommand(
 		}
 
 		proc.stdout?.on("data", (data) => {
-			stdout += data.toString();
+			stdout += stdoutDecoder.write(data);
 		});
 
 		proc.stderr?.on("data", (data) => {
-			stderr += data.toString();
+			stderr += stderrDecoder.write(data);
 		});
 
 		// Wait for process termination without hanging on inherited stdio handles
@@ -94,14 +99,19 @@ export async function execCommand(
 				if (options?.signal) {
 					options.signal.removeEventListener("abort", killProcess);
 				}
-				resolve({ stdout, stderr, code: code ?? 0, killed });
+				resolve({
+					stdout: stdout + stdoutDecoder.end(),
+					stderr: stderr + stderrDecoder.end(),
+					code: code ?? 0,
+					killed,
+				});
 			})
 			.catch((_err) => {
 				if (timeoutId) clearTimeout(timeoutId);
 				if (options?.signal) {
 					options.signal.removeEventListener("abort", killProcess);
 				}
-				resolve({ stdout, stderr, code: 1, killed });
+				resolve({ stdout: stdout + stdoutDecoder.end(), stderr: stderr + stderrDecoder.end(), code: 1, killed });
 			});
 	});
 }

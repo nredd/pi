@@ -59,6 +59,33 @@ describe("AgentSession tool orchestration", () => {
 		while (harnesses.length > 0) harnesses.pop()?.cleanup();
 	});
 
+	it("explains a registered but inactive tool without claiming it is unregistered", async () => {
+		const harness = await createHarness({ initialActiveToolNames: [], extensionFactories: [orchestratorExtension] });
+		harnesses.push(harness);
+		await harness.session.bindExtensions({});
+		harness.session.setActiveToolsByName(["run_tools"]);
+		expect(harness.session.getAllTools().map((tool) => tool.name)).toContain("echo");
+		expect(harness.session.getActiveToolNames()).not.toContain("echo");
+
+		harness.setResponses([
+			fauxAssistantMessage([fauxToolCall("echo", { text: "hi" })], { stopReason: "toolUse" }),
+			fauxAssistantMessage("done"),
+		]);
+		await harness.session.prompt("go");
+
+		const result = harness.session.messages.find(
+			(message): message is ToolResultMessage => message.role === "toolResult",
+		);
+		if (!result) throw new Error("No tool result");
+		expect(result.isError).toBe(true);
+		expect(result.content).toEqual([
+			{
+				type: "text",
+				text: "Tool echo is not available in this request: it is not active (deferred tools must be loaded first), not registered, or excluded by the active profile",
+			},
+		]);
+	});
+
 	it("supports tools that call other tools under any name through the extension API", async () => {
 		const toolCalls: string[] = [];
 		const harness = await createHarness({
@@ -100,7 +127,7 @@ describe("AgentSession tool orchestration", () => {
 		expect(result.content).toEqual([
 			{
 				type: "text",
-				text: "helped | echo: hi | Tool run_tools is not available in this session: it is not registered, or the active profile or an exclusion removed it",
+				text: "helped | echo: hi | Tool run_tools is not available in this request: it is not active (deferred tools must be loaded first), not registered, or excluded by the active profile",
 			},
 		]);
 		const parent = result.toolCallId;

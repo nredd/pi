@@ -2202,7 +2202,7 @@ describe("runToolCall", () => {
 				content: [
 					{
 						type: "text",
-						text: "Tool missing is not available in this session: it is not registered, or the active profile or an exclusion removed it",
+						text: "Tool missing is not available in this request: it is not active (deferred tools must be loaded first), not registered, or excluded by the active profile",
 					},
 				],
 			},

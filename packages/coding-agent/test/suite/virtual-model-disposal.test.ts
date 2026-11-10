@@ -43,9 +43,8 @@ it("refuses nested provider calls through a routing registry after its requester
 });
 
 // Refs nredd/pi-harness#581: reloading during an asynchronous route must not dispatch its stale result.
-// SKIPPED in the upstream sync: upstream rejects reload while a turn or compaction runs (earendil-works/pi#9222),
-// so this reload-in-flight state is unreachable. See nredd/pi#23 for the owner decision.
-it.skip("refuses an in-flight route invalidated by its requester's reload before final dispatch", async () => {
+// reload() refuses while a turn runs (earendil-works/pi#9222); a summary request is not a turn.
+it("refuses an in-flight summary route invalidated by its requester's reload before final dispatch", async () => {
 	let entered: () => void = () => {};
 	let release: () => void = () => {};
 	const routing = new Promise<void>((resolve) => {
@@ -79,19 +78,17 @@ it.skip("refuses an in-flight route invalidated by its requester's reload before
 	try {
 		await h.session.setModel(h.session.modelRuntime.getModel("router", "owner")!);
 		h.setResponses([fauxAssistantMessage("fresh")]);
-		const prompt = h.session.prompt("stale route");
+		const summary = h.session.summarizeForBugReport({ signal: new AbortController().signal }).then(
+			() => "completed",
+			(error: unknown) => String(error),
+		);
 		await routing;
 		await h.session.reload();
 		release();
-		await prompt;
-		expect(h.session.messages.at(-1)).toMatchObject({
-			stopReason: "error",
-			errorMessage: expect.stringContaining("stale"),
-		});
+		expect(await summary).toContain("stale");
 		expect(h.getPendingResponseCount()).toBe(1);
 		pause = false;
-		await h.session.prompt("fresh route");
-		expect(h.session.getLastAssistantText()).toBe("fresh");
+		expect(await h.session.summarizeForBugReport({ signal: new AbortController().signal })).toBe("fresh");
 	} finally {
 		release();
 		h.cleanup();

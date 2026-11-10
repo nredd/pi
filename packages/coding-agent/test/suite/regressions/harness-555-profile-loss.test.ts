@@ -129,7 +129,9 @@ test("resuming with missing tools warns the user and model once", async () => {
 		);
 		expect(removals).toEqual(expect.arrayContaining(TOOL_NAMES));
 		expect(host.viewport().join("\n")).toContain("no longer available");
-		expect(getMessageText(getToolResult(host.harness, "ssh_exec"))).toBe("Tool ssh_exec not found");
+		expect(getMessageText(getToolResult(host.harness, "ssh_exec"))).toBe(
+			"Tool ssh_exec is not available in this request: it is not active (deferred tools must be loaded first), not registered, or excluded by the active profile",
+		);
 		expect(JSON.stringify(requests[0])).toContain("no longer available");
 		host.harness.setResponses([fauxAssistantMessage("again")]);
 		await host.harness.session.prompt("third");

@@ -742,7 +742,9 @@ async function prepareToolCall(
 	if (!tool) {
 		return {
 			kind: "immediate",
-			result: createErrorToolResult(`Tool ${toolCall.name} not found`),
+			result: createErrorToolResult(
+				`Tool ${toolCall.name} is not available in this request: it is not active (deferred tools must be loaded first), not registered, or excluded by the active profile`,
+			),
 			isError: true,
 		};
 	}

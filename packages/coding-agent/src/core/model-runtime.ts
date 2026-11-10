@@ -26,6 +26,7 @@ import {
 	type DeferredCancelOptions,
 	type DeferredFetchOptions,
 	type DeferredHandle,
+	getOpenCodeSessionHeaders,
 	type ImageApi,
 	type ImageModel,
 	type ImagesContext,
@@ -744,6 +745,14 @@ export class ModelRuntime implements Models {
 		});
 	}
 
+	/**
+	 * Wait until credential writes already in progress finish, such as an OAuth refresh started by a
+	 * background catalog refresh. Call before the process exits so a rotated token is not lost.
+	 */
+	settleCredentialWrites(): Promise<void> {
+		return this.credentials.settled();
+	}
+
 	listCredentials(options?: AuthOperationOptions): Promise<readonly CredentialInfo[]> {
 		return this.credentials.list(options);
 	}
@@ -788,13 +797,20 @@ export class ModelRuntime implements Models {
 			...rawProviderOptions
 		} = (options ?? {}) as TOptions & BeforeProviderRequestOptions;
 		const providerOptions = rawProviderOptions as Omit<TOptions, "transformHeaders"> & ProviderRequestOptions<TModel>;
-		let headers = mergeHeaders(resolution.auth.headers, providerOptions.headers);
+		const requestModel: TModel = resolution.auth.baseUrl ? { ...model, baseUrl: resolution.auth.baseUrl } : model;
+		const sessionId =
+			"sessionId" in providerOptions && typeof providerOptions.sessionId === "string"
+				? providerOptions.sessionId
+				: undefined;
+		let headers = mergeHeaders(
+			mergeHeaders(getOpenCodeSessionHeaders(requestModel, sessionId), resolution.auth.headers),
+			providerOptions.headers,
+		);
 		if (transformHeaders) headers = await transformHeaders(headers ?? {});
 		const env =
 			resolution.env || providerOptions.env
 				? { ...(resolution.env ?? {}), ...(providerOptions.env ?? {}) }
 				: undefined;
-		const requestModel: TModel = resolution.auth.baseUrl ? { ...model, baseUrl: resolution.auth.baseUrl } : model;
 		return {
 			provider,
 			model: requestModel,
@@ -883,15 +899,20 @@ export class ModelRuntime implements Models {
 		options?: ModelsApiStreamOptions<TApi> & BeforeProviderRequestOptions,
 	): AssistantMessageEventStream {
 		const transcript = normalizeContext(context);
-		return lazyStream(model, async () => {
-			assertChatModel(model);
-			return this.dispatch(
-				model,
-				options as (StreamOptions & ModelsRequestTransforms & BeforeProviderRequestOptions) | undefined,
-				(provider, requestModel, requestOptions) =>
-					provider.stream(requestModel, transcript, requestOptions as ApiStreamOptions<TApi>),
-			);
-		});
+		return lazyStream(
+			model,
+			async () => {
+				assertChatModel(model);
+				return this.dispatch(
+					model,
+					options as (StreamOptions & ModelsRequestTransforms & BeforeProviderRequestOptions) | undefined,
+					(provider, requestModel, requestOptions) =>
+						provider.stream(requestModel, transcript, requestOptions as ApiStreamOptions<TApi>),
+				);
+			},
+			undefined,
+			options?.signal,
+		);
 	}
 
 	complete<TApi extends Api>(
@@ -911,32 +932,43 @@ export class ModelRuntime implements Models {
 		if (isVirtualModel(model)) {
 			// Requests outside the agent loop are routed here. Callers sized them before routing, so
 			// cap the output budget to the routed model.
-			return lazyStream(model, async () => {
-				// Routing reads the route context, which must not predate a reload in progress.
-				// A refusal is left to the dispatch gate, after routing as before.
-				await options?.beforeProviderRequest?.().catch(() => undefined);
-				const route = await this.resolveModel(model, transcript.messages, {
-					reason: "direct",
-					thinkingLevel: options?.reasoning ?? "off",
-					signal: options?.signal,
-					routeContext: options?.routeContext,
-				});
-				const { maxTokens: limit } = route.model;
-				const maxTokens = options?.maxTokens && limit > 0 ? Math.min(options.maxTokens, limit) : options?.maxTokens;
-				const reasoning = route.thinkingLevel === "off" ? undefined : route.thinkingLevel;
-				// Caller credentials were resolved for the virtual model's provider. Another provider
-				// resolves its own, so they are not sent to the wrong vendor.
-				const { apiKey, headers, env, ...rest } = options ?? {};
-				const auth = route.model.provider === model.provider ? { apiKey, headers, env } : {};
-				return this.streamSimple(route.model, context, { ...rest, ...auth, maxTokens, reasoning });
-			});
-		}
-		return lazyStream(model, async () => {
-			assertChatModel(model);
-			return this.dispatch(model, options, (provider, requestModel, requestOptions) =>
-				provider.streamSimple(requestModel, transcript, requestOptions as SimpleStreamOptions),
+			return lazyStream(
+				model,
+				async () => {
+					// Routing reads the route context, which must not predate a reload in progress.
+					// A refusal is left to the dispatch gate, after routing as before.
+					await options?.beforeProviderRequest?.().catch(() => undefined);
+					const route = await this.resolveModel(model, transcript.messages, {
+						reason: "direct",
+						thinkingLevel: options?.reasoning ?? "off",
+						signal: options?.signal,
+						routeContext: options?.routeContext,
+					});
+					const { maxTokens: limit } = route.model;
+					const maxTokens =
+						options?.maxTokens && limit > 0 ? Math.min(options.maxTokens, limit) : options?.maxTokens;
+					const reasoning = route.thinkingLevel === "off" ? undefined : route.thinkingLevel;
+					// Caller credentials were resolved for the virtual model's provider. Another provider
+					// resolves its own, so they are not sent to the wrong vendor.
+					const { apiKey, headers, env, ...rest } = options ?? {};
+					const auth = route.model.provider === model.provider ? { apiKey, headers, env } : {};
+					return this.streamSimple(route.model, context, { ...rest, ...auth, maxTokens, reasoning });
+				},
+				undefined,
+				options?.signal,
 			);
-		});
+		}
+		return lazyStream(
+			model,
+			async () => {
+				assertChatModel(model);
+				return this.dispatch(model, options, (provider, requestModel, requestOptions) =>
+					provider.streamSimple(requestModel, transcript, requestOptions as SimpleStreamOptions),
+				);
+			},
+			undefined,
+			options?.signal,
+		);
 	}
 
 	completeSimple(
@@ -952,19 +984,24 @@ export class ModelRuntime implements Models {
 		handle: DeferredHandle,
 		options?: ModelsDeferredFetchOptions & BeforeProviderRequestOptions,
 	): AssistantMessageEventStream {
-		return lazyStream(model, async () => {
-			assertChatModel(model);
-			const prepared = await this.prepareRequest(model, options);
-			if (!prepared.provider.fetchDeferred) {
-				throw new ModelsError("provider", `Provider ${model.provider} does not support deferred responses`);
-			}
-			const recheck = await options?.beforeProviderRequest?.();
-			// A request cancelled while it was being prepared (a fatal startup aborts in-flight
-			// work) must not dispatch once its transforms resume, recovery or not.
-			options?.signal?.throwIfAborted();
-			recheck?.();
-			return prepared.provider.fetchDeferred(prepared.model, handle, prepared.options as DeferredFetchOptions);
-		});
+		return lazyStream(
+			model,
+			async () => {
+				assertChatModel(model);
+				const prepared = await this.prepareRequest(model, options);
+				if (!prepared.provider.fetchDeferred) {
+					throw new ModelsError("provider", `Provider ${model.provider} does not support deferred responses`);
+				}
+				const recheck = await options?.beforeProviderRequest?.();
+				// A request cancelled while it was being prepared (a fatal startup aborts in-flight
+				// work) must not dispatch once its transforms resume, recovery or not.
+				options?.signal?.throwIfAborted();
+				recheck?.();
+				return prepared.provider.fetchDeferred(prepared.model, handle, prepared.options as DeferredFetchOptions);
+			},
+			undefined,
+			options?.signal,
+		);
 	}
 
 	async fetchDeferred(

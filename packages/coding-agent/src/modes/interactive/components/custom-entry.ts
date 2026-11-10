@@ -4,6 +4,7 @@ import type { EntryRenderer } from "../../../core/extensions/types.ts";
 import type { CustomEntry } from "../../../core/session-manager.ts";
 import { theme } from "../theme/theme.ts";
 import { entryRule } from "./entry-rule.ts";
+import { keyHint, keyText } from "./keybinding-hints.ts";
 
 /**
  * Component that renders a custom session entry from extensions.
@@ -51,7 +52,7 @@ export class CustomEntryComponent extends Container {
 
 		let component: Component | undefined;
 		try {
-			component = this.renderer(this.entry, { expanded: this._expanded }, theme);
+			component = this.renderer(this.entry, { expanded: this._expanded, keyText, keyHint }, theme);
 		} catch (error) {
 			const message = error instanceof Error ? error.message : String(error);
 			const box = new Box(this.outputPad, 1, (text) => theme.bg("customMessageBg", text));

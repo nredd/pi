@@ -500,7 +500,8 @@ describe("ExtensionStartupError", () => {
 			expect(harness.faux.state.callCount).toBe(0);
 		});
 
-		it("waits for pending reload startup before an in-flight turn's next request", async () => {
+		// reload() refuses while a turn runs (earendil-works/pi#9222); a rebind still opens the startup gate mid-turn.
+		it("waits for a pending rebind's startup before an in-flight turn's next request", async () => {
 			let releaseTool: (() => void) | undefined;
 			let toolStarted: (() => void) | undefined;
 			const toolRan = new Promise<void>((resolve) => {
@@ -524,12 +525,13 @@ describe("ExtensionStartupError", () => {
 					return { content: [], details: {} };
 				},
 			};
+			const rebinding = { on: false };
 			const harness = await harnessWith({
 				tools: [waitTool],
 				extensionFactories: [
 					(pi) => {
-						pi.on("session_start", async (event) => {
-							if (event.reason !== "reload") return;
+						pi.on("session_start", async () => {
+							if (!rebinding.on) return;
 							reloadStarted?.();
 							await new Promise<void>((resolve) => {
 								releaseStartup = resolve;
@@ -546,7 +548,8 @@ describe("ExtensionStartupError", () => {
 
 			const prompt = harness.session.prompt("start");
 			await toolRan;
-			const reload = harness.session.reload();
+			rebinding.on = true;
+			const reload = harness.session.bindExtensions({ mode: "print" });
 			await startupPending;
 			const recoveredProvider = registerFauxProvider({ api: harness.faux.api });
 			try {
@@ -564,6 +567,7 @@ describe("ExtensionStartupError", () => {
 			}
 		});
 
+		// reload() refuses while a turn runs (earendil-works/pi#9222); a fatal rebind can still settle mid-turn.
 		it("rechecks the startup latch after context handlers before streaming", async () => {
 			const state = { fatal: false };
 			let releaseContext: (() => void) | undefined;
@@ -580,8 +584,8 @@ describe("ExtensionStartupError", () => {
 				useModelRuntimeStream: true,
 				extensionFactories: [
 					(pi) => {
-						pi.on("session_start", async (event) => {
-							if (event.reason !== "reload") return;
+						pi.on("session_start", async () => {
+							if (!state.fatal) return;
 							reloadStarted?.();
 							await new Promise<void>((resolve) => {
 								releaseStartup = resolve;
@@ -603,7 +607,7 @@ describe("ExtensionStartupError", () => {
 			const prompt = harness.session.prompt("start");
 			await contextPending;
 			state.fatal = true;
-			const reload = harness.session.reload();
+			const reload = harness.session.bindExtensions({ mode: "print" });
 			await startupPending;
 			const recoveredProvider = registerFauxProvider({ api: harness.faux.api });
 			try {
@@ -660,7 +664,8 @@ describe("ExtensionStartupError", () => {
 			expect(harness.faux.state.callCount).toBe(0);
 		});
 
-		it("does not send a compaction summary paused in auth when a fatal reload settles", async () => {
+		// reload() refuses while compaction runs (earendil-works/pi#9222); a fatal rebind can still settle during it.
+		it("does not send a compaction summary paused in auth when a fatal bind settles", async () => {
 			// Summaries build their own request options outside the agent loop; they must carry
 			// the same last-moment gate as a conversational request.
 			const state = { fatal: false };
@@ -723,97 +728,13 @@ describe("ExtensionStartupError", () => {
 			);
 			await authPending;
 			state.fatal = true;
-			await expect(harness.session.reload()).rejects.toThrow("fatal reload");
+			await expect(
+				harness.session.bindExtensions({ uiContext: createTestUiContext(), mode: "tui" }),
+			).rejects.toThrow("fatal reload");
 			releaseAuth?.();
 			await compaction;
 
 			expect(harness.faux.state.callCount).toBe(0);
-		});
-
-		// Refs nredd/pi-harness#581: pending startup still gates dispatch, and completed reload stales the old summary.
-		it("refuses a compaction summary paused in the header transform across its requester's reload", async () => {
-			// No abort fires for a successful reload. Keep the startup gate, then reject the
-			// old request's generation rather than dispatching when startup finishes.
-			let finishStartup: (() => void) | undefined;
-			const state = { slow: false };
-			let releaseTransform: (() => void) | undefined;
-			const harness = await harnessWith({
-				useModelRuntimeStream: true,
-				extensionFactories: [
-					(pi) => {
-						pi.on("session_start", async () => {
-							if (!state.slow) return;
-							await new Promise<void>((resolve) => {
-								finishStartup = resolve;
-							});
-						});
-					},
-				],
-			});
-			await harness.session.bindExtensions({ uiContext: createTestUiContext(), mode: "tui" });
-			harness.settingsManager.applyOverrides({ compaction: { keepRecentTokens: 1 } });
-			const now = Date.now();
-			harness.sessionManager.appendMessage({
-				role: "user",
-				content: [{ type: "text", text: "message to compact" }],
-				timestamp: now - 1000,
-			});
-			harness.sessionManager.appendMessage({
-				...fauxAssistantMessage("assistant response to compact", { timestamp: now - 500 }),
-				model: harness.getModel().id,
-				provider: harness.getModel().provider,
-				usage: {
-					input: 50,
-					output: 50,
-					cacheRead: 0,
-					cacheWrite: 0,
-					totalTokens: 100,
-					cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-				},
-			});
-			harness.session.agent.state.messages = harness.sessionManager.buildSessionContext().messages;
-			const stream = harness.session.agent.streamFunction;
-			harness.session.agent.streamFunction = (model, context, options) =>
-				stream(model, context, {
-					...options,
-					transformHeaders: async (headers: ProviderHeaders) => {
-						await new Promise<void>((resolve) => {
-							releaseTransform = resolve;
-						});
-						return headers;
-					},
-				} satisfies ModelsSimpleStreamOptions as typeof options);
-			harness.setResponses([fauxAssistantMessage("summary")]);
-
-			const compaction = harness.session.compact().then(
-				() => undefined,
-				(error: unknown) => error,
-			);
-			let recoveredProvider: ReturnType<typeof registerFauxProvider> | undefined;
-			try {
-				await vi.waitFor(() => expect(releaseTransform).toBeDefined());
-				state.slow = true;
-				const reload = harness.session.reload();
-				await vi.waitFor(() => expect(finishStartup).toBeDefined());
-				// Keep a valid faux transport: stale ownership, not missing transport, must refuse dispatch.
-				recoveredProvider = registerFauxProvider({ api: harness.faux.api });
-				recoveredProvider.setResponses([fauxAssistantMessage("summary")]);
-				releaseTransform?.();
-				// Give the summary every chance to dispatch while the handler is still running.
-				await new Promise((resolve) => setTimeout(resolve, 50));
-				expect(recoveredProvider.state.callCount).toBe(0);
-				expect(harness.faux.state.callCount).toBe(0);
-
-				finishStartup?.();
-				await reload;
-				expect(await compaction).toMatchObject({ message: expect.stringContaining("stale") });
-				expect(recoveredProvider.state.callCount).toBe(0);
-				expect(recoveredProvider.getPendingResponseCount()).toBe(1);
-			} finally {
-				releaseTransform?.();
-				finishStartup?.();
-				recoveredProvider?.unregister();
-			}
 		});
 
 		it("binds the last-moment gate to the requesting session", async () => {

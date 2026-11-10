@@ -62,9 +62,21 @@ Use [`models.json`](configuration.md#agent-directory) when an endpoint speaks an
 }
 ```
 
-The dummy key makes the model available to Pi; Ollama ignores it. For an authenticated endpoint, `apiKey` and header values can use `$NAME` or `${NAME}` environment interpolation, a literal value, or a leading `!command`. Commands in `models.json` run at request time. An `apiKey` command runs without blocking Pi and gets 10 seconds, then SIGTERM, then SIGKILL 2 seconds later. Both signals go to the shell only, so a process a compound command started in the background or in a pipeline can outlive a timeout. The run is done when the shell exits, even if such a process keeps its output open, and each output stream is capped at 1 MB. One that fails (non-zero exit or empty output) is retried twice, after 200 ms and 800 ms, before the request fails. A command that cannot be run (exit 126 or 127, or a missing shell), times out, or prints more than 1 MB fails at once without retry. Cancelling a request stops its command and retry waits, unless another request is waiting on the same run. The error names the exit code, the timeout, the output cap, empty output, or why the command could not run, and includes the tail of the command's stderr, with anything that looks like a credential (bearer and basic tokens, `key=value` and `--password value` style secrets, URL userinfo, long opaque tokens) replaced by `[REDACTED]`. A resolved `apiKey` is reused for 30 seconds per provider and command, and concurrent requests share one run. It is held in memory only, never written to disk or logged, and failures are never cached. If the provider rejects the key (HTTP 401 or 403, or its auth error code) before any output, Pi drops the cached key, runs the command again, and retries the request once with the new key; a second rejection is reported as is. Requests rejected together share that one re-run, and a rejected key that was passed in or stored leaves the command's cached key alone. Reloading a changed `models.json` also drops cached keys. Header commands run on every request without retry.
+The dummy key makes the model available to Pi; Ollama ignores it. For an authenticated endpoint, `apiKey` and header values can use `$NAME` or `${NAME}` environment interpolation, a literal value, or a leading `!command`. `$$` and `$!` produce a literal `$` and `!`. Commands in `models.json` run at request time. An `apiKey` command runs without blocking Pi and gets 10 seconds, then SIGTERM, then SIGKILL 2 seconds later. Both signals go to the shell only, so a process a compound command started in the background or in a pipeline can outlive a timeout. The run is done when the shell exits, even if such a process keeps its output open, and each output stream is capped at 1 MB. One that fails (non-zero exit or empty output) is retried twice, after 200 ms and 800 ms, before the request fails. A command that cannot be run (exit 126 or 127, or a missing shell), times out, or prints more than 1 MB fails at once without retry. Cancelling a request stops its command and retry waits, unless another request is waiting on the same run. The error names the exit code, the timeout, the output cap, empty output, or why the command could not run, and includes the tail of the command's stderr, with anything that looks like a credential (bearer and basic tokens, `key=value` and `--password value` style secrets, URL userinfo, long opaque tokens) replaced by `[REDACTED]`. A resolved `apiKey` is reused for 30 seconds per provider and command, and concurrent requests share one run. It is held in memory only, never written to disk or logged, and failures are never cached. If the provider rejects the key (HTTP 401 or 403, or its auth error code) before any output, Pi drops the cached key, runs the command again, and retries the request once with the new key; a second rejection is reported as is. Requests rejected together share that one re-run, and a rejected key that was passed in or stored leaves the command's cached key alone. Reloading a changed `models.json` also drops cached keys. Header commands run on every request without retry.
 
 Opening `/model` reloads the file. A `models` entry adds or replaces a model with the same ID on that provider. Use `modelOverrides` to change metadata for an existing built-in or extension-provided model without replacing the provider's model list. Unknown override IDs are ignored.
+
+To route a built-in provider through a proxy, set only its `baseUrl`. Its models and authentication stay unchanged:
+
+```json
+{
+  "providers": {
+    "anthropic": { "baseUrl": "https://proxy.example.com/v1" }
+  }
+}
+```
+
+[Models Configuration](models-configuration.md) lists every field.
 
 ### Describe model input and caching
 
@@ -129,20 +141,21 @@ Compatibility settings should describe verified differences in the endpoint's re
 
 ## Use classifier models
 
-Classifier models do not chat. They answer typed questions about JSON state: pick one of several choices, answer yes or no, or give a score, each with probabilities. Pi includes TypeSafe's Jev model from these providers, Cloudflare's Clef and Clef Flash models from Workers AI, and OpenAI's GPT-6 Luna through the [Decisions API](https://developers.openai.com/api/docs/guides/decisions):
+Classifier models do not chat. They answer typed questions about JSON state: pick one of several choices, answer yes or no, or give a score, each with probabilities. Pi includes TypeSafe's Jev model from these providers, Cloudflare's Clef, Clef Flash, and Clef Omni models from Workers AI and OpenRouter, OpenAI's GPT-6 Luna through the [Decisions API](https://developers.openai.com/api/docs/guides/decisions), and Microsoft-Decision-1 through GitHub Copilot:
 
 | Provider | Model IDs | Authentication |
 |---|---|---|
 | `typesafe` | `jev-latest` | `TYPESAFE_API_KEY` |
-| `openrouter` | `typesafe/jev-1.13`, `~typesafe/jev-latest` | `OPENROUTER_API_KEY` or `/login` |
-| `cloudflare-workers-ai` | `typesafe/jev`, `@cf/cloudflare/clef`, `@cf/cloudflare/clef-flash` | `CLOUDFLARE_API_KEY` and `CLOUDFLARE_ACCOUNT_ID` |
+| `openrouter` | `typesafe/jev-1.13`, `typesafe/jev-1.14`, `~typesafe/jev-latest`, `cloudflare/clef`, `cloudflare/clef-flash`, `cloudflare/clef-omni` | `OPENROUTER_API_KEY` or `/login` |
+| `cloudflare-workers-ai` | `typesafe/jev`, `typesafe/jev-1.14.0`, `@cf/cloudflare/clef`, `@cf/cloudflare/clef-flash`, `@cf/cloudflare/clef-omni` | `CLOUDFLARE_API_KEY` and `CLOUDFLARE_ACCOUNT_ID` |
 | `vercel-ai-gateway` | `typesafe-ai/jev` | `AI_GATEWAY_API_KEY` |
 | `opencode` | `jev-1.13`, `jev-1.13-free` | `OPENCODE_API_KEY` |
 | `openai` | `gpt-6-luna` | `OPENAI_API_KEY` |
+| `github-copilot` | `microsoft-decision-1` | `COPILOT_GITHUB_TOKEN` or `/login` |
 
 Chat models on a [llama.cpp router](llama-cpp.md#classification) are also listed as classifier models.
 
-OpenAI's Decisions API needs an API key. Sign in with ChatGPT credentials do not work with it, so `gpt-6-luna` is not listed as available while `openai` is logged in through `/login`, even when `OPENAI_API_KEY` is set; log out of `openai` to use the key. GPT-6 Luna also judges images passed in `images` (see [Codemode](codemode.md#classify)); other classifier models return an error for them. The API rejects inputs above 922K tokens, but requests that run longer than about five seconds, currently above roughly 600K input tokens, fail with a gateway timeout.
+OpenAI's Decisions API needs an API key. Sign in with ChatGPT credentials do not work with it, so `gpt-6-luna` is not listed as available while `openai` is logged in through `/login`, even when `OPENAI_API_KEY` is set; log out of `openai` to use the key. The API rejects inputs above 922K tokens, but requests that run longer than about five seconds, currently above roughly 600K input tokens, fail with a gateway timeout.
 
 Classifier models do not appear in `/model`. The model reaches them through the [`codemode`](cli.md#enable-codemode) tool, which is off unless an MCP server turned it on. Enable it with `"defaultTools": ["+codemode"]` in [settings](settings.md#tools). Scripts then list classifier models with `models.getAvailableOfType("classifier")` and call `models.classify(model, { state, questions })`:
 
@@ -162,6 +175,10 @@ return result.answers;
 ```
 
 [Codemode](codemode.md#classify) describes the question and answer types.
+
+Classifier models whose `input` includes `"image"` also judge images passed in `images`; other classifier models return an error for them. Image input works with GPT-6 Luna, with Jev from `typesafe` and `cloudflare-workers-ai`, with Clef from `cloudflare-workers-ai`, and with the OpenRouter models whose catalog lists image input. Jev takes PNG and JPEG images, and image input is experimental on TypeSafe's own API. Clef takes PNG, JPEG, and WebP images, at most four per request. Jev from `vercel-ai-gateway` and `opencode` takes text only.
+
+Each System One service takes images in its own request format, set by the model's `compat.imageInput`. Built-in models set it, so overriding a provider's `baseUrl` keeps it. A custom provider that proxies another service's classifiers sets it in its provider-level `compat` in `models.json` (see [System One compatibility](models-configuration.md#typesafe-system-one)). OpenRouter in particular answers requests in TypeSafe's format without an error but drops the images.
 
 When the service reports token counts, as all System One services do, `result.usage` carries them with their cost. Pi adds the usage of a script's classifier calls to the `codemode` tool result, so it counts toward the session cost in the footer and `/session`. The cost uses the model's catalog price; models without one, such as TypeSafe's direct `jev-latest`, report tokens at no cost.
 

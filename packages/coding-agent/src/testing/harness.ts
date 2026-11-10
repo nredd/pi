@@ -126,6 +126,7 @@ export function createTestUiContext(overrides: Partial<ExtensionUIContext> = {})
 }
 
 export interface HarnessOptions {
+	provider?: string;
 	/** Caller-owned faux registration, shared across runtime replacements. Cleanup does not unregister it. */
 	fauxProvider?: FauxProviderRegistration;
 	models?: FauxModelDefinition[];
@@ -185,6 +186,7 @@ export async function createHarness(options: HarnessOptions = {}): Promise<Harne
 	const fauxProvider: FauxProviderRegistration =
 		options.fauxProvider ??
 		registerFauxProvider({
+			provider: options.provider,
 			models: options.models,
 		});
 	if (!options.fauxProvider) fauxProvider.setResponses([]);

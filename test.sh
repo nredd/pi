@@ -74,6 +74,9 @@ done
 value="${NODE_EXTRA_CA_CERTS-}"
 [[ -z "$value" ]] || test_env+=("NODE_EXTRA_CA_CERTS=$value")
 
+# The pi-env tests build their daemon with cargo, whose toolchains live under the real home.
+test_env+=("RUSTUP_HOME=${RUSTUP_HOME:-$HOME/.rustup}" "CARGO_HOME=${CARGO_HOME:-$HOME/.cargo}")
+
 # Preserve CI detection only for runner behavior and test reporting.
 for name in CI GITHUB_ACTIONS; do
 	value="${!name-}"
@@ -81,4 +84,8 @@ for name in CI GITHUB_ACTIONS; do
 done
 
 echo "Running tests without API keys in isolated home: $test_root/home"
-env -i "${test_env[@]}" npm test
+# Default to the whole suite; a command given as arguments runs in the same isolated environment.
+if [[ $# -eq 0 ]]; then
+	set -- npm test
+fi
+env -i "${test_env[@]}" "$@"

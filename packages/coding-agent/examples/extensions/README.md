@@ -26,6 +26,8 @@ cp permission-gate.ts ~/.pi/agent/extensions/
 | `fatal-startup.ts` | Fails session startup on purpose by throwing `ExtensionStartupError` from `session_start` |
 | `gondolin/` | Route built-in tools and `!` commands into a Gondolin micro-VM |
 
+For isolation setup and limitations, see [Run Pi in an isolated environment](../../docs/containerization.md).
+
 ### Custom Tools
 
 | Extension | Description |

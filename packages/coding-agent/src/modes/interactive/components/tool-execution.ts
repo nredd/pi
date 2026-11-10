@@ -21,7 +21,7 @@ import { ensurePngTranscoder } from "../../../utils/image-convert.ts";
 import { theme } from "../theme/theme.ts";
 import { DisclosureGutter } from "./disclosure-gutter.ts";
 import { entryRule } from "./entry-rule.ts";
-import { keyHint } from "./keybinding-hints.ts";
+import { keyHint, keyText } from "./keybinding-hints.ts";
 import { firstTextLine, lastTextLine, OneLineRow, renderedContentLines } from "./one-line.ts";
 
 const FALLBACK_PREVIEW_LINES = 10;
@@ -71,6 +71,8 @@ export class ToolExecutionComponent extends Container {
 	private cwd: string;
 	private executionStarted = false;
 	private argsComplete = false;
+	/** `updateArgs()` ran since the last display update; the next render applies it. */
+	private argsPending = false;
 	private result?: {
 		content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
 		isError: boolean;
@@ -181,6 +183,8 @@ export class ToolExecutionComponent extends Container {
 			isError: this.result?.isError ?? false,
 			durationMs: this.isPartial ? undefined : this.result?.durationMs,
 			outputPad: this.outputPad,
+			keyText,
+			keyHint,
 			probe: probeState !== undefined,
 		};
 	}
@@ -205,10 +209,15 @@ export class ToolExecutionComponent extends Container {
 		return new Text(text, 0, 0);
 	}
 
+	/**
+	 * Show new partial arguments. Applied at the next render, so a call streaming many argument deltas between two
+	 * frames runs its renderer once per frame, not once per delta (#9265).
+	 */
 	updateArgs(args: any): void {
 		this.args = args;
+		this.argsPending = true;
 		this.expandableDetail = undefined;
-		this.updateDisplay();
+		this.ui.requestRender();
 	}
 
 	markExecutionStarted(): void {
@@ -268,6 +277,7 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	override render(width: number): string[] {
+		if (this.argsPending) this.updateDisplay();
 		if (this.hideComponent) {
 			return [];
 		}
@@ -349,6 +359,7 @@ export class ToolExecutionComponent extends Container {
 	}
 
 	private updateDisplay(): void {
+		this.argsPending = false;
 		const bgFn = this.isPartial
 			? (text: string) => theme.bg("toolPendingBg", text)
 			: this.result?.isError

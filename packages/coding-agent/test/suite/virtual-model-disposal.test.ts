@@ -43,7 +43,8 @@ it("refuses nested provider calls through a routing registry after its requester
 });
 
 // Refs nredd/pi-harness#581: reloading during an asynchronous route must not dispatch its stale result.
-it("refuses an in-flight route invalidated by its requester's reload before final dispatch", async () => {
+// reload() refuses while a turn runs (earendil-works/pi#9222); a summary request is not a turn.
+it("refuses an in-flight summary route invalidated by its requester's reload before final dispatch", async () => {
 	let entered: () => void = () => {};
 	let release: () => void = () => {};
 	const routing = new Promise<void>((resolve) => {
@@ -77,19 +78,17 @@ it("refuses an in-flight route invalidated by its requester's reload before fina
 	try {
 		await h.session.setModel(h.session.modelRuntime.getModel("router", "owner")!);
 		h.setResponses([fauxAssistantMessage("fresh")]);
-		const prompt = h.session.prompt("stale route");
+		const summary = h.session.summarizeForBugReport({ signal: new AbortController().signal }).then(
+			() => "completed",
+			(error: unknown) => String(error),
+		);
 		await routing;
 		await h.session.reload();
 		release();
-		await prompt;
-		expect(h.session.messages.at(-1)).toMatchObject({
-			stopReason: "error",
-			errorMessage: expect.stringContaining("stale"),
-		});
+		expect(await summary).toContain("stale");
 		expect(h.getPendingResponseCount()).toBe(1);
 		pause = false;
-		await h.session.prompt("fresh route");
-		expect(h.session.getLastAssistantText()).toBe("fresh");
+		expect(await h.session.summarizeForBugReport({ signal: new AbortController().signal })).toBe("fresh");
 	} finally {
 		release();
 		h.cleanup();
@@ -385,74 +384,82 @@ it("permits a request paused in physical preparation while an independent siblin
 });
 
 // Refs nredd/pi-harness#581: the agent and every summarizer must retain ownership after routing, too.
-it.each(["agent", "summary"] as const)("refuses %s dispatch reloaded during physical authentication", async (kind) => {
-	let entered = false;
-	let pause = true;
-	let release: () => void = () => {};
-	const held = new Promise<void>((resolve) => {
-		release = resolve;
-	});
-	const h = await createHarness({
-		useModelRuntimeStream: true,
-		models: [{ id: "physical" }],
-		settings: { retry: { enabled: false } },
-		extensionFactories: [
-			(pi) => {
-				pi.registerVirtualModel({
-					provider: "router",
-					id: "owner",
-					name: "Owner",
-					route: (_request, ctx) => ({ model: ctx.modelRegistry.find("faux", "physical")!, thinkingLevel: "off" }),
+// SKIPPED in the upstream sync: upstream rejects reload while a turn or compaction runs (earendil-works/pi#9222),
+// so the agent variant of this reload-in-flight state is unreachable. See nredd/pi#23 for the owner decision.
+it.each<"agent" | "summary">(["summary"])(
+	"refuses %s dispatch reloaded during physical authentication",
+	async (kind) => {
+		let entered = false;
+		let pause = true;
+		let release: () => void = () => {};
+		const held = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		const h = await createHarness({
+			useModelRuntimeStream: true,
+			models: [{ id: "physical" }],
+			settings: { retry: { enabled: false } },
+			extensionFactories: [
+				(pi) => {
+					pi.registerVirtualModel({
+						provider: "router",
+						id: "owner",
+						name: "Owner",
+						route: (_request, ctx) => ({
+							model: ctx.modelRegistry.find("faux", "physical")!,
+							thinkingLevel: "off",
+						}),
+					});
+				},
+			],
+		});
+		const originalGetAuth = h.session.modelRuntime.getAuth.bind(h.session.modelRuntime);
+		const auth = vi.spyOn(h.session.modelRuntime, "getAuth").mockImplementation(async (...args) => {
+			if (pause) {
+				entered = true;
+				await held;
+			}
+			return originalGetAuth(...args);
+		});
+		try {
+			await h.session.setModel(h.session.modelRuntime.getModel("router", "owner")!);
+			h.setResponses([fauxAssistantMessage("fresh")]);
+			const result =
+				kind === "agent"
+					? h.session.prompt("stale")
+					: h.session.summarizeForBugReport({ signal: new AbortController().signal });
+			// Observe rejection immediately, including if a pre-dispatch guard rejects before our assertion.
+			const outcome = result.then(
+				() => "completed",
+				(error: unknown) => String(error),
+			);
+			await expect.poll(() => entered).toBe(true);
+			await h.session.reload();
+			release();
+			if (kind === "agent") {
+				await outcome;
+				expect(h.session.messages.at(-1)).toMatchObject({
+					stopReason: "error",
+					errorMessage: expect.stringContaining("stale"),
 				});
-			},
-		],
-	});
-	const originalGetAuth = h.session.modelRuntime.getAuth.bind(h.session.modelRuntime);
-	const auth = vi.spyOn(h.session.modelRuntime, "getAuth").mockImplementation(async (...args) => {
-		if (pause) {
-			entered = true;
-			await held;
+			} else {
+				expect(await outcome).toContain("stale");
+			}
+			expect(h.getPendingResponseCount()).toBe(1);
+			pause = false;
+			if (kind === "agent") {
+				await h.session.prompt("fresh");
+				expect(h.session.getLastAssistantText()).toBe("fresh");
+			} else {
+				expect(await h.session.summarizeForBugReport({ signal: new AbortController().signal })).toBe("fresh");
+			}
+		} finally {
+			release();
+			auth.mockRestore();
+			h.cleanup();
 		}
-		return originalGetAuth(...args);
-	});
-	try {
-		await h.session.setModel(h.session.modelRuntime.getModel("router", "owner")!);
-		h.setResponses([fauxAssistantMessage("fresh")]);
-		const result =
-			kind === "agent"
-				? h.session.prompt("stale")
-				: h.session.summarizeForBugReport({ signal: new AbortController().signal });
-		// Observe rejection immediately, including if a pre-dispatch guard rejects before our assertion.
-		const outcome = result.then(
-			() => "completed",
-			(error: unknown) => String(error),
-		);
-		await expect.poll(() => entered).toBe(true);
-		await h.session.reload();
-		release();
-		if (kind === "agent") {
-			await outcome;
-			expect(h.session.messages.at(-1)).toMatchObject({
-				stopReason: "error",
-				errorMessage: expect.stringContaining("stale"),
-			});
-		} else {
-			expect(await outcome).toContain("stale");
-		}
-		expect(h.getPendingResponseCount()).toBe(1);
-		pause = false;
-		if (kind === "agent") {
-			await h.session.prompt("fresh");
-			expect(h.session.getLastAssistantText()).toBe("fresh");
-		} else {
-			expect(await h.session.summarizeForBugReport({ signal: new AbortController().signal })).toBe("fresh");
-		}
-	} finally {
-		release();
-		auth.mockRestore();
-		h.cleanup();
-	}
-});
+	},
+);
 
 // Refs nredd/pi-harness#581: a retained routing registry belongs to that request's runner, not future reloads.
 it("refuses retained routing registries after their own requester reloads but permits a fresh request", async () => {

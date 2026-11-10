@@ -18,7 +18,7 @@ class PayloadCaptured extends Error {
 
 function makeModel(allowEmptySignature?: boolean): Model<"anthropic-messages"> {
 	return {
-		id: "mimo-v2.5-pro",
+		id: "mimo-v2.6-pro",
 		name: "MiMo-V2.5-Pro",
 		api: "anthropic-messages",
 		provider: "xiaomi-token-plan-ams",
@@ -36,7 +36,7 @@ function makeContext(
 	thinkingSignature: string,
 	thinking = "internal reasoning",
 	provider = "xiaomi-token-plan-ams",
-	model = "mimo-v2.5-pro",
+	model = "mimo-v2.6-pro",
 ): Context {
 	const assistant: AssistantMessage = {
 		role: "assistant",
@@ -109,7 +109,7 @@ describe("Anthropic empty thinking signature compat", () => {
 		"accounts/fireworks/models/deepseek-v4p1-flash",
 		"accounts/fireworks/models/qwen3p8-max",
 		"accounts/fireworks/models/qwen3p8-2p4t-a95b",
-		"accounts/fireworks/models/nemotron-3-ultra-nvfp4",
+		"accounts/fireworks/models/ember-1",
 	] as const)("preserves unsigned thinking for Fireworks %s", async (modelId) => {
 		const model = getModel("fireworks", modelId);
 		expect(model.compat?.allowEmptySignature).toBe(true);

@@ -28,6 +28,7 @@ import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.ts";
 import {
 	convertResponsesMessages,
 	convertResponsesTools,
+	DEFAULT_REASONING_SUMMARY,
 	getResponsesToolSupport,
 	processResponsesStream,
 } from "./openai-responses-shared.ts";
@@ -404,7 +405,7 @@ function buildParams(
 			const effort = configurationUpdateEffort === undefined ? requestedEffort : CONFIGURATION_UPDATE_REQUEST_EFFORT;
 			params.reasoning = {
 				effort: effort as NonNullable<typeof params.reasoning>["effort"],
-				summary: options?.reasoningSummary || "auto",
+				summary: options?.reasoningSummary || DEFAULT_REASONING_SUMMARY,
 			};
 			params.include = ["reasoning.encrypted_content"];
 		} else if (model.provider !== "github-copilot" && model.thinkingLevelMap?.off !== null) {

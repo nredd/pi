@@ -98,6 +98,11 @@ const BUDGETS = {
 		// and pi-schema's root for their schema builders (10 files; its format checks stay out).
 		"./tools": { maxFiles: 27, forbid: ["packages/durable/src/images/", "packages/schema/src/formats/"] },
 	},
+	"packages/coding-agent": {
+		// No file budget: the session harness deliberately reaches the whole session runtime. It must not reach the
+		// interactive host or pi-tui's emulator, whose `@xterm/headless` peer is optional.
+		"./testing": { forbid: ["coding-agent/src/testing/interactive.ts", "packages/tui/src/testing/"] },
+	},
 };
 
 const SPEC = /(?:^|\n)\s*(?:import|export)\s+(?!type\s)([^;]*?\sfrom\s*)?["']([^"']+)["']/g;

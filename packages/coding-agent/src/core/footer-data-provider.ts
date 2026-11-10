@@ -117,10 +117,18 @@ export class FooterDataProvider {
 	private refreshPending = false;
 	private disposed = false;
 
-	constructor(cwd: string) {
+	private readonly staticBranch: string | null | undefined;
+
+	/** A supplied branch is static: no git discovery, processes, or watchers. */
+	constructor(cwd: string, staticBranch?: string | null) {
+		this.staticBranch = staticBranch;
 		this.cwd = cwd;
-		this.gitPaths = findGitPaths(cwd);
-		this.setupGitWatcher();
+		if (staticBranch !== undefined) {
+			this.cachedBranch = staticBranch;
+		} else {
+			this.gitPaths = findGitPaths(cwd);
+			this.setupGitWatcher();
+		}
 	}
 
 	/** Current git branch, null if not in repo, "detached" if detached HEAD */
@@ -177,9 +185,11 @@ export class FooterDataProvider {
 			this.refreshTimer = null;
 		}
 		this.clearGitWatchers();
-		this.cachedBranch = undefined;
-		this.gitPaths = findGitPaths(cwd);
-		this.setupGitWatcher();
+		this.cachedBranch = this.staticBranch;
+		if (this.staticBranch === undefined) {
+			this.gitPaths = findGitPaths(cwd);
+			this.setupGitWatcher();
+		}
 		this.notifyBranchChange();
 	}
 

@@ -217,4 +217,9 @@ export class ModelConfig {
 	getError(): string | undefined {
 		return this.error;
 	}
+
+	/** Whether `other` configures the same providers, i.e. reloading it changed nothing. */
+	sameProviders(other: ModelConfig): boolean {
+		return JSON.stringify([...this.providers]) === JSON.stringify([...other.providers]);
+	}
 }

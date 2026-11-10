@@ -31,6 +31,17 @@ Read current state through `session.messages`, `session.model`, `session.thinkin
 
 `session.systemPrompt` is read-only and returns the current effective system prompt, including changes that have not yet been sent to the model. Tool changes are declared to the model before the next request.
 
+A resumed, reloaded, or forked session, or one that navigated the tree, can declare tools its runtime no longer registers, e.g. an extension was removed or failed to load, or `--exclude-tools ssh_exec`. The next turn then includes a visible `unregistered-tools-notice` custom message. The notice does not enable tools or change permissions.
+
+Example: `Tools no longer available: ssh_exec`.
+
+Rules:
+
+- A tool is reported only when it is not in the session's tool registry. Registered tools are never reported, even if inactive, deferred, or kept off the model's tool list by a `--tools` allowlist.
+- MCP servers connect after the first prompt starts. On the first run after the session's tools were (re)built (creation, `reload()`, resume, or tree navigation), an unregistered MCP tool (`mcp__*` or an MCP resource tool) is held back, not reported, if `--tools` and `--exclude-tools` allow it. If it is still unregistered on the next run, it is reported then. A `reload()` or tree navigation in between keeps a held-back tool (tree navigation only if the target branch's transcript declares it), so the grace run repeats and the report follows it. A run that fails while starting does not use up the grace.
+- `--tools` unregisters the non-MCP tools it does not match, and `--exclude-tools` unregisters the tools it names. Both are reported. An MCP tool that `--exclude-tools` names, or that a `--tools` list containing `mcp__*` entries does not match, is reported without grace.
+- Each tool is reported once, on the first run that finds it missing.
+
 <a id="sessionmanager-api"></a>
 
 ### Session storage
@@ -107,6 +118,22 @@ Each boundary can be supplied explicitly:
 
 Use `DefaultResourceLoader` when you want standard discovery with selected overrides. Supply a custom `ResourceLoader` when the host owns resource storage and discovery completely.
 
+Pass an absolute `homeDir` to `DefaultResourceLoader` or `DefaultPackageManager` to select a per-instance resource home without changing `process.env.HOME`:
+
+```typescript
+const resourceLoader = new DefaultResourceLoader({
+  cwd: "/work/project",
+  agentDir: "/work/private-home/.pi/agent",
+  homeDir: "/work/private-home",
+});
+await resourceLoader.reload();
+const { session } = await createAgentSession({ resourceLoader });
+```
+
+This redirects `~` in `cwd`, `agentDir`, configured local packages/resources and their tilde-based filters/overrides, additional resource paths and `extendResources()` paths, plus automatic `~/.agents/skills` discovery. `agentDir` still selects Pi's user settings and resource directories independently; `homeDir` does not derive or replace it. `createAgentSessionServices({ resourceLoaderOptions: { homeDir } })` also forwards the option. `PackageManagerOptions` and `DefaultResourceLoaderOptions` are exported for typed hosts.
+
+Omitting `homeDir` retains existing defaults, including the package manager's `HOME || os.homedir()` behavior. Project trust, filters, precedence, ancestor discovery and symlink handling are unchanged. This is a discovery dependency, not a filesystem sandbox: absolute paths, project ancestors, symlink targets, extension code, credentials, package-manager subprocesses and their global installation fallback remain outside its boundary. An explicit `systemPrompt` or `appendSystemPrompt` is still literal text or a path as supplied, not a tilde-expanded resource path. Hosts seeking isolation must also supply private `cwd`, `agentDir`, settings, credentials and session storage as appropriate.
+
 <a id="inlineextension"></a>
 
 Inline extension factories can be supplied through `DefaultResourceLoader`. Give one an `InlineExtension` name only when it needs a stable name in diagnostics and startup output. A named inline extension with `replaceable: true` is left out when another extension registers a tool, command, or flag with a name it registers during loading, instead of both loading with a conflict. The CLI's built-in codemode, tool search, and MCP extensions are replaceable. A named entry with `builtin: true` is not an inline extension: it supplies the code of the `builtin:<name>` extension, which loads like a configured extension file. It loads by default, is listed in `pi config`, and is disabled by `-builtin:<name>` in the `extensions` setting or by `noExtensions`; `additionalExtensionPaths: ["builtin:<name>"]` loads it explicitly. It loads after project trust is resolved, so it cannot handle `project_trust`. The CLI's built-in extensions use it.
@@ -115,7 +142,99 @@ Inline extension factories can be supplied through `DefaultResourceLoader`. Give
 
 The CLI loads `codemode`, `tool_search`, and MCP as built-in extensions. SDK sessions do not; add `createCodemodeExtension()`, `createToolSearchExtension()`, and `createMcpExtension()` to the `extensionFactories` of `DefaultResourceLoader`. `codemode` and `tool_search` are registered inactive: enable them through the `defaultTools` setting (`["+codemode", "+tool_search"]` keeps the other default tools), or let the MCP extension activate them: `codemode` for servers with `codemode` exposure, `tool_search` for servers with `deferred` exposure. The MCP extension connects its servers on `session_start`, so call `session.bindExtensions()`. See [Codemode and MCP](../examples/sdk/14-codemode-mcp.ts).
 
+A `session_start` handler can fail startup by throwing `ExtensionStartupError`. `bindExtensions()` (and `reload()`) then reject, and the session refuses `prompt()` and other provider-bound calls until a later `bindExtensions()` or `reload()` succeeds. `dispose()` the session if you give up. See [Fail startup on purpose](extensions.md#fatal-startup).
+
 See the focused examples for [models](../examples/sdk/02-custom-model.ts), [tools](../examples/sdk/05-tools.ts), [extensions](../examples/sdk/06-extensions.ts), and [full control](../examples/sdk/12-full-control.ts).
+
+### Inspecting skill candidates with an additional veto
+
+`DefaultPackageManager` accepts an optional synchronous `projectSkillPathFilter: (path: string) => boolean` in `PackageManagerOptions`. It receives the absolute discovered path of every project-scoped, top-level skill candidate (configured or automatic, enabled or disabled), after native collection and precedence sorting but **before canonical deduplication**:
+
+```typescript
+import { DefaultPackageManager, SettingsManager } from "@earendil-works/pi-coding-agent";
+
+const manager = new DefaultPackageManager({
+  cwd,
+  agentDir,
+  homeDir,
+  settingsManager: SettingsManager.create(cwd, agentDir, { projectTrusted: true }),
+  projectSkillPathFilter: path => allowedProjectSkillPaths.has(path),
+});
+const resources = await manager.resolve(async () => "skip");
+```
+
+Returning `false` drops that candidate without reserving its canonical identity, so an authorized user or package alias can survive instead. Returning `true` only retains the native candidate and its enabled state; it cannot enable a disabled skill, discover an excluded resource, bypass project trust, or change package identity/filter decisions. The callback is never invoked for package resources, user resources, extensions, prompts or themes. A thrown exception rejects resolution; omitting the callback preserves existing behavior. Use a synchronous callback, not a promise.
+
+This is a package-manager admission seam, not a loader-wide option or a filesystem sandbox. Discovery may already have inspected a rejected path or followed its symlinks. Hosts own their path policy and must not use this as traversal or TOCTOU protection. The option requires an SDK runtime that implements it; older runtimes do not become safe by receiving an unknown option. Passing `"skip"` above preserves native missing-source inspection without installation.
+
+<a id="testing"></a>
+
+## Testing extensions in-process
+
+`@earendil-works/pi-coding-agent/testing` runs a real `AgentSession` in the test process. `createHarness()` builds the session, extension runner, in-memory settings and auth, and a model registry around a scripted faux provider. Extension factories load through the real loader, so hooks, tools, commands, settlement, compaction and resume behave as they do in Pi, without a Pi process, a terminal, credentials, or network.
+
+```typescript
+import { createHarness, fauxAssistantMessage, fauxToolCall, getToolResult } from "@earendil-works/pi-coding-agent/testing";
+import myExtension from "../src/index.ts";
+
+const harness = await createHarness({ extensionFactories: [myExtension] });
+try {
+  await harness.session.bindExtensions({ mode: "print" });
+  harness.setResponses([
+    fauxAssistantMessage([fauxToolCall("my_tool", { path: "a.txt" })], { stopReason: "toolUse" }),
+    fauxAssistantMessage("done"),
+  ]);
+  await harness.session.prompt("use my_tool");
+  console.log(getToolResult(harness, "my_tool").content);
+} finally {
+  harness.cleanup();
+}
+```
+
+- Creating a harness loads extensions but does not start them. Call `session.bindExtensions()` with the mode under test (`print`, `json`, `rpc`, or `tui`) and a UI context from `createTestUiContext()` when handlers need one; `session_start` runs then.
+- `setResponses()`/`appendResponses()` script the faux provider with assistant messages (text, thinking, tool calls, error stop reasons, usage) or functions of the request context. `harness.events` records every session event, and `eventsOfType()` filters them.
+- Pass `extensionFactories` with several factories to test how extensions interact, `sessionManager` (for example `SessionManager.open(file)`) to test a resume, and `cwd` to run in a fixture directory. `cleanup()` disposes the session and removes `harness.tempDir`, never a caller-owned `cwd`.
+- Import the faux builders from this entry rather than a separate `@earendil-works/pi-ai` copy, so responses are scripted against the instance the harness registered with.
+- `createHarness()` bypasses the TUI. Use `createInteractiveHarness()` below for real interactive rendering. CLI argument parsing, package installation/discovery, project trust, and process exit still require boundary tests.
+
+### Testing interactive extensions
+
+`@earendil-works/pi-coding-agent/testing/interactive` is a separate entry because it needs `@xterm/headless@5.5.0`, the optional peer of `@earendil-works/pi-tui`: install it as a dev dependency. `/testing` never loads it. The entry mounts the real `InteractiveMode`, extension UI context, editor, widgets, footer, overlays and transcript on an `AgentSessionRuntime`:
+
+```typescript
+import { fauxAssistantMessage } from "@earendil-works/pi-coding-agent/testing";
+import { createInteractiveHarness } from "@earendil-works/pi-coding-agent/testing/interactive";
+
+const host = await createInteractiveHarness({
+  extensionFactories: [myExtension],
+  columns: 120,
+  rows: 40,
+  tuiMode: "fullscreen", // or "regular"
+  settings: { hideThinkingBlock: true },
+});
+try {
+  host.harness.setResponses([fauxAssistantMessage("hello")]);
+  await host.harness.session.prompt("paint a response");
+  await host.settle();
+  console.log(host.viewport());
+  host.input("/reload");
+  host.input("\r");
+  await host.settle();
+  host.resize(80, 24);
+  await host.settle();
+} finally {
+  await host.dispose();
+}
+```
+
+- Options extend `HarnessOptions`, adding `columns`, `rows`, `tuiMode`, an optional caller-owned `terminal: VirtualTerminal`, and a static `gitBranch` (default `null`). Without an injected terminal, the host owns/disposes its emulator.
+- `input(data)` injects raw input, including SGR mouse sequences. `resize(columns, rows)` takes the real resize path. `viewport()` returns visible rows with trailing spaces trimmed; `terminal.getStyledLine(row)` exposes bold and foreground attributes. See [pi-tui testing](../../tui/README.md#testing-in-process).
+- `settle(): Promise<void>` awaits editor handlers submitted before the call, including asynchronous built-in commands such as `/new` and `/reload`, then flushes requested frames and fences xterm writes. It does not advance time or await ordinary agent turns and extension commands dispatched through `onInput`, so their held tools and custom overlays remain inspectable. Built-in commands that await user interaction must be completed before awaiting `settle()`. Await `session.prompt()` (or an explicit tool/provider barrier) for turn completion. Inject your extension's clock, advance its callbacks, then call `settle()`; do not replace the emulator's global timers.
+- `/reload` retains the session and re-runs factory inputs once through resource-loader reload. `/new` replaces `host.harness`; read it again after settling. The new session uses the same scripted transport and extension factories. The default resource loader restores the faux API registration after reload resets the compat registry, without replacing the agent's default `streamSimple` or bypassing required auth. A supplied `resourceLoader` owns its own reload behavior. `fauxProvider` optionally shares a caller-owned registration across plain harnesses too; their `cleanup()` does not unregister it. The harness extends that registration's `unregister()` method so the owner also removes any restored API registration.
+- Startup uses `init()`, not the process-level `run()` loop: no catalog refresh, version/package checks or tmux checks. Managed-tool setup is injected as a no-op (no fd/rg discovery/download), keybindings are in-memory, and footer git data is static (no discovery/watcher). The built-in dark theme avoids custom-theme discovery/watchers; the virtual terminal completes DA1 queries in a microtask without a timeout wait. ANSI styling is enabled and the prior Chalk level/keybindings are restored on disposal.
+- Interactive theme/keybinding state is process-global, as in the real app. Keep interactive tests serial within one process; dispose each host before creating the next. Tests run on Node/Vitest and Bun without runner-specific fake timers.
+
+The installed-package gate renders an interactive frame from packed bytes. `npm run check:package-install -- --sdk-only` skips its CLI version checks for environments where launching Pi is forbidden; the default keeps those checks.
 
 ## Examples
 

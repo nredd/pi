@@ -2232,3 +2232,94 @@ describe("runToolCall", () => {
 		expect(seen).toEqual([undefined, { value: "replaced" }, { value: "both" }, { value: "original" }]);
 	});
 });
+
+// Refs nredd/pi-harness#581: a request-only gate must compose with the persistent one and never leak into later turns.
+describe("per-request provider gate", () => {
+	/** Runs two requests; only the first one's `prepareRequest` supplies a request gate. */
+	async function runTwoRequests(requestGate: () => Promise<() => void>, trace: string[]) {
+		let prepared = 0;
+		let followedUp = false;
+		const errors: (string | undefined)[] = [];
+		const config: AgentLoopConfig = {
+			model: createModel(),
+			convertToLlm: identityConverter,
+			beforeProviderRequest: async () => {
+				trace.push("persistent");
+				return () => trace.push("persistent recheck");
+			},
+			prepareRequest: () => {
+				prepared++;
+				return prepared === 1 ? { beforeProviderRequest: requestGate } : undefined;
+			},
+			getFollowUpMessages: async () => {
+				if (followedUp) return [];
+				followedUp = true;
+				return [createUserMessage("again")];
+			},
+		};
+		await runAgentLoop(
+			[createUserMessage("prompt")],
+			{ messages: [], tools: [] },
+			config,
+			(event) => {
+				if (event.type === "message_end" && event.message.role === "assistant")
+					errors.push(event.message.errorMessage);
+			},
+			undefined,
+			(_model, _context, options) => {
+				const response = createAssistantMessageEventStream();
+				void (async () => {
+					trace.push("dispatch request");
+					try {
+						const gate = (options as { beforeProviderRequest?: () => Promise<() => void> } | undefined)
+							?.beforeProviderRequest;
+						const recheck = await gate?.();
+						recheck?.();
+						response.push({
+							type: "done",
+							reason: "stop",
+							message: createAssistantMessage([{ type: "text", text: "done" }]),
+						});
+					} catch (error) {
+						response.push({
+							type: "error",
+							reason: "error",
+							error: { ...createAssistantMessage([], "error"), errorMessage: String(error) },
+						});
+					}
+				})();
+				return response;
+			},
+		);
+		return errors;
+	}
+
+	it("runs after the persistent gate, rechecks both, and is not carried into the next request", async () => {
+		const trace: string[] = [];
+		const errors = await runTwoRequests(async () => {
+			trace.push("request");
+			return () => trace.push("request recheck");
+		}, trace);
+		expect(errors).toEqual([undefined, undefined]);
+		expect(trace).toEqual([
+			"dispatch request",
+			"persistent",
+			"request",
+			"persistent recheck",
+			"request recheck",
+			"dispatch request",
+			"persistent",
+			"persistent recheck",
+		]);
+	});
+
+	it("ends the request with an error when the request gate rejects", async () => {
+		const trace: string[] = [];
+		const errors = await runTwoRequests(async () => {
+			throw new Error("requester is stale");
+		}, trace);
+		expect(errors).toHaveLength(1);
+		expect(errors[0]).toContain("requester is stale");
+		expect(trace).toEqual(["dispatch request", "persistent"]);
+	});
+});

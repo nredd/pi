@@ -1,8 +1,9 @@
 import type { Component } from "@earendil-works/pi-tui";
-import { Box, Container, Spacer, Text } from "@earendil-works/pi-tui";
+import { Box, Container, Text } from "@earendil-works/pi-tui";
 import type { EntryRenderer } from "../../../core/extensions/types.ts";
 import type { CustomEntry } from "../../../core/session-manager.ts";
 import { theme } from "../theme/theme.ts";
+import { entryRule } from "./entry-rule.ts";
 import { keyHint, keyText } from "./keybinding-hints.ts";
 
 /**
@@ -64,7 +65,7 @@ export class CustomEntryComponent extends Container {
 		}
 
 		this.customComponent = component;
-		this.addChild(new Spacer(1));
+		this.addChild(entryRule());
 		this.addChild(component);
 	}
 }

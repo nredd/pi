@@ -5,6 +5,7 @@ import {
 	type ApiStreamOptions,
 	type AssistantImages,
 	type AssistantMessage,
+	type AssistantMessageEvent,
 	type AssistantMessageEventStream,
 	type AuthCheck,
 	type AuthInteraction,
@@ -71,28 +72,47 @@ import { getAgentDir } from "../config.ts";
 import { operationSignal, raceWithAbortSignal } from "../utils/abort.ts";
 import { AuthStorage as DefaultAuthStorage } from "./auth-storage.ts";
 import { ModelConfig } from "./model-config.ts";
+import { ModelRegistry } from "./model-registry.ts";
 import { FileModelsStore, InMemoryCodingAgentModelsStore } from "./models-store.ts";
 import {
 	type AuthStatus,
 	type CompatibilityRequestConfig,
 	composeModelProvider,
 	configuredRequestAuthStatus,
+	hasConfiguredCommandApiKey,
+	invalidateConfiguredApiKey,
 	type ProviderConfigInput,
 	resolveCompatibilityRequestConfig,
 	resolveConfiguredModelHeaders,
 	validateExtensionProvider,
 } from "./provider-composer.ts";
 import { withPersonalizedCatalog, withRemoteCatalog } from "./remote-catalog-provider.ts";
+import { clearCommandSecretCache } from "./resolve-config-value.ts";
 import { RuntimeCredentials } from "./runtime-credentials.ts";
 import {
 	createVirtualModel,
 	findLatestResponse,
 	isVirtualModel,
 	type ModelRoute,
+	type ModelRouteContext,
 	type ModelRouteReason,
 	type VirtualModelDefinition,
 	withVirtualModels,
 } from "./virtual-models.ts";
+
+/**
+ * A provider rejecting the request's credentials: HTTP 401/403 from `onResponse`, or, when an
+ * SDK adapter throws before a response, the status it leads its message with or names, or a
+ * provider's auth error code (Anthropic `authentication_error` / `permission_error`, OpenAI
+ * `invalid_api_key`). Bare words like "unauthorized" are not enough: proxies and models say them.
+ */
+const AUTH_REJECTION_RE =
+	/^\s*(?:401|403)\b|\bstatus(?: code)?:?\s*(?:401|403)\b|\b(?:authentication_error|permission_error|invalid_api_key)\b/;
+
+function isAuthRejection(event: AssistantMessageEvent, status: number | undefined): boolean {
+	if (event.type !== "error" || event.reason !== "error") return false;
+	return status === 401 || status === 403 || AUTH_REJECTION_RE.test(event.error.errorMessage ?? "");
+}
 
 interface RegisteredVirtualModel {
 	model: Model<Api>;
@@ -130,6 +150,29 @@ export interface ModelRuntimeAuthOverrides extends AuthOperationOptions {
 	env?: Record<string, string>;
 	/** Require this much remaining OAuth-token validity; defaults to five minutes. */
 	minOAuthValidityMs?: number;
+}
+
+/** A session-local check made after request preparation, immediately before provider dispatch. */
+export interface BeforeProviderRequestOptions {
+	/** Resolves to a synchronous final check that runs immediately before provider dispatch. */
+	beforeProviderRequest?: () => Promise<() => void>;
+	/** Session-owned routing context, evaluated when routing starts, not at registration. */
+	routeContext?: () => ModelRouteContext;
+}
+
+/** Compose the existing provider gate with the captured requester's runner generation. */
+export function withRequestGeneration(
+	beforeProviderRequest: BeforeProviderRequestOptions["beforeProviderRequest"],
+	session: ModelRouteContext["session"],
+): NonNullable<BeforeProviderRequestOptions["beforeProviderRequest"]> {
+	return async () => {
+		const recheck = await beforeProviderRequest?.();
+		void session?.cwd;
+		return () => {
+			recheck?.();
+			void session?.cwd;
+		};
+	};
 }
 
 export type CredentialSynchronizationOperation = "login" | "logout" | "setRuntimeApiKey" | "removeRuntimeApiKey";
@@ -196,7 +239,6 @@ export class ModelRuntime implements Models {
 	private readonly providerAvailabilitySeq = new Map<string, number>();
 	private availabilityError: string | undefined;
 	private readonly credentialOperations = new Map<string, Promise<unknown>>();
-
 	private constructor(
 		credentials: RuntimeCredentials,
 		config: ModelConfig,
@@ -439,6 +481,69 @@ export class ModelRuntime implements Models {
 		}
 	}
 
+	/** A session-owned view that gates only its provider requests; raw runtime users remain ungated. */
+	withBeforeProviderRequest(
+		beforeProviderRequest: () => Promise<() => void>,
+		routeContext?: () => ModelRouteContext,
+	): Models {
+		const withGate = <T extends object | undefined>(options: T): T & BeforeProviderRequestOptions => {
+			// Captured once per call, before auth/transforms can await a reload, so the call owns
+			// its original runner until dispatch. A reload in progress holds the gate until its
+			// new runner exists, so the capture waits for that instead of taking the invalidated one.
+			// The wait ignores gate failures: the dispatch gate reports those itself.
+			let captured: ModelRouteContext | undefined;
+			const settled = beforeProviderRequest()
+				.then(
+					() => undefined,
+					() => undefined,
+				)
+				.then(() => {
+					try {
+						captured = routeContext?.();
+						return { context: captured };
+					} catch (error) {
+						return { error };
+					}
+				});
+			return {
+				...options,
+				beforeProviderRequest: async () => {
+					const outcome = await settled;
+					if ("error" in outcome) throw outcome.error;
+					const recheck = await beforeProviderRequest();
+					return await withRequestGeneration(async () => recheck, outcome.context?.session)();
+				},
+				routeContext: routeContext ? () => captured ?? routeContext() : undefined,
+			};
+		};
+		return {
+			getProviders: () => this.getProviders(),
+			getProvider: (id) => this.getProvider(id),
+			getModels: (provider) => this.getModels(provider),
+			getModel: (provider, id) => this.getModel(provider, id),
+			getModelsOfType: (type, provider) => this.getModelsOfType(type, provider),
+			getModelOfType: (type, provider, id) => this.getModelOfType(type, provider, id),
+			getAllModels: (provider) => this.getAllModels(provider),
+			refresh: (options) => this.refresh(options),
+			checkAuth: (provider, options) => this.checkAuth(provider, options),
+			getAvailable: (provider, options) => this.getAvailable(provider, options),
+			getAvailableOfType: (type, provider, options) => this.getAvailableOfType(type, provider, options),
+			getAllAvailable: (provider, options) => this.getAllAvailable(provider, options),
+			getAuth: this.getAuth.bind(this),
+			login: (provider, type, interaction, options) => this.login(provider, type, interaction, options),
+			logout: (provider, options) => this.logout(provider, options),
+			stream: (model, context, options) => this.stream(model, context, withGate(options)),
+			complete: (model, context, options) => this.complete(model, context, withGate(options)),
+			streamSimple: (model, context, options) => this.streamSimple(model, context, withGate(options)),
+			completeSimple: (model, context, options) => this.completeSimple(model, context, withGate(options)),
+			streamDeferred: (model, handle, options) => this.streamDeferred(model, handle, withGate(options)),
+			fetchDeferred: (model, handle, options) => this.fetchDeferred(model, handle, withGate(options)),
+			cancelDeferred: (model, handle, options) => this.cancelDeferred(model, handle, withGate(options)),
+			generateImages: (model, context, options) => this.generateImages(model, context, withGate(options)),
+			classify: (model, context, options) => this.classify(model, context, withGate(options)),
+		} satisfies Models;
+	}
+
 	getProviders(): readonly Provider[] {
 		return this.models.getProviders();
 	}
@@ -674,6 +779,7 @@ export class ModelRuntime implements Models {
 		provider: Provider;
 		model: TModel;
 		options: Omit<TOptions, "transformHeaders"> & ProviderRequestOptions<TModel>;
+		authSource: string | undefined;
 	}> {
 		const provider = this.models.getProvider(model.provider);
 		if (!provider) throw new ModelsError("provider", `Unknown provider: ${model.provider}`);
@@ -684,7 +790,12 @@ export class ModelRuntime implements Models {
 		});
 		if (!resolution) throw new ModelsError("auth", `Provider is not configured: ${model.provider}`);
 
-		const { transformHeaders, ...rawProviderOptions } = options ?? {};
+		const {
+			transformHeaders,
+			beforeProviderRequest: _beforeProviderRequest,
+			routeContext: _routeContext,
+			...rawProviderOptions
+		} = (options ?? {}) as TOptions & BeforeProviderRequestOptions;
 		const providerOptions = rawProviderOptions as Omit<TOptions, "transformHeaders"> & ProviderRequestOptions<TModel>;
 		const requestModel: TModel = resolution.auth.baseUrl ? { ...model, baseUrl: resolution.auth.baseUrl } : model;
 		const sessionId =
@@ -709,24 +820,95 @@ export class ModelRuntime implements Models {
 				headers,
 				env,
 			} as Omit<TOptions, "transformHeaders"> & ProviderRequestOptions<TModel>,
+			authSource: providerOptions.apiKey === undefined ? resolution.source : "request option",
 		};
+	}
+
+	/**
+	 * Prepare and dispatch one request. When the provider rejects the credentials (401/403),
+	 * a cached `!command` API key is dropped so no later request reuses it. If this request used
+	 * that configured key, it is resolved fresh and the request is sent once more; a second
+	 * rejection is returned as is, so a persistently rejected key never loops. Events before
+	 * the rejection (at most `start`) are held back so a retried attempt reads as one response.
+	 */
+	private async dispatch<
+		TModel extends Model<Api>,
+		TOptions extends ProviderRequestOptions<TModel> & ModelsRequestTransforms & BeforeProviderRequestOptions,
+	>(
+		model: TModel,
+		options: TOptions | undefined,
+		send: (provider: Provider, model: TModel, options: ProviderRequestOptions<TModel>) => AssistantMessageEventStream,
+	): Promise<AsyncIterable<AssistantMessageEvent> & { result(): Promise<AssistantMessage> }> {
+		const attempt = async () => {
+			let status: number | undefined;
+			const onResponse: ProviderRequestOptions<TModel>["onResponse"] = async (response, responseModel) => {
+				status = response.status;
+				await options?.onResponse?.(response, responseModel);
+			};
+			const prepared = await this.prepareRequest(model, { ...options, onResponse } as TOptions);
+			const recheck = await options?.beforeProviderRequest?.();
+			// A request cancelled while it was being prepared (a fatal startup aborts in-flight
+			// work) must not dispatch once its transforms resume, recovery or not.
+			options?.signal?.throwIfAborted();
+			recheck?.();
+			const events = send(prepared.provider, prepared.model, prepared.options);
+			return { events, authSource: prepared.authSource, apiKey: prepared.options.apiKey, status: () => status };
+		};
+		const first = await attempt();
+		// Only a rejected configured `!command` key is worth re-resolving: a caller's, stored or
+		// inherited key would come back unchanged, and must not cost the command key its cache.
+		const providerConfig = this.config.getProvider(model.provider);
+		const extensionConfig = this.extensionProviders.get(model.provider);
+		const retryable =
+			first.authSource === "configured API key" && hasConfiguredCommandApiKey(providerConfig, extensionConfig);
+		const retryAfterRejection = (event: AssistantMessageEvent) =>
+			retryable &&
+			isAuthRejection(event, first.status()) &&
+			invalidateConfiguredApiKey(model.provider, providerConfig, extensionConfig, first.apiKey);
+		// The stream whose events were forwarded; its result is the request's result.
+		let source = first.events;
+		const events = (async function* () {
+			// Only a request that can be retried holds `start` back until the first other event, so a
+			// retry before any output leaves no trace. Every other request forwards `start` at once:
+			// consumers (activity, stall detection) must not wait for the first token. Once output
+			// has been forwarded the request is never retried.
+			const held: AssistantMessageEvent[] = [];
+			let forwarded = false;
+			for await (const event of first.events) {
+				if (retryable && !forwarded && event.type === "start") {
+					held.push(event);
+					continue;
+				}
+				if (!forwarded && retryAfterRejection(event)) {
+					source = (await attempt()).events;
+					yield* source;
+					return;
+				}
+				forwarded = true;
+				yield* held.splice(0);
+				yield event;
+			}
+			yield* held;
+		})();
+		return Object.assign(events, { result: () => source.result() });
 	}
 
 	stream<TApi extends Api>(
 		model: Model<TApi>,
 		context: Context,
-		options?: ModelsApiStreamOptions<TApi>,
+		options?: ModelsApiStreamOptions<TApi> & BeforeProviderRequestOptions,
 	): AssistantMessageEventStream {
 		const transcript = normalizeContext(context);
 		return lazyStream(
 			model,
 			async () => {
 				assertChatModel(model);
-				const prepared = await this.prepareRequest(
+				return this.dispatch(
 					model,
-					options as (StreamOptions & ModelsRequestTransforms) | undefined,
+					options as (StreamOptions & ModelsRequestTransforms & BeforeProviderRequestOptions) | undefined,
+					(provider, requestModel, requestOptions) =>
+						provider.stream(requestModel, transcript, requestOptions as ApiStreamOptions<TApi>),
 				);
-				return prepared.provider.stream(prepared.model, transcript, prepared.options as ApiStreamOptions<TApi>);
 			},
 			undefined,
 			options?.signal,
@@ -736,12 +918,16 @@ export class ModelRuntime implements Models {
 	complete<TApi extends Api>(
 		model: Model<TApi>,
 		context: Context,
-		options?: ModelsApiStreamOptions<TApi>,
+		options?: ModelsApiStreamOptions<TApi> & BeforeProviderRequestOptions,
 	): Promise<AssistantMessage> {
 		return this.stream(model, context, options).result();
 	}
 
-	streamSimple(model: Model<Api>, context: Context, options?: ModelsSimpleStreamOptions): AssistantMessageEventStream {
+	streamSimple(
+		model: Model<Api>,
+		context: Context,
+		options?: ModelsSimpleStreamOptions & BeforeProviderRequestOptions,
+	): AssistantMessageEventStream {
 		const transcript = normalizeContext(context);
 		if (isVirtualModel(model)) {
 			// Requests outside the agent loop are routed here. Callers sized them before routing, so
@@ -749,10 +935,14 @@ export class ModelRuntime implements Models {
 			return lazyStream(
 				model,
 				async () => {
+					// Routing reads the route context, which must not predate a reload in progress.
+					// A refusal is left to the dispatch gate, after routing as before.
+					await options?.beforeProviderRequest?.().catch(() => undefined);
 					const route = await this.resolveModel(model, transcript.messages, {
 						reason: "direct",
 						thinkingLevel: options?.reasoning ?? "off",
 						signal: options?.signal,
+						routeContext: options?.routeContext,
 					});
 					const { maxTokens: limit } = route.model;
 					const maxTokens =
@@ -772,22 +962,27 @@ export class ModelRuntime implements Models {
 			model,
 			async () => {
 				assertChatModel(model);
-				const prepared = await this.prepareRequest(model, options);
-				return prepared.provider.streamSimple(prepared.model, transcript, prepared.options as SimpleStreamOptions);
+				return this.dispatch(model, options, (provider, requestModel, requestOptions) =>
+					provider.streamSimple(requestModel, transcript, requestOptions as SimpleStreamOptions),
+				);
 			},
 			undefined,
 			options?.signal,
 		);
 	}
 
-	completeSimple(model: Model<Api>, context: Context, options?: ModelsSimpleStreamOptions): Promise<AssistantMessage> {
+	completeSimple(
+		model: Model<Api>,
+		context: Context,
+		options?: ModelsSimpleStreamOptions & BeforeProviderRequestOptions,
+	): Promise<AssistantMessage> {
 		return this.streamSimple(model, context, options).result();
 	}
 
 	streamDeferred(
 		model: Model<Api>,
 		handle: DeferredHandle,
-		options?: ModelsDeferredFetchOptions,
+		options?: ModelsDeferredFetchOptions & BeforeProviderRequestOptions,
 	): AssistantMessageEventStream {
 		return lazyStream(
 			model,
@@ -797,6 +992,11 @@ export class ModelRuntime implements Models {
 				if (!prepared.provider.fetchDeferred) {
 					throw new ModelsError("provider", `Provider ${model.provider} does not support deferred responses`);
 				}
+				const recheck = await options?.beforeProviderRequest?.();
+				// A request cancelled while it was being prepared (a fatal startup aborts in-flight
+				// work) must not dispatch once its transforms resume, recovery or not.
+				options?.signal?.throwIfAborted();
+				recheck?.();
 				return prepared.provider.fetchDeferred(prepared.model, handle, prepared.options as DeferredFetchOptions);
 			},
 			undefined,
@@ -807,7 +1007,7 @@ export class ModelRuntime implements Models {
 	async fetchDeferred(
 		model: Model<Api>,
 		handle: DeferredHandle,
-		options?: ModelsDeferredFetchOptions,
+		options?: ModelsDeferredFetchOptions & BeforeProviderRequestOptions,
 	): Promise<AssistantMessage> {
 		return this.streamDeferred(model, handle, options).result();
 	}
@@ -815,20 +1015,23 @@ export class ModelRuntime implements Models {
 	async cancelDeferred(
 		model: Model<Api>,
 		handle: DeferredHandle,
-		options?: ModelsDeferredCancelOptions,
+		options?: ModelsDeferredCancelOptions & BeforeProviderRequestOptions,
 	): Promise<void> {
 		assertChatModel(model);
 		const prepared = await this.prepareRequest(model, options);
 		if (!prepared.provider.cancelDeferred) {
 			throw new ModelsError("provider", `Provider ${model.provider} does not support deferred responses`);
 		}
-		await prepared.provider.cancelDeferred(prepared.model, handle, prepared.options as DeferredCancelOptions);
+		const recheck = await options?.beforeProviderRequest?.();
+		options?.signal?.throwIfAborted();
+		recheck?.();
+		return prepared.provider.cancelDeferred(prepared.model, handle, prepared.options as DeferredCancelOptions);
 	}
 
 	async generateImages(
 		model: ImageModel<ImageApi>,
 		context: ImagesContext,
-		options?: ModelsImagesOptions,
+		options?: ModelsImagesOptions & BeforeProviderRequestOptions,
 	): Promise<AssistantImages> {
 		try {
 			assertImageModel(model);
@@ -836,6 +1039,11 @@ export class ModelRuntime implements Models {
 			if (!prepared.provider.generateImages) {
 				throw new ModelsError("provider", `Provider ${model.provider} does not support image generation`);
 			}
+			const recheck = await options?.beforeProviderRequest?.();
+			// A request cancelled while it was being prepared (a fatal startup aborts in-flight
+			// work) must not dispatch once its transforms resume, recovery or not.
+			options?.signal?.throwIfAborted();
+			recheck?.();
 			return await prepared.provider.generateImages(prepared.model, context, prepared.options as ImagesOptions);
 		} catch (error) {
 			return imageErrorResult(model, error, options?.signal?.aborted);
@@ -845,7 +1053,7 @@ export class ModelRuntime implements Models {
 	async classify(
 		model: ClassifierModel<ClassifierApi>,
 		context: ClassifierContext,
-		options?: ModelsClassifierOptions,
+		options?: ModelsClassifierOptions & BeforeProviderRequestOptions,
 	): Promise<ClassifierResult> {
 		try {
 			assertClassifierModel(model);
@@ -854,6 +1062,11 @@ export class ModelRuntime implements Models {
 			if (!prepared.provider.classify) {
 				throw new ModelsError("provider", `Provider ${model.provider} does not support classification`);
 			}
+			const recheck = await options?.beforeProviderRequest?.();
+			// A request cancelled while it was being prepared (a fatal startup aborts in-flight
+			// work) must not dispatch once its transforms resume, recovery or not.
+			options?.signal?.throwIfAborted();
+			recheck?.();
 			return await prepared.provider.classify(prepared.model, context, prepared.options as ClassifierOptions);
 		} catch (error) {
 			return classifierErrorResult(model, error, options?.signal?.aborted);
@@ -883,7 +1096,11 @@ export class ModelRuntime implements Models {
 	}
 
 	async refresh(options: ModelsRefreshOptions = {}): Promise<ModelsRefreshResult> {
+		const previous = this.config;
 		this.config = await ModelConfig.load(this.modelsPath);
+		// A changed models.json may change what a `!command` key resolves to: run it again. An
+		// unchanged one keeps the cache, which other runtimes in this process share.
+		if (!previous.sameProviders(this.config)) clearCommandSecretCache();
 		this.configureRadiusProviders();
 		if (options.providers) {
 			for (const providerId of new Set(options.providers)) this.recomposeProvider(providerId);
@@ -1006,7 +1223,10 @@ export class ModelRuntime implements Models {
 			throw new Error(`Virtual model ${providerId}/${id} conflicts with a physical model.`);
 		}
 		const models = this.virtualModels.get(providerId) ?? new Map<string, RegisteredVirtualModel>();
-		models.set(id, { model: createVirtualModel(definition), route: (request) => definition.route(request) });
+		models.set(id, {
+			model: createVirtualModel(definition),
+			route: (request, ctx) => definition.route(request, ctx),
+		});
 		this.virtualModels.set(providerId, models);
 		if (!this.recomposeProvider(providerId) && !this.snapshot.configuredProviders.has(providerId)) {
 			// A provider of only virtual models needs no credentials. Mark it configured now: session
@@ -1046,23 +1266,32 @@ export class ModelRuntime implements Models {
 			signal?: AbortSignal;
 			failed?: AssistantMessage;
 			state?: unknown;
+			routeContext?: () => ModelRouteContext;
 		},
 	): Promise<ModelRoute> {
 		const name = `Virtual model ${model.provider}/${model.id}`;
 		const virtual = this.virtualModels.get(model.provider)?.get(model.id);
 		if (!virtual) throw new Error(`${name} is not registered.`);
-		const { failed, ...request } = options;
+		const { failed, routeContext, ...request } = options;
 		const latest = findLatestResponse(messages);
 		const previousModel = latest && this.getPhysicalModel(latest.provider, latest.model);
 		// A failed routing attempt names the virtual model; there is no physical request to report.
 		const failedModel = failed && this.getPhysicalModel(failed.provider, failed.model);
-		const route = await virtual.route({
-			...request,
-			model,
-			previous: previousModel && { model: previousModel, thinkingLevel: latest?.thinkingLevel },
-			failed: failedModel && failed && { model: failedModel, thinkingLevel: failed.thinkingLevel, message: failed },
-			messages,
-		});
+		const ctx: ModelRouteContext = routeContext?.() ?? { modelRegistry: new ModelRegistry(this) };
+		void ctx.session?.cwd; // Refuse a request whose runner was already replaced.
+		const route = await virtual.route(
+			{
+				...request,
+				model,
+				previous: previousModel && { model: previousModel, thinkingLevel: latest?.thinkingLevel },
+				failed: failedModel &&
+					failed && { model: failedModel, thinkingLevel: failed.thinkingLevel, message: failed },
+				messages,
+			},
+			ctx,
+		);
+		// Routing can await nested models or other work while its requester reloads.
+		void ctx.session?.cwd;
 		const target = this.getPhysicalModel(route.model.provider, route.model.id);
 		const routed = `${name} routed to ${route.model.provider}/${route.model.id}`;
 		if (!target) throw new Error(`${routed}, which is not a physical model.`);

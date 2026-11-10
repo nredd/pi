@@ -24,7 +24,7 @@ import {
 } from "../src/terminal-image.ts";
 import { CURSOR_MARKER, renderFakeCursor, type TuiMouseEvent } from "../src/tui.ts";
 import { TuiAltScreen } from "../src/tui-alt-screen.ts";
-import { stripTerminalSequences, visibleWidth } from "../src/utils.ts";
+import { copyGutterEndMarker, stripTerminalSequences, visibleWidth } from "../src/utils.ts";
 import { defaultEditorTheme } from "./test-themes.ts";
 import { VirtualTerminal } from "./virtual-terminal.ts";
 
@@ -1511,6 +1511,116 @@ describe("TuiAltScreen", () => {
 		tui.stop();
 	});
 
+	it("copies soft-wrapped text without newlines and skips the gutter", async () => {
+		const terminal = new RecordingTerminal(14, 6);
+		const copied: string[] = [];
+		const tui = new TuiAltScreen(terminal, undefined, undefined, {
+			copySelection: async (text) => {
+				copied.push(text);
+				return true;
+			},
+		});
+		const gutter = {
+			render: (width: number) =>
+				new Text("alpha beta gamma delta\nsecond", 0, 0)
+					.render(width - 2)
+					.map((line) => `| ${copyGutterEndMarker()}${line}`),
+			invalidate: () => {},
+		};
+		tui.addChild(gutter);
+		tui.start();
+		await terminal.waitForRender();
+
+		terminal.sendInput("\x1b[<0;1;1M");
+		terminal.sendInput("\x1b[<32;8;3M");
+		terminal.sendInput("\x1b[<0;8;3m");
+		await terminal.waitForRender();
+
+		assert.deepStrictEqual(copied, ["alpha beta gamma delta\nsecond"]);
+		assert.ok(terminal.getViewport()[1]?.startsWith("| gamma delta"), "markers must not reach the terminal");
+		tui.stop();
+	});
+
+	it("copies a mid-word wrapped URL as one line", async () => {
+		const terminal = new RecordingTerminal(12, 4);
+		const copied: string[] = [];
+		const tui = new TuiAltScreen(terminal, undefined, undefined, {
+			copySelection: async (text) => {
+				copied.push(text);
+				return true;
+			},
+		});
+		tui.addChild(new Text("https://example.com/a/long/path", 0, 0));
+		tui.start();
+		await terminal.waitForRender();
+
+		terminal.sendInput("\x1b[<0;1;1M");
+		terminal.sendInput("\x1b[<32;12;3M");
+		terminal.sendInput("\x1b[<0;12;3m");
+		await terminal.waitForRender();
+
+		assert.deepStrictEqual(copied, ["https://example.com/a/long/path"]);
+		tui.stop();
+	});
+
+	it("does not invent spaces in wrapped CJK text or indented URL continuations", async () => {
+		const terminal = new RecordingTerminal(12, 6);
+		const copied: string[] = [];
+		const openedUrls: string[] = [];
+		const tui = new TuiAltScreen(terminal, undefined, undefined, {
+			copySelection: async (text) => {
+				copied.push(text);
+				return true;
+			},
+			openUrl: (url) => openedUrls.push(url),
+		});
+		tui.addChild({
+			render: (width: number) => [
+				...new Text("日本語のテキストです", 0, 0).render(width),
+				...new Text("https://example.com/a/long/path", 0, 0)
+					.render(width - 2)
+					.map((line, i) => (i ? `  ${line}` : line)),
+			],
+			invalidate: () => {},
+		});
+		tui.start();
+		await terminal.waitForRender();
+
+		terminal.sendInput("\x1b[<0;1;1M");
+		terminal.sendInput("\x1b[<32;12;2M");
+		terminal.sendInput("\x1b[<0;12;2m");
+		await terminal.waitForRender();
+		assert.deepStrictEqual(copied, ["日本語のテキストです"]);
+
+		terminal.sendInput("\x1b[<0;5;5M");
+		terminal.sendInput("\x1b[<0;5;5m");
+		await terminal.waitForRender();
+		assert.deepStrictEqual(openedUrls, ["https://example.com/a/long/path"]);
+		tui.stop();
+	});
+
+	it("opens a plain-text URL that wraps across rows from any row", async () => {
+		const terminal = new RecordingTerminal(12, 4);
+		const openedUrls: string[] = [];
+		const tui = new TuiAltScreen(terminal, undefined, undefined, {
+			openUrl: (url) => openedUrls.push(url),
+		});
+		tui.addChild(new Text("see https://example.com/a/long/path.", 0, 0));
+		tui.start();
+		await terminal.waitForRender();
+
+		terminal.sendInput("\x1b[<0;3;3M");
+		terminal.sendInput("\x1b[<0;3;3m");
+		await terminal.waitForRender();
+		assert.deepStrictEqual(openedUrls, ["https://example.com/a/long/path"]);
+
+		terminal.sendInput("\x1b[<0;2;1M");
+		terminal.sendInput("\x1b[<0;2;1m");
+		await terminal.waitForRender();
+		assert.deepStrictEqual(openedUrls, ["https://example.com/a/long/path"], "plain word is not a URL");
+		tui.stop();
+	});
+
 	it("leaves selections visible without copying when copyOnSelect is disabled", async () => {
 		const terminal = new RecordingTerminal(20, 4);
 		const copied: string[] = [];
@@ -1983,6 +2093,28 @@ describe("TuiAltScreen", () => {
 		await terminal.waitForRender();
 		assert.ok(tui.viewportTop < topBefore);
 		assert.deepStrictEqual(overlay.inputs, []);
+		tui.stop();
+	});
+
+	it("reports the pressed button on clicks whose release carries button 3", async () => {
+		const terminal = new RecordingTerminal(20, 2);
+		const tui = new TuiAltScreen(terminal);
+		const clickButtons: string[] = [];
+		tui.addChild(
+			new MouseRegion(new Text("clickable", 0, 0), (event) => {
+				if (event.type !== "click") return undefined;
+				clickButtons.push(event.button);
+				return { handled: true };
+			}),
+		);
+		tui.start();
+		await terminal.waitForRender();
+
+		// Some terminals encode every release as button 3; the click must keep the left press button.
+		terminal.sendInput("\x1b[<0;2;1M");
+		terminal.sendInput("\x1b[<3;2;1m");
+		await terminal.waitForRender();
+		assert.deepStrictEqual(clickButtons, ["left"]);
 		tui.stop();
 	});
 

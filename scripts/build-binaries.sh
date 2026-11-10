@@ -151,6 +151,8 @@ for platform in "${PLATFORMS[@]}"; do
     cp -r dist/core/export-html "$OUTPUT_DIR/$platform/"
     cp -r docs "$OUTPUT_DIR/$platform/"
     cp -r examples "$OUTPUT_DIR/$platform/"
+    # The npm package ships the generated JSON schemas (`files` in package.json); so does the binary.
+    cp -r schemas "$OUTPUT_DIR/$platform/"
 
     # Copy the selected architecture's native platform helpers next to the executable.
     native_platform="${platform/windows-/win32-}"

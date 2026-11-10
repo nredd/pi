@@ -1,16 +1,22 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import {
-	type Component,
-	Container,
-	Markdown,
-	type MarkdownTheme,
-	MouseRegion,
-	Spacer,
-	Text,
-} from "@earendil-works/pi-tui";
+import { type Component, Container, Markdown, type MarkdownTheme, Spacer, Text } from "@earendil-works/pi-tui";
 import type { MarkdownTransformer } from "../../../core/extensions/types.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
+import { DisclosureGutter } from "./disclosure-gutter.ts";
+import { entryRule } from "./entry-rule.ts";
 import { createMarkdownTransform } from "./markdown-transform.ts";
+import { firstSentence, firstTextLine, OneLineRow, renderedContentLines } from "./one-line.ts";
+import { RuledBlock } from "./ruled-block.ts";
+
+/**
+ * The collapsed thinking summary: the first sentence, or the whole first line when the sentence
+ * would cut through `**bold**` (e.g. `**Done.** more`).
+ */
+function thinkingSummary(text: string): string | undefined {
+	const sentence = firstSentence(text);
+	if (sentence === undefined) return undefined;
+	return (sentence.match(/\*\*/g)?.length ?? 0) % 2 === 0 ? sentence : firstTextLine(text);
+}
 
 const OSC133_ZONE_START = "\x1b]133;A\x07";
 const OSC133_ZONE_END = "\x1b]133;B\x07";
@@ -130,14 +136,14 @@ export class AssistantMessageComponent extends Container {
 			return markdown;
 		};
 
-		// Spacers are added lazily, right before the next visible content block. This puts a blank
-		// line before the first visible block and after each visible thinking run that is followed
+		// Entry rules are added lazily, right before the next visible content block. This puts a rule
+		// before the first visible block and after each visible thinking run that is followed
 		// by more visible content, while hidden thinking runs without a label contribute nothing.
-		let needsSpacer = true;
+		let needsRule = true;
 		const addVisibleChild = (child: Component) => {
-			if (needsSpacer) {
-				this.contentContainer.addChild(new Spacer(1));
-				needsSpacer = false;
+			if (needsRule) {
+				this.contentContainer.addChild(entryRule());
+				needsRule = false;
 			}
 			this.contentContainer.addChild(child);
 		};
@@ -147,23 +153,26 @@ export class AssistantMessageComponent extends Container {
 		for (let i = 0; i < message.content.length; i++) {
 			const content = message.content[i];
 			if (content.type === "text" && content.text.trim()) {
-				// Assistant text messages with no background - trim the text
+				// Assistant prose sits behind a left rule instead of a background; the rule takes the
+				// place of outputPad so it lines up with the tool rows' disclosure gutter.
 				// Set paddingY=0 to avoid extra spacing before tool executions
 				const text = content.text.trim();
 				addVisibleChild(
-					markdownBlock(
-						"text",
-						text,
-						() =>
-							new Markdown(text, this.outputPad, 0, this.markdownTheme, undefined, {
-								transform: createMarkdownTransform(
-									"assistant",
-									() => this.isStreaming,
-									this.markdownTransformers,
-									this.messageId,
-									this.timestamp,
-								),
-							}),
+					new RuledBlock(
+						markdownBlock(
+							"text",
+							text,
+							() =>
+								new Markdown(text, 0, 0, this.markdownTheme, undefined, {
+									transform: createMarkdownTransform(
+										"assistant",
+										() => this.isStreaming,
+										this.markdownTransformers,
+										this.messageId,
+										this.timestamp,
+									),
+								}),
+						),
 					),
 				);
 			} else if (content.type === "thinking") {
@@ -190,15 +199,34 @@ export class AssistantMessageComponent extends Container {
 				if (hidden && !this.hiddenThinkingLabel.trim()) {
 					continue;
 				}
-				const thinking = thinkingBlocks.join("\n\n");
+				const thinkingText = thinkingBlocks.join("\n\n");
+				const dim = (text: string) => theme.italic(theme.fg("thinkingText", text));
+				// Collapsed: `Thinking · <first sentence>`, one line like a tool row.
 				const thinkingComponent = hidden
-					? new Text(theme.italic(theme.fg("thinkingText", this.hiddenThinkingLabel)), this.outputPad, 0)
+					? new OneLineRow(
+							[
+								// `Thinking...` -> `Thinking`: the collapsed row's head, before ` · <summary>`.
+								() => dim(this.hiddenThinkingLabel.replace(/[.\u2026\s]+$/u, "") || this.hiddenThinkingLabel),
+								() => {
+									const summary = thinkingSummary(thinkingText);
+									if (summary === undefined) return undefined;
+									// Inline Markdown (bold headlines) through the same renderer as the expanded block.
+									const rendered = new Markdown(summary, 0, 0, this.markdownTheme, {
+										color: (text: string) => theme.fg("thinkingText", text),
+										italic: true,
+									});
+									return renderedContentLines(rendered, 1)[0] ?? dim(summary);
+								},
+							],
+							// A function of the captured `thinkingText` and label; `updateContent` rebuilds on change.
+							true,
+						)
 					: markdownBlock(
 							"thinking",
-							thinking,
+							thinkingText,
 							() =>
 								new Markdown(
-									thinking,
+									thinkingText,
 									this.outputPad,
 									0,
 									this.markdownTheme,
@@ -218,16 +246,18 @@ export class AssistantMessageComponent extends Container {
 								),
 						);
 				addVisibleChild(
-					new MouseRegion(thinkingComponent, (event) => {
-						if (event.type !== "click" || event.button !== "left") return undefined;
-						this.thinkingVisibilityOverrides.set(runIndex, !hidden);
-						if (this.lastMessage) this.updateContent(this.lastMessage);
-						return { handled: true };
-					}),
+					new DisclosureGutter(
+						thinkingComponent,
+						() => !hidden,
+						() => {
+							this.thinkingVisibilityOverrides.set(runIndex, !hidden);
+							if (this.lastMessage) this.updateContent(this.lastMessage);
+						},
+					),
 				);
-				// Add spacing only when another visible assistant content block follows.
-				// This avoids a superfluous blank line before separately-rendered tool execution blocks.
-				needsSpacer = true;
+				// Add a rule only when another visible assistant content block follows.
+				// This avoids a superfluous rule before separately-rendered tool execution blocks.
+				needsRule = true;
 			}
 		}
 

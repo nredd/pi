@@ -6,17 +6,20 @@
  * tool definition, so the tool's public shape is unchanged.
  */
 
-import { Container, Spacer, Text } from "@earendil-works/pi-tui";
+import { Container, Text } from "@earendil-works/pi-tui";
 import { keyHint } from "../../../modes/interactive/components/keybinding-hints.ts";
-import { VisualLinePreview } from "../../../modes/interactive/components/visual-truncate.ts";
 import { theme } from "../../../modes/interactive/theme/theme.ts";
 import type { ToolDefinition, ToolRenderResultOptions } from "../../extensions/types.ts";
 import type { BashToolDetails } from "../bash.ts";
 import { getTextOutput, invalidArgText, startToolTimer, str, toolTimerText } from "../render-utils.ts";
 import { DEFAULT_MAX_BYTES, formatSize } from "../truncate.ts";
 
-const BASH_PREVIEW_LINES = 5;
 export const BASH_UPDATE_THROTTLE_MS = 100;
+
+/** Native shell output with a cheap guarantee of detail beyond its collapsed summary. */
+export class ShellResultRenderComponent extends Container {
+	hasExpandableOutput = false;
+}
 function formatShellCall(args: { command?: string; timeout?: number } | undefined, prompt: string): string {
 	const command = str(args?.command);
 	const timeout = args?.timeout as number | undefined;
@@ -25,7 +28,7 @@ function formatShellCall(args: { command?: string; timeout?: number } | undefine
 	return theme.fg("toolTitle", theme.bold(`${prompt} ${commandDisplay}`)) + timeoutSuffix;
 }
 function rebuildBashResultRenderComponent(
-	component: Container,
+	component: ShellResultRenderComponent,
 	result: {
 		content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
 		details?: BashToolDetails;
@@ -46,26 +49,21 @@ function rebuildBashResultRenderComponent(
 		}
 	}
 
+	// Two output lines plus the call cannot fit in the two logical parts of a collapsed row.
+	// This avoids styling/rendering a large expanded body solely to decide its disclosure marker.
+	component.hasExpandableOutput = output.includes("\n");
 	if (output) {
-		const styledOutput = output
-			.split("\n")
-			.map((line) => theme.fg("toolOutput", line))
-			.join("\n");
-
 		if (options.expanded) {
+			const styledOutput = output
+				.split("\n")
+				.map((line) => theme.fg("toolOutput", line))
+				.join("\n");
 			component.addChild(new Text(`\n${styledOutput}`, 0, 0));
 		} else {
-			component.addChild(new Spacer(1));
-			component.addChild(
-				new VisualLinePreview({
-					text: styledOutput,
-					maxVisualLines: BASH_PREVIEW_LINES,
-					keep: "end",
-					formatHint: (hidden) =>
-						theme.fg("muted", `... (${hidden} earlier lines,`) +
-						` ${keyHint("app.tools.expand", "to expand")}${theme.fg("muted", ")")}`,
-				}),
-			);
+			const totalLines = output.split("\n").length;
+			const label = totalLines === 1 ? "1 line" : `${totalLines} lines`;
+			const hint = theme.fg("muted", `${label} output · `) + keyHint("app.tools.expand", "to expand");
+			component.addChild(new Text(`\n${hint}`, 0, 0));
 		}
 	}
 
@@ -100,7 +98,8 @@ export function createShellRenderers(prompt: string): Pick<ToolDefinition<any, a
 		},
 		renderResult(result, options, _theme, context) {
 			const timerText = toolTimerText(context, options.isPartial);
-			const component = (context.lastComponent as Container | undefined) ?? new Container();
+			const component =
+				(context.lastComponent as ShellResultRenderComponent | undefined) ?? new ShellResultRenderComponent();
 			rebuildBashResultRenderComponent(component, result as any, options, context.showImages, timerText);
 			component.invalidate();
 			return component;

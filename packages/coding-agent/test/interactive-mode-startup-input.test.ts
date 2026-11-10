@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
-import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
+import { InteractiveMode, type InteractiveModeOptions } from "../src/modes/interactive/interactive-mode.ts";
 
 type SubmitContext = {
-	defaultEditor: { onSubmit?: (text: string) => void };
+	options: InteractiveModeOptions;
+	defaultEditor: { onSubmit?: (text: string) => Promise<void> };
 	editor: {
 		addToHistory?: (text: string) => void;
 		setText: (text: string) => void;
@@ -38,6 +39,7 @@ const interactiveModePrototype = InteractiveMode.prototype as unknown as Interac
 
 function createSubmitContext(): SubmitContext {
 	return {
+		options: {},
 		defaultEditor: {},
 		editor: {
 			addToHistory: vi.fn(),
@@ -76,6 +78,17 @@ describe("InteractiveMode startup input", () => {
 		expect(context.pendingUserInputs).toEqual(["early prompt"]);
 		expect(context.flushPendingBashComponents).toHaveBeenCalledTimes(1);
 		expect(context.editor.addToHistory).toHaveBeenCalledWith("early prompt");
+	});
+
+	it("observes the editor-handler promise without changing normal submission", async () => {
+		const context = createSubmitContext();
+		context.options.onEditorSubmit = vi.fn();
+		interactiveModePrototype.setupEditorSubmitHandler.call(context);
+
+		const submission = context.defaultEditor.onSubmit?.("observed prompt");
+		expect(context.options.onEditorSubmit).toHaveBeenCalledWith(submission);
+		await submission;
+		expect(context.pendingUserInputs).toEqual(["observed prompt"]);
 	});
 
 	it("returns queued startup input before installing a new input callback", async () => {

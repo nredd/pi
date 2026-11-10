@@ -50,10 +50,13 @@ import {
 } from "./tui.ts";
 import {
 	extractAnsiCode,
+	getCopyRowInfo,
 	getGraphemeCellRange,
 	getOsc8LinkAtColumn,
 	getWordSegmenter,
+	setCopyMarkersEnabled,
 	sliceByColumn,
+	stripCopyMarkers,
 	stripTerminalSequences,
 	truncateToWidth,
 	visibleWidth,
@@ -91,6 +94,9 @@ interface CachedKittyImage {
 	transmissionBytes: number;
 	estimatedDecodedBytes: number;
 }
+
+const PLAIN_URL_PATTERN = /https?:\/\/[^\s<>"'`]+/g;
+const PLAIN_URL_TRAILING_PUNCTUATION = /[.,;:!?)\]}]+$/;
 
 interface SelectionPoint {
 	row: number;
@@ -204,6 +210,8 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 	readonly mode = "fullscreen" as const;
 	readonly [VIEWPORT_TUI] = true as const;
 	private previousScreen: string[] = [];
+	/** Unstripped layout rows (copy markers intact) for selection outside a ScrollView. */
+	private previousCopyLines: readonly string[] = [];
 	private lastDocument: string[] = [];
 	private previousScreenWidth = 0;
 	private previousScreenHeight = 0;
@@ -234,6 +242,8 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 	private mouseCapture?: TuiMouseDispatchTarget;
 	private mousePressTarget?: TuiMouseDispatchTarget;
 	private mousePressPoint?: { x: number; y: number };
+	/** SGR releases report button 3, so retain the press button for click dispatch. */
+	private mousePressButton?: number;
 	private mousePressMoved = false;
 	private lastComponentClick?: {
 		timestamp: number;
@@ -345,6 +355,8 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 	}
 
 	protected override beforeTerminalStart(): void {
+		// Selection and URL clicks need to know which rows are soft wraps and gutters; markers are stripped on output.
+		setCopyMarkersEnabled(true);
 		this.stopSelectionAutoScroll();
 		this.selectionPressActive = false;
 		this.stopScrollbarHover();
@@ -387,6 +399,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 	}
 
 	protected override beforeTerminalStop(_options: TuiStopOptions): void {
+		setCopyMarkersEnabled(false);
 		this.closeSearch();
 		this.stopSelectionAutoScroll();
 		this.selectionPressActive = false;
@@ -409,7 +422,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		} else {
 			const width = Math.max(1, this.terminal.columns);
 			const documentLines = this.resolveFakeCursors(this.render(width)).map((line) =>
-				line.replace(OSC133_ZONE_PREFIX, ""),
+				stripCopyMarkers(line.replace(OSC133_ZONE_PREFIX, "")),
 			);
 			this.lastDocument = this.applyLineResets(documentLines.map((line) => line.replaceAll(CURSOR_MARKER, ""))).map(
 				(line) => (isImageLine(line) || visibleWidth(line) <= width ? line : sliceByColumn(line, 0, width, true)),
@@ -495,6 +508,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 
 	protected override resetRenderState(): void {
 		this.previousScreen = [];
+		this.previousCopyLines = [];
 		this.previousScreenWidth = 0;
 		this.previousScreenHeight = 0;
 		this.currentLayout = undefined;
@@ -688,6 +702,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		this.mouseCapture = undefined;
 		this.mousePressTarget = undefined;
 		this.mousePressPoint = undefined;
+		this.mousePressButton = undefined;
 		this.mousePressMoved = false;
 	}
 
@@ -922,6 +937,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 					: "drag"
 				: "press";
 		const event = this.createMouseEvent(type, raw.button, raw.x, raw.y);
+		if (type === "press") this.mousePressButton = raw.button;
 
 		if (this.mouseCapture || this.mousePressTarget) {
 			const target = this.mouseCapture ?? this.mousePressTarget!;
@@ -934,7 +950,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 			if (targetResult) render = this.applyMouseDispatchResult(event, targetResult);
 			if (raw.release) {
 				if (!this.mousePressMoved && this.mousePressPoint?.x === raw.x && this.mousePressPoint.y === raw.y) {
-					const clickEvent = this.createMouseEvent("click", raw.button, raw.x, raw.y, {
+					const clickEvent = this.createMouseEvent("click", this.mousePressButton ?? raw.button, raw.x, raw.y, {
 						clickCount: this.getComponentClickCount(target, raw.x, raw.y),
 					});
 					const clickResult = this.dispatchMouseToTarget(clickEvent, target);
@@ -972,7 +988,8 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		}
 
 		if (this.handleRightClickPaste(raw)) return;
-		this.handleSelectionMouseEvent(raw);
+		this.handleSelectionMouseEvent(raw, this.mousePressButton ?? raw.button);
+		if (raw.release) this.mousePressButton = undefined;
 	}
 
 	private parseWheelEvent(data: string): WheelEvent | undefined {
@@ -1184,7 +1201,48 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 			const lines = getScrollViewBox(this.currentLayout, point.scrollView)?.scrollContentLines;
 			if (lines) return lines[point.row] ?? "";
 		}
-		return this.previousScreen[point.row] ?? "";
+		return this.previousCopyLines[point.row] ?? this.previousScreen[point.row] ?? "";
+	}
+
+	/**
+	 * Find a plain-text URL under a click, rejoining rows that were soft-wrapped. Rendered OSC 8 links are
+	 * handled separately; this covers URLs printed as text, which terminals cannot click while the
+	 * application owns the mouse.
+	 */
+	private getPlainUrlAt(point: SelectionPoint): string | undefined {
+		const rowAt = (row: number): string => this.getSelectionSourceLine({ ...point, row });
+		const rowCount =
+			point.scrollView && this.currentLayout
+				? (getScrollViewBox(this.currentLayout, point.scrollView)?.scrollContentLines?.length ?? 0)
+				: this.previousCopyLines.length;
+		let first = point.row;
+		while (first > 0 && getCopyRowInfo(rowAt(first)).join !== "none") first--;
+		let text = "";
+		let clickIndex = -1;
+		for (let row = first; row < rowCount; row++) {
+			const line = rowAt(row);
+			const info = getCopyRowInfo(line);
+			if (row > first) {
+				if (info.join === "none") break;
+				if (info.join === "space") text += " ";
+			}
+			const visible = (start: number, length: number): string =>
+				stripTerminalSequences(sliceByColumn(line, start, length, true));
+			if (row === point.row) {
+				const before = Math.max(0, point.col - info.gutterEnd);
+				clickIndex = text.length + visible(info.gutterEnd, before).length;
+			}
+			const rowText = visible(info.gutterEnd, Math.max(0, visibleWidth(line) - info.gutterEnd)).trimEnd();
+			const indent = row > first && info.join !== "none" ? rowText.length - rowText.trimStart().length : 0;
+			if (row === point.row) clickIndex = Math.max(text.length, clickIndex - indent);
+			text += rowText.slice(indent);
+		}
+		if (clickIndex < 0) return undefined;
+		for (const match of text.matchAll(PLAIN_URL_PATTERN)) {
+			const url = match[0].replace(PLAIN_URL_TRAILING_PUNCTUATION, "");
+			if (clickIndex >= match.index && clickIndex < match.index + url.length) return url;
+		}
+		return undefined;
 	}
 
 	private getWordSelection(point: SelectionPoint): SelectionRange | undefined {
@@ -1332,7 +1390,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		this.selectionDragPointer = undefined;
 	}
 
-	private handleSelectionMouseEvent(event: SgrMouseEvent): void {
+	private handleSelectionMouseEvent(event: SgrMouseEvent, pressButton: number): void {
 		const button = event.button & 3;
 		if (button !== 0 && !(event.release && button === 3)) return;
 		const anchorScrollView = this.selectionAnchor?.scrollView;
@@ -1362,7 +1420,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 				return;
 			}
 			if (isClick) {
-				const clickEvent = this.createMouseEvent("click", event.button, event.x, event.y, {
+				const clickEvent = this.createMouseEvent("click", pressButton, event.x, event.y, {
 					clickCount: this.lastClick?.count ?? 1,
 				});
 				const overlay = this.dispatchMouseToOverlay(clickEvent);
@@ -1405,10 +1463,10 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		this.selectionDragged = false;
 		this.pressedUrl = range
 			? undefined
-			: getOsc8LinkAtColumn(
+			: (getOsc8LinkAtColumn(
 					this.previousScreen[Math.max(0, Math.min(this.terminal.rows - 1, event.y))] ?? "",
 					Math.max(0, Math.min(this.terminal.columns - 1, event.x)),
-				);
+				) ?? this.getPlainUrlAt(anchor));
 		this.requestRender();
 	}
 
@@ -1453,24 +1511,30 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 	private getActiveSelectionText(): string | undefined {
 		const selection = this.getSelectionBounds();
 		if (!selection) return undefined;
-		let sourceLines: readonly string[] = this.previousScreen;
+		let sourceLines: readonly string[] = this.previousCopyLines;
 		if (selection.start.scrollView) {
 			if (!this.currentLayout) return undefined;
 			const box = getScrollViewBox(this.currentLayout, selection.start.scrollView);
 			if (!box?.scrollContentLines) return undefined;
 			sourceLines = box.scrollContentLines;
 		}
-		const lines: string[] = [];
+		// Rows are copied as the text they were rendered from: decorative gutters are skipped and rows
+		// that only exist because of soft wrapping are rejoined instead of split with a newline.
+		let text = "";
 		for (let row = selection.start.row; row <= selection.end.row; row++) {
 			const line = sourceLines[row] ?? "";
-			const columns = this.getSelectionColumns(line, row, selection);
-			lines.push(
-				stripTerminalSequences(
-					sliceByColumn(line, columns.start, Math.max(0, columns.end - columns.start), true),
-				).trimEnd(),
-			);
+			const info = getCopyRowInfo(line);
+			const columns = this.getSelectionColumns(line, row, selection, info.gutterEnd);
+			let rowText = stripTerminalSequences(
+				sliceByColumn(line, columns.start, Math.max(0, columns.end - columns.start), true),
+			).trimEnd();
+			if (row > selection.start.row) {
+				text += info.join === "none" ? "\n" : info.join === "space" ? " " : "";
+				// Continuation rows may carry list indentation; wrapped tokens never start with whitespace.
+				if (info.join !== "none") rowText = rowText.trimStart();
+			}
+			text += rowText;
 		}
-		const text = lines.join("\n");
 		return text.length === 0 ? undefined : text;
 	}
 
@@ -1700,10 +1764,12 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 			nextLayout = renderLayoutFrame(root, width, height, () => this.requestRender());
 		}
 		// Resolve fake cursors before highlighting and compositing, which only track SGR codes
-		let screen = this.resolveFakeCursors(nextLayout.lines.map((line) => line.replace(OSC133_ZONE_PREFIX, "")));
+		let screen = this.resolveFakeCursors(
+			nextLayout.lines.map((line) => stripCopyMarkers(line.replace(OSC133_ZONE_PREFIX, ""))),
+		);
 		screen = this.applySearchHighlights(screen, nextLayout);
 		screen = this.compositeScrollToEndIndicator(screen, nextLayout, width);
-		screen = this.compositeOverlays(screen, width, height);
+		screen = this.compositeOverlays(screen, width, height).map(stripCopyMarkers);
 		if (screen.length > height) screen = screen.slice(screen.length - height);
 		screen = this.applySelection(screen, nextLayout);
 		screen = this.compositeFlashes(screen, width, height);
@@ -1791,6 +1857,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		this.terminal.write(buffer);
 
 		this.previousScreen = screen;
+		this.previousCopyLines = nextLayout.lines;
 		this.previousScreenWidth = width;
 		this.previousScreenHeight = height;
 		this.currentLayout = nextLayout;

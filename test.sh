@@ -84,4 +84,8 @@ for name in CI GITHUB_ACTIONS; do
 done
 
 echo "Running tests without API keys in isolated home: $test_root/home"
-env -i "${test_env[@]}" npm test
+# Default to the whole suite; a command given as arguments runs in the same isolated environment.
+if [[ $# -eq 0 ]]; then
+	set -- npm test
+fi
+env -i "${test_env[@]}" "$@"

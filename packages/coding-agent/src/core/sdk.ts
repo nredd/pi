@@ -341,7 +341,6 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		const providerRetrySettings = settingsManager.getProviderRetrySettings();
 		const httpIdleTimeoutMs = settingsManager.getHttpIdleTimeoutMs();
 		const effectiveTimeoutMs = httpIdleTimeoutMs === 0 ? 2147483647 : httpIdleTimeoutMs;
-		const headerRunner = extensionRunnerRef.current;
 		return {
 			...options,
 			timeoutMs: options.timeoutMs ?? providerRetrySettings.timeoutMs ?? effectiveTimeoutMs,
@@ -350,10 +349,13 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			maxRetryDelayMs: options.maxRetryDelayMs ?? providerRetrySettings.maxRetryDelayMs,
 			// Replaces the agent loop's default identity; read per request so telemetry changes apply at once.
 			identity: getClientIdentity(settingsManager),
-			transformHeaders: async (headers) =>
-				headerRunner?.hasHandlers("before_provider_headers")
-					? headerRunner.emitBeforeProviderHeaders(headers)
-					: headers,
+			transformHeaders: async (headers) => {
+				// Resolved per call: warm requests outlive the runner that built these options.
+				const headerRunner = extensionRunnerRef.current;
+				return headerRunner?.hasHandlers("before_provider_headers")
+					? headerRunner.emitBeforeProviderHeaders(headers ?? {})
+					: (headers ?? {});
+			},
 		};
 	};
 	// Warm only requests for the selected model. Requests a virtual selection routed, or that an
@@ -417,7 +419,10 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			// shallow-copy the messages array or refresh the model object without changing
 			// the provider request, so top-level object identity is not a valid cache key.
 			if (options?.sessionId === sessionManager.getSessionId()) {
-				cacheWarmer.start({ model, context, options: requestOptions }, cacheContextIsCurrent(model));
+				// The turn's request gate is bound to the runner that prepared it, which reload()
+				// retires. Warming outlives reloads, so it keeps only the session's persistent gate.
+				const warmOptions = { ...requestOptions, beforeProviderRequest: agent.beforeProviderRequest };
+				cacheWarmer.start({ model, context, options: warmOptions }, cacheContextIsCurrent(model));
 			}
 			return modelRuntime.streamSimple(model, context, requestOptions);
 		},

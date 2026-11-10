@@ -14,6 +14,7 @@ import type {
 	ImageModel,
 	ImagesContext,
 	Model,
+	Models,
 	ModelsApiStreamOptions,
 	ModelsClassifierOptions,
 	ModelsImagesOptions,
@@ -47,9 +48,12 @@ export { clearApiKeyCache } from "./provider-composer.ts";
  */
 export class ModelRegistry {
 	private readonly runtime: ModelRuntime;
+	/** Session-owned model view that injects provider gates into every request method. */
+	private readonly models: Models;
 
-	constructor(runtime: ModelRuntime) {
+	constructor(runtime: ModelRuntime, models: Models = runtime) {
 		this.runtime = runtime;
+		this.models = models;
 	}
 
 	/** Reload models.json asynchronously. Await before making synchronous registry reads. */
@@ -131,12 +135,12 @@ export class ModelRegistry {
 		context: Context,
 		options?: ModelsApiStreamOptions<TApi>,
 	): AssistantMessageEventStream {
-		return this.runtime.stream(model, context, options);
+		return this.models.stream(model, context, options);
 	}
 
 	/** Stream with provider-neutral options and request-time authentication. */
 	streamSimple(model: Model<Api>, context: Context, options?: ModelsSimpleStreamOptions): AssistantMessageEventStream {
-		return this.runtime.streamSimple(model, context, options);
+		return this.models.streamSimple(model, context, options);
 	}
 
 	complete<TApi extends Api>(
@@ -144,7 +148,7 @@ export class ModelRegistry {
 		context: Context,
 		options?: ModelsApiStreamOptions<TApi>,
 	): Promise<AssistantMessage> {
-		return this.runtime.complete(model, context, options);
+		return this.models.complete(model, context, options);
 	}
 
 	/** Every known model of a type (chat, image, classifier), optionally for one provider. */
@@ -175,7 +179,7 @@ export class ModelRegistry {
 		context: ClassifierContext,
 		options?: ModelsClassifierOptions,
 	): Promise<ClassifierResult> {
-		return this.runtime.classify(model, context, options);
+		return this.models.classify(model, context, options);
 	}
 
 	/** Generate images with request-time authentication. Never rejects. */
@@ -184,7 +188,7 @@ export class ModelRegistry {
 		context: ImagesContext,
 		options?: ModelsImagesOptions,
 	): Promise<AssistantImages> {
-		return this.runtime.generateImages(model, context, options);
+		return this.models.generateImages(model, context, options);
 	}
 
 	getProviderDisplayName(provider: string): string {

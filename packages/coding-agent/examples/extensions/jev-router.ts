@@ -20,7 +20,7 @@
  */
 
 import type { Message } from "@earendil-works/pi-ai";
-import type { ExtensionAPI, ExtensionContext, ModelRoute, ModelRouteRequest } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ModelRoute, ModelRouteContext, ModelRouteRequest } from "@earendil-works/pi-coding-agent";
 
 const PROVIDER = "openai-codex";
 const SOL = "gpt-5.6-sol";
@@ -38,7 +38,7 @@ interface JevState {
 
 type JevRequest = ModelRouteRequest<JevState>;
 
-function routeTo(request: JevRequest, ctx: ExtensionContext, id: string, state?: JevState): ModelRoute<JevState> {
+function routeTo(request: JevRequest, ctx: ModelRouteContext, id: string, state?: JevState): ModelRoute<JevState> {
 	const model = ctx.modelRegistry.find(PROVIDER, id);
 	if (!model) throw new Error(`Model ${PROVIDER}/${id} is not in the catalog`);
 	return { model, thinkingLevel: request.thinkingLevel, state };
@@ -59,7 +59,7 @@ function editedThisTurn(messages: readonly Message[]): boolean {
 }
 
 /** Planning model for a new session: Sol for complex work, Terra otherwise or when Jev is unavailable. */
-async function choosePlanningModel(request: JevRequest, ctx: ExtensionContext): Promise<string> {
+async function choosePlanningModel(request: JevRequest, ctx: ModelRouteContext): Promise<string> {
 	// Keep a planning model the session already uses, so switching to jev/auto costs no cache miss.
 	const previous = request.previous?.model;
 	if (previous?.provider === PROVIDER && (previous.id === SOL || previous.id === TERRA)) return previous.id;

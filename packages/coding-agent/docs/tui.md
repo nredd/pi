@@ -27,6 +27,8 @@ Use `visibleWidth()`, `truncateToWidth()`, `sliceByColumn()`, and `wrapTextWithA
 
 After changing component state, invalidate the affected component and call the injected `tui.requestRender()`. The TUI coalesces render requests and updates the terminal.
 
+Tool renderers (`renderCall`, `renderResult`) follow the same rule through `context.invalidate()`. A settled tool row caches its collapsed line, so a renderer that shows live state after the final result, such as a background run's progress, must call `context.invalidate()` whenever that state changes. Skip timers and I/O when `context.probe` is true: the host renders throwaway copies to decide whether a row has more to show.
+
 ## Compose built-in components
 
 The package includes components for common layouts and controls:

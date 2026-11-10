@@ -12,9 +12,12 @@ try {
 	const artifactSet = produceArtifactSet({ build: false, outDir: join(root, "artifacts"), repoRoot: process.cwd() });
 	for (const pkg of artifactSet.packages) {
 		const directory = join(root, "consumers", packageConsumerDirectoryName(pkg.name));
-		installConsumer({ artifactSet, directory, packageNames: [pkg.name] });
+		installConsumer({ artifactSet, directory, packageNames: [pkg.name],
+			// Interactive testing opts in to pi-tui's optional emulator peer.
+			dependencies: pkg.name === codingAgentName ? { "@xterm/headless": "5.5.0" } : {},
+		});
 		smokeTestNpmConsumer({ artifactSet, directory, packageName: pkg.name });
-		if (pkg.name === codingAgentName) smokeTestCodingAgent(directory);
+		if (pkg.name === codingAgentName) smokeTestCodingAgent(directory, process.execPath, { checkCli: !process.argv.includes("--sdk-only") });
 	}
 	console.log(`Verified ${artifactSet.packages.length} isolated package consumers.`);
 } finally {

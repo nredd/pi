@@ -44,6 +44,7 @@ import { clampOpenAIPromptCacheKey } from "./openai-prompt-cache.ts";
 import {
 	convertResponsesMessages,
 	convertResponsesTools,
+	DEFAULT_REASONING_SUMMARY,
 	getResponsesToolSupport,
 	processResponsesStream,
 } from "./openai-responses-shared.ts";
@@ -610,7 +611,7 @@ function buildRequestBody(
 		if (effort !== null) {
 			body.reasoning = {
 				effort,
-				summary: options.reasoningSummary ?? "auto",
+				summary: options.reasoningSummary ?? DEFAULT_REASONING_SUMMARY,
 			};
 		}
 	} else if (model.reasoning && model.thinkingLevelMap?.off !== null) {

@@ -177,7 +177,10 @@ export interface PrepareRequestContext {
 }
 
 /** Replacement runtime state for the provider request being prepared. */
-export type AgentRequestUpdate = Omit<AgentLoopTurnUpdate, "messages">;
+export type AgentRequestUpdate = Omit<AgentLoopTurnUpdate, "messages"> & {
+	/** Additional provider gate for this request only; composed with the loop's persistent gate. */
+	beforeProviderRequest?: () => Promise<() => void>;
+};
 
 /**
  * Called immediately before every conversational provider request, including the first.
@@ -192,6 +195,8 @@ export interface PrepareNextTurnContext extends AgentTurnContext {}
 
 export interface AgentLoopConfig extends SimpleStreamOptions {
 	model: Model<any>;
+	/** Resolves to a synchronous final check run immediately before each provider dispatch. */
+	beforeProviderRequest?: () => Promise<() => void>;
 
 	/**
 	 * Converts AgentMessage[] to LLM-compatible Message[] before each LLM call.

@@ -1,7 +1,9 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import type { TuiMouseEvent } from "@earendil-works/pi-tui";
+import { Container, type TuiMouseEvent, visibleWidth } from "@earendil-works/pi-tui";
+import chalk from "chalk";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { AssistantMessageComponent } from "../src/modes/interactive/components/assistant-message.ts";
+import { isEntryRule } from "../src/modes/interactive/components/entry-rule.ts";
 import { UserMessageComponent } from "../src/modes/interactive/components/user-message.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
@@ -102,11 +104,65 @@ describe("AssistantMessageComponent", () => {
 		);
 		const rendered = component.render(80).join("\n");
 
-		expect(rendered).toContain("Thinking...");
+		expect(stripAnsi(rendered)).toContain("▸ Thinking · private reasoning");
 		expect(rendered).toContain("Response was truncated before completion.");
 	});
 
-	test("coalesces adjacent thinking blocks into one hidden thinking label", () => {
+	test("renders bold in the collapsed thinking summary instead of literal asterisks", () => {
+		initTheme("dark");
+		// chalk drops bold/italic without a TTY; force colors so the SGR codes are observable.
+		const level = chalk.level;
+		chalk.level = 3;
+
+		const component = new AssistantMessageComponent(
+			createAssistantMessage([
+				{ type: "thinking", thinking: "**Evaluating commit strategy**\n\nI should look at the diff." },
+			]),
+			true,
+		);
+		const raw = component.render(80).join("\n");
+		const row = stripAnsi(raw);
+
+		expect(row).toContain("▸ Thinking · Evaluating commit strategy");
+		expect(row).not.toContain("**");
+		expect(raw).toMatch(/\x1b\[1m(?:\x1b\[[0-9;]*m)*Evaluating commit strategy/);
+		chalk.level = level;
+	});
+
+	test("truncates a bold collapsed thinking summary without leaking SGR state", () => {
+		initTheme("dark");
+		const level = chalk.level;
+		chalk.level = 3;
+		const component = new AssistantMessageComponent(
+			createAssistantMessage([
+				{ type: "thinking", thinking: "**Evaluating a very long commit strategy headline**" },
+			]),
+			true,
+		);
+		const lines = component.render(30).filter((line) => !isEntryRule(line) && stripAnsi(line).includes("Thinking"));
+		chalk.level = level;
+
+		expect(lines).toHaveLength(1);
+		expect(visibleWidth(lines[0]!)).toBeLessThanOrEqual(30);
+		expect(stripAnsi(lines[0]!)).toContain("…");
+		expect(stripAnsi(lines[0]!)).not.toContain("**");
+		expect(lines[0]).toContain("\x1b[1m");
+	});
+
+	test("keeps a bold thinking headline whole when it contains a sentence end", () => {
+		initTheme("dark");
+
+		const component = new AssistantMessageComponent(
+			createAssistantMessage([{ type: "thinking", thinking: "**Done. Really** now\nnext" }]),
+			true,
+		);
+		const row = stripAnsi(component.render(80).join("\n"));
+
+		expect(row).toContain("Thinking · Done. Really now");
+		expect(row).not.toContain("**");
+	});
+
+	test("coalesces adjacent thinking blocks into one collapsed thinking row", () => {
 		initTheme("dark");
 
 		const component = new AssistantMessageComponent(
@@ -120,8 +176,10 @@ describe("AssistantMessageComponent", () => {
 		);
 		const rendered = stripAnsi(component.render(80).join("\n"));
 
-		expect(rendered.match(/Thinking\.\.\./g)).toHaveLength(1);
-		expect(rendered).toContain("answer");
+		expect(rendered.match(/Thinking · /g)).toHaveLength(1);
+		expect(rendered).toContain("▸ Thinking · first thought");
+		expect(rendered).not.toContain("second thought");
+		expect(rendered).toContain("│ answer");
 	});
 
 	test("renders nothing for hidden thinking with an empty label", () => {
@@ -179,10 +237,11 @@ describe("AssistantMessageComponent", () => {
 		const lines = component.render(width);
 		const firstThinkingRow = lines.findIndex((line) => stripAnsi(line).includes("first reasoning"));
 		expect(firstThinkingRow).toBeGreaterThanOrEqual(0);
+		expect(stripAnsi(lines[firstThinkingRow] ?? "")).toContain("▾  first reasoning");
 		const event: TuiMouseEvent = {
 			type: "click",
 			button: "left",
-			x: 1,
+			x: 0,
 			y: firstThinkingRow,
 			screenX: 1,
 			screenY: firstThinkingRow,
@@ -196,12 +255,159 @@ describe("AssistantMessageComponent", () => {
 		expect(component.handleMouse(event)?.handled).toBe(true);
 
 		const collapsed = stripAnsi(component.render(width).join("\n"));
-		expect(collapsed).not.toContain("first reasoning");
-		expect(collapsed).toContain("Thinking...");
-		expect(collapsed).toContain("second reasoning");
+		expect(collapsed).toContain("▸ Thinking · first reasoning");
+		expect(collapsed).not.toContain("▾  first reasoning");
+		expect(collapsed).toContain("▾  second reasoning");
+
+		expect(component.handleMouse({ ...event, x: 4 })?.handled).toBe(true);
+		const expandedAgain = stripAnsi(component.render(width).join("\n"));
+		expect(expandedAgain).toContain("▾  first reasoning");
+
+		const answerRow = component.render(width).findIndex((line) => stripAnsi(line).includes("answer"));
+		expect(answerRow).toBeGreaterThan(firstThinkingRow);
+		expect(component.handleMouse({ ...event, y: answerRow, screenY: answerRow })).toBeUndefined();
+		expect(stripAnsi(component.render(width).join("\n"))).toContain("first reasoning");
 	});
 
-	test("uses configured output padding for text and thinking", () => {
+	test("collapses an expanded thinking run from a lower body row", () => {
+		initTheme("dark");
+		const component = new AssistantMessageComponent(
+			createAssistantMessage([
+				{ type: "thinking", thinking: "top reasoning\n\nmiddle reasoning\n\nbottom reasoning" },
+				{ type: "text", text: "answer" },
+			]),
+		);
+		const width = 80;
+		const lines = component.render(width);
+		const bottomRow = lines.findIndex((line) => stripAnsi(line).includes("bottom reasoning"));
+		const topRow = lines.findIndex((line) => stripAnsi(line).includes("top reasoning"));
+		expect(bottomRow).toBeGreaterThan(topRow);
+		const event: TuiMouseEvent = {
+			type: "click",
+			button: "left",
+			x: 6,
+			y: bottomRow,
+			screenX: 6,
+			screenY: bottomRow,
+			width,
+			height: lines.length,
+			shift: false,
+			alt: false,
+			ctrl: false,
+			clickCount: 1,
+		};
+		expect(component.handleMouse({ ...event, type: "press" })).toBeUndefined();
+		expect(component.handleMouse(event)?.handled).toBe(true);
+
+		const collapsed = stripAnsi(component.render(width).join("\n"));
+		expect(collapsed).toContain("▸ Thinking · top reasoning");
+		expect(collapsed).not.toContain("bottom reasoning");
+		expect(collapsed).toContain("answer");
+	});
+
+	test("collapses thinking from a body row when an extension trims the leading blank line", () => {
+		initTheme("dark");
+		const component = new AssistantMessageComponent(
+			createAssistantMessage([
+				{ type: "thinking", thinking: "first line\n\nlast line" },
+				{ type: "toolCall", id: "tool-1", name: "bash", arguments: { command: "ls" } },
+			]),
+		);
+		const original = component.render.bind(component);
+		component.render = (width: number) => {
+			const rendered = original(width);
+			const trimmed = [...rendered];
+			while (trimmed.length > 0 && stripAnsi(trimmed[0] ?? "").trim().length === 0) trimmed.shift();
+			while (trimmed.length > 0 && stripAnsi(trimmed[trimmed.length - 1] ?? "").trim().length === 0) trimmed.pop();
+			return trimmed;
+		};
+		const transcript = new Container();
+		transcript.addChild(component);
+
+		const width = 80;
+		const lines = transcript.render(width);
+		const lastRow = lines.findIndex((line) => stripAnsi(line).includes("last line"));
+		expect(lastRow).toBeGreaterThan(0);
+		expect(
+			transcript.handleMouse({
+				type: "click",
+				button: "left",
+				x: 6,
+				y: lastRow,
+				screenX: 6,
+				screenY: lastRow,
+				width,
+				height: lines.length,
+				shift: false,
+				alt: false,
+				ctrl: false,
+				clickCount: 1,
+			})?.handled,
+		).toBe(true);
+		const collapsed = stripAnsi(transcript.render(width).join("\n"));
+		expect(collapsed).toContain("▸ Thinking · first line");
+		expect(collapsed).not.toContain("last line");
+	});
+
+	test("toggles thinking when an extension trims the leading blank line", () => {
+		initTheme("dark");
+		const component = new AssistantMessageComponent(
+			createAssistantMessage([
+				{ type: "thinking", thinking: "hidden reasoning" },
+				{ type: "toolCall", id: "tool-1", name: "bash", arguments: { command: "ls" } },
+			]),
+			true,
+		);
+
+		// Mirrors @vanillagreen/pi-tool-renderer's prototype patch: trim the outer blank
+		// lines and reattach the OSC 133 zone start to the new first line.
+		const original = component.render.bind(component);
+		component.render = (width: number) => {
+			const rendered = original(width);
+			const trimmed = [...rendered];
+			while (
+				trimmed.length > 0 &&
+				(stripAnsi(trimmed[0] ?? "").trim().length === 0 || isEntryRule(trimmed[0] ?? ""))
+			)
+				trimmed.shift();
+			while (trimmed.length > 0 && stripAnsi(trimmed[trimmed.length - 1] ?? "").trim().length === 0) trimmed.pop();
+			if (rendered[0]?.includes(OSC133_ZONE_START) && !trimmed[0]?.includes(OSC133_ZONE_START)) {
+				trimmed[0] = `${OSC133_ZONE_START}${trimmed[0] ?? ""}`;
+			}
+			return trimmed;
+		};
+
+		// The transcript dispatches through the chat container, never the message directly.
+		const transcript = new Container();
+		transcript.addChild(component);
+
+		const width = 80;
+		const lines = transcript.render(width);
+		const headerRow = lines.findIndex((line) => stripAnsi(line).includes("Thinking · hidden reasoning"));
+		expect(headerRow).toBe(0);
+
+		const event: TuiMouseEvent = {
+			type: "click",
+			button: "left",
+			x: 0,
+			y: headerRow,
+			screenX: 0,
+			screenY: headerRow,
+			width,
+			height: lines.length,
+			shift: false,
+			alt: false,
+			ctrl: false,
+			clickCount: 1,
+		};
+		expect(transcript.handleMouse(event)?.handled).toBe(true);
+
+		const expanded = stripAnsi(transcript.render(width).join("\n"));
+		expect(expanded).toContain("▾  hidden reasoning");
+		expect(expanded).not.toContain("Thinking · ");
+	});
+
+	test("rules prose regardless of output padding and pads thinking by it", () => {
 		initTheme("dark");
 
 		const component = new AssistantMessageComponent(
@@ -216,13 +422,72 @@ describe("AssistantMessageComponent", () => {
 		);
 		const lines = component.render(80).map((line) => stripAnsi(line));
 
-		expect(lines.some((line) => line.includes(" hello"))).toBe(true);
-		expect(lines.some((line) => line.includes(" reasoning"))).toBe(true);
+		expect(lines.some((line) => line.startsWith("│ hello"))).toBe(true);
+		expect(lines.some((line) => line.startsWith("▾  reasoning"))).toBe(true);
 
 		component.setOutputPad(0);
 		const updatedLines = component.render(80).map((line) => stripAnsi(line));
-		expect(updatedLines.some((line) => line.startsWith("hello"))).toBe(true);
-		expect(updatedLines.some((line) => line.startsWith("reasoning"))).toBe(true);
+		expect(updatedLines.some((line) => line.startsWith("│ hello"))).toBe(true);
+		expect(updatedLines.some((line) => line.startsWith("▾ reasoning"))).toBe(true);
+	});
+
+	test("rules every prose line, blanks included, and leaves errors unruled", () => {
+		initTheme("dark");
+
+		const component = new AssistantMessageComponent(
+			createAssistantMessage([{ type: "text", text: "first paragraph\n\nsecond paragraph" }], {
+				stopReason: "error",
+			}),
+		);
+		const lines = component.render(80).map((line) => stripAnsi(line));
+		const first = lines.findIndex((line) => line.includes("first paragraph"));
+		const second = lines.findIndex((line) => line.includes("second paragraph"));
+		expect(first).toBeGreaterThanOrEqual(0);
+		expect(second).toBe(first + 2);
+		expect(lines.slice(first, second + 1).map((line) => line.trimEnd())).toEqual([
+			"│ first paragraph",
+			"│",
+			"│ second paragraph",
+		]);
+		const errorRow = lines.find((line) => line.includes("Error: Unknown error"));
+		expect(errorRow).toBeDefined();
+		expect(errorRow).not.toContain("│");
+	});
+
+	test("rules streaming prose the same as settled prose", () => {
+		initTheme("dark");
+
+		const component = new AssistantMessageComponent();
+		component.updateContent(createAssistantMessage([{ type: "text", text: "partial" }]), true);
+		const lines = component.render(80).map((line) => stripAnsi(line));
+		expect(lines.some((line) => line.startsWith("│ partial"))).toBe(true);
+	});
+
+	test("summarizes collapsed thinking with its first sentence and the configured label head", () => {
+		initTheme("dark");
+
+		const component = new AssistantMessageComponent(
+			createAssistantMessage([
+				{ type: "thinking", thinking: "Check the addon first! Then restart it.\n\nMore detail." },
+				{ type: "text", text: "answer" },
+			]),
+			true,
+			undefined,
+			"Pondering…",
+		);
+		const row = component
+			.render(120)
+			.map((line) => stripAnsi(line))
+			.find((line) => line.includes("Pondering"));
+		expect(row).toBe("▸ Pondering · Check the addon first!");
+
+		const narrow = component
+			.render(30)
+			.map((line) => stripAnsi(line))
+			.find((line) => line.includes("Pondering"));
+		expect(narrow).toBeDefined();
+		expect(narrow?.length).toBeLessThanOrEqual(30);
+		expect(narrow).toMatch(/…$/);
 	});
 
 	test("chains Markdown transformers in registration order", () => {

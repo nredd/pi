@@ -23,6 +23,7 @@ cp permission-gate.ts ~/.pi/agent/extensions/
 | `protected-paths.ts` | Blocks writes to protected paths (.env, .git/, node_modules/) |
 | `confirm-destructive.ts` | Confirms before destructive session actions (clear, switch, fork) |
 | `dirty-repo-guard.ts` | Prevents session changes with uncommitted git changes |
+| `fatal-startup.ts` | Fails session startup on purpose by throwing `ExtensionStartupError` from `session_start` |
 | `gondolin/` | Route built-in tools and `!` commands into a Gondolin micro-VM |
 
 For isolation setup and limitations, see [Run Pi in an isolated environment](../../docs/containerization.md).

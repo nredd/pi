@@ -131,6 +131,8 @@ agent.prepareRequest = async ({ context }) => ({
 });
 ```
 
+`prepareRequest` may also return `AgentRequestUpdate.beforeProviderRequest`, a request-only gate. It composes with the persistent `beforeProviderRequest` option: both run immediately before dispatch (persistent first), and the request-only gate applies to that request alone and never leaks into later turns.
+
 `prepareRequest` does not poll queues. Steering queued while it runs waits for the next normal steering poll.
 
 `finishTurn` runs after the assistant and all tool results are finalized, but before `turn_end`. It runs for normal, error, and aborted responses:

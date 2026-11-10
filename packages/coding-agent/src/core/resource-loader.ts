@@ -304,6 +304,8 @@ export function loadProjectContextFiles(options: {
 export interface DefaultResourceLoaderOptions {
 	cwd: string;
 	agentDir: string;
+	/** Home for resource paths and automatic ~/.agents/skills discovery. Omit to retain ambient defaults. */
+	homeDir?: string;
 	settingsManager?: SettingsManager;
 	eventBus?: EventBus;
 	additionalExtensionPaths?: string[];
@@ -343,6 +345,7 @@ export interface DefaultResourceLoaderOptions {
 export class DefaultResourceLoader implements ResourceLoader {
 	private cwd: string;
 	private agentDir: string;
+	private homeDir: string | undefined;
 	private settingsManager: SettingsManager;
 	private eventBus: EventBus;
 	private packageManager: DefaultPackageManager;
@@ -401,14 +404,16 @@ export class DefaultResourceLoader implements ResourceLoader {
 	private loaded: boolean;
 
 	constructor(options: DefaultResourceLoaderOptions) {
-		this.cwd = resolvePath(options.cwd);
-		this.agentDir = resolvePath(options.agentDir);
+		this.homeDir = options.homeDir;
+		this.cwd = resolvePath(options.cwd, undefined, { homeDir: this.homeDir });
+		this.agentDir = resolvePath(options.agentDir, undefined, { homeDir: this.homeDir });
 		this.settingsManager = options.settingsManager ?? SettingsManager.create(this.cwd, this.agentDir);
 		this.eventBus = options.eventBus ?? createEventBus();
 		const factories = options.extensionFactories ?? [];
 		this.extensionFactories = factories.filter((input) => !isBuiltinExtension(input));
 		this.builtinExtensions = new Map(factories.filter(isBuiltinExtension).map((input) => [input.name, input]));
 		this.packageManager = new DefaultPackageManager({
+			homeDir: this.homeDir,
 			cwd: this.cwd,
 			agentDir: this.agentDir,
 			settingsManager: this.settingsManager,
@@ -748,7 +753,9 @@ export class DefaultResourceLoader implements ResourceLoader {
 	}
 
 	private resolveExtensionLoadPath(path: string): string {
-		return isSyntheticPath(path) ? path : resolvePath(path, this.cwd, { normalizeUnicodeSpaces: true });
+		return isSyntheticPath(path)
+			? path
+			: resolvePath(path, this.cwd, { homeDir: this.homeDir, normalizeUnicodeSpaces: true });
 	}
 
 	private getExtensionPathKey(path: string): string {
@@ -1069,7 +1076,7 @@ export class DefaultResourceLoader implements ResourceLoader {
 	}
 
 	private resolveResourcePath(p: string): string {
-		return isSyntheticPath(p) ? p : resolvePath(p, this.cwd, { trim: true });
+		return isSyntheticPath(p) ? p : resolvePath(p, this.cwd, { homeDir: this.homeDir, trim: true });
 	}
 
 	private loadThemes(

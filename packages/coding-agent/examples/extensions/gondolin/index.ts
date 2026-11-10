@@ -15,7 +15,7 @@
  *   pi -e /path/to/pi/packages/coding-agent/examples/extensions/gondolin
  *
  * Requirements:
- *   - Node.js >= 23.6.0 for @earendil-works/gondolin
+ *   - Node.js >= 22.19.0 for @earendil-works/gondolin 0.14.0
  *   - QEMU installed (for example, `brew install qemu` on macOS)
  */
 

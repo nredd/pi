@@ -4,12 +4,18 @@ import { Box, Container, Markdown, type MarkdownTheme, Spacer, Text } from "@ear
 import type { MarkdownTransformer, MessageRenderer } from "../../../core/extensions/types.ts";
 import type { CustomMessage } from "../../../core/messages.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
+import { DisclosureGutter } from "./disclosure-gutter.ts";
+import { entryRule } from "./entry-rule.ts";
 import { keyHint, keyText } from "./keybinding-hints.ts";
 import { createMarkdownTransform } from "./markdown-transform.ts";
+import { OneLineRow, renderedContentLines } from "./one-line.ts";
 
 /**
  * Component that renders a custom message entry from extensions.
  * Uses distinct styling to differentiate from user messages.
+ *
+ * Messages with a registered renderer sit in a disclosure gutter: collapsed, they show the
+ * renderer's first line; a click or `ctrl+o` reveals the renderer's full output.
  */
 export class CustomMessageComponent extends Container {
 	private message: CustomMessage<unknown>;
@@ -41,7 +47,7 @@ export class CustomMessageComponent extends Container {
 		this.messageId = messageId;
 		this.timestamp = timestamp;
 
-		this.addChild(new Spacer(1));
+		this.addChild(entryRule());
 
 		// Create box with purple background (used for default rendering)
 		this.box = new Box(1, 1, (t) => theme.bg("customMessageBg", t));
@@ -86,8 +92,13 @@ export class CustomMessageComponent extends Container {
 				);
 				if (component) {
 					// Custom renderer provides its own styled component
-					this.customComponent = component;
-					this.addChild(component);
+					const body = this._expanded ? component : new OneLineRow([() => renderedContentLines(component, 1)[0]]);
+					this.customComponent = new DisclosureGutter(
+						body,
+						() => this._expanded,
+						() => this.setExpanded(!this._expanded),
+					);
+					this.addChild(this.customComponent);
 					return;
 				}
 			} catch {

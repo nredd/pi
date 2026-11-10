@@ -2,6 +2,35 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Extension custom messages triggered while manual, automatic, or branch compaction is in progress are queued instead of interrupting compaction. They are admitted in order after compaction settles.
+- In-process harnesses preserve default-stream auth checks and restore faux providers during reload with owner-scoped cleanup. Interactive harness settlement awaits submitted editor commands before painting, including asynchronous `/new` and `/reload` work.
+- Interactive shutdown removes its theme callback, watcher and terminal appearance subscription so a disposed embedded host cannot repaint later.
+- Standalone binary archives now include `schemas/` (settings, models, keybindings, theme JSON schemas), matching the npm package's `files`.
+- Fullscreen copy-on-select rejoins soft-wrapped rows (no stray newlines inside paragraphs or URLs) and leaves the `│` transcript rule and disclosure gutter out of copied text. Clicking a plain-text URL that wraps across rows opens the whole URL.
+
+### Changed
+
+- Settled tool blocks and all thinking blocks show a `▸`/`▾` disclosure marker in both TUI modes, and clicking anywhere in the block toggles it in fullscreen mode. Modified clicks, drag selection, and links keep their behavior.
+- Collapsed built-in `bash`, `edit`, `write`, `grep`, `find`, and `ls` results show a one-line summary instead of an output preview.
+- Transcript framing: a dashed `┄` rule separates entries instead of a blank line, a solid `─` rule opens every user turn after the first, assistant prose carries a `│` rule in `borderAccent` (replacing its `outputPad` indent), and collapsed thinking rows read `Thinking · <first sentence>`.
+- Running tool rows carry the disclosure marker and toggle like settled ones, showing the output streamed so far when expanded.
+- Every collapsed tool row, built-in or extension, renders on one line: the call's first line, then ` · ` and the result's first line (the first error line on failure, the last output line while streaming), truncated with `…`. Images and further lines appear once expanded.
+- Extension messages with a registered renderer get the same disclosure marker and collapse to the renderer's first line until clicked or expanded with `Ctrl+O`.
+
+### Fixed
+
+- Collapsed rows no longer re-render every settled tool and thinking entry on each frame. Settled one-line rows are cached per width until invalidated, so keystrokes and the working spinner cost the same in a long session as in a new one (a 1100-entry session went from ~110 ms CPU per keystroke and 100% CPU while a tool ran to ~11 ms and 8%).
+- Disclosure probes no longer start renderer side effects. Probe renders carry `context.probe: true`, which the `edit` renderer uses to skip its diff, replacing the special case that probed only `edit` with `argsComplete: false`. Live-row tickers that ignored it started two more timers per tick.
+
+### Added
+
+- `createInteractiveHarness()` in `@earendil-works/pi-coding-agent/testing/interactive` (a separate entry: it needs pi-tui's optional `@xterm/headless` peer, which `/testing` never loads) mounts the real interactive host on a virtual terminal, with deterministic startup, raw input/resize/render settlement, and `/reload`/`/new` lifecycle support. Packed-consumer smoke tests render a frame through the public testing entries.
+- `ExtensionStartupError`: a `session_start` handler that throws it fails session startup instead of being logged. `bindExtensions()` and `reload()` reject, print mode exits nonzero, RPC mode and the TUI exit before accepting input, and the session refuses `prompt()`, `compact()` and other provider-bound calls until a later bind or reload succeeds. Provider-bound work waits while `session_start` runs, then synchronously rechecks startup immediately before provider dispatch after authentication and header transforms; a fatal failure aborts an in-flight run. Gates are per session even when a host shares a `ModelRuntime`, and every provider method exposed by `ctx.modelRegistry` is covered; calls from a startup handler are refused rather than deadlocking it. Raw SDK `ModelRuntime` calls remain ungated. Startup `sendUserMessage()`/triggered `sendMessage()` replay sequentially after success, including batches from overlapping binds, and re-wait before each action when another startup begins; actions not yet started when a fatal emission settles, including while an earlier replayed action is running, are discarded and reported immediately even if another emission is pending, and a replayed action paused past a new startup waits for it instead of failing. A fatal overlapping emission latches until a bind or reload operation started after it settles succeeds; a `beforeSessionStart` failure does not clear that latch. Other errors thrown from `session_start` handlers stay logged and nonfatal. See `docs/extensions.md` and `examples/extensions/fatal-startup.ts`.
+- `@earendil-works/pi-coding-agent/testing` exports the in-process harness the coding-agent suite runs on: `createHarness()` builds a real `AgentSession`, extension runner, settings, auth and model registry around a scripted faux provider, loads extension factories through the real loader, and accepts a caller-owned `cwd`. Also `createTestUiContext()`, transcript helpers, test resource loading, and the faux response builders. See `docs/sdk.md`.
+- `ToolRenderContext.probe` marks a throwaway render: no timers or I/O. `docs/tui.md` now states that a renderer whose output changes after the final result must call `context.invalidate()`, since settled rows are cached.
+
 ## [1.5.2] - 2026-11-10
 
 ### New Features

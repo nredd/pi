@@ -1,4 +1,3 @@
-import { createModelRegistry, getModelRuntime } from "./model-runtime-test-utils.ts";
 /**
  * Shared test utilities for coding-agent tests.
  */
@@ -12,18 +11,18 @@ import { getModel, streamSimple } from "@earendil-works/pi-ai/compat";
 import { builtinProviders } from "@earendil-works/pi-ai/providers/all";
 import { AgentSession } from "../src/core/agent-session.ts";
 import { AuthStorage } from "../src/core/auth-storage.ts";
-import { createEventBus } from "../src/core/event-bus.ts";
-import type {
-	Extension,
-	ExtensionFactory,
-	InlineExtension,
-	LoadExtensionsResult,
-} from "../src/core/extensions/index.ts";
-import { createExtensionRuntime, loadExtensionFromFactory } from "../src/core/extensions/loader.ts";
-import type { ResourceLoader } from "../src/core/resource-loader.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
 import { SettingsManager } from "../src/core/settings-manager.ts";
 import { createCodingTools } from "../src/index.ts";
+import { createModelRegistry, getModelRuntime } from "../src/testing/model-registry.ts";
+import { createTestResourceLoader } from "../src/testing/resources.ts";
+
+export {
+	type CreateTestExtensionsResultInput,
+	type CreateTestResourceLoaderOptions,
+	createTestExtensionsResult,
+	createTestResourceLoader,
+} from "../src/testing/resources.ts";
 
 /**
  * API key for authenticated tests. Tests using this should be wrapped in
@@ -186,64 +185,6 @@ export interface TestSessionContext {
 	sessionManager: SessionManager;
 	tempDir: string;
 	cleanup: () => void;
-}
-
-export interface CreateTestExtensionsResultInput {
-	factory: ExtensionFactory;
-	path?: string;
-}
-
-type TestExtensionInput = InlineExtension | CreateTestExtensionsResultInput;
-
-export async function createTestExtensionsResult(
-	inputs: TestExtensionInput[],
-	cwd = process.cwd(),
-): Promise<LoadExtensionsResult> {
-	const runtime = createExtensionRuntime();
-	const eventBus = createEventBus();
-	const extensions: Extension[] = [];
-
-	for (const [index, input] of inputs.entries()) {
-		const isObject = typeof input !== "function";
-		const hasName = isObject && "name" in input;
-		const hasPath = isObject && "path" in input && typeof input.path === "string" && input.path !== "";
-		const factory = isObject ? input.factory : input;
-		const extensionPath = hasName ? `<inline:${input.name}>` : hasPath ? input.path : `<inline:${index + 1}>`;
-
-		extensions.push(await loadExtensionFromFactory(factory, cwd, eventBus, runtime, extensionPath));
-	}
-
-	return {
-		extensions,
-		errors: [],
-		runtime,
-	};
-}
-
-export interface CreateTestResourceLoaderOptions {
-	extensionsResult?: LoadExtensionsResult;
-}
-
-export function createTestResourceLoader(options: CreateTestResourceLoaderOptions = {}): ResourceLoader {
-	const extensionsResult = options.extensionsResult ?? {
-		extensions: [],
-		errors: [],
-		runtime: createExtensionRuntime(),
-	};
-
-	return {
-		getExtensions: () => extensionsResult,
-		getSkills: () => ({ skills: [], diagnostics: [] }),
-		getPrompts: () => ({ prompts: [], diagnostics: [] }),
-		getThemes: () => ({ themes: [], diagnostics: [] }),
-		getAgentsFiles: () => ({ agentsFiles: [] }),
-		getSystemPrompt: () => undefined,
-		getSystemPromptSource: () => undefined,
-		getAppendSystemPrompt: () => [],
-		getAppendSystemPromptSources: () => [],
-		extendResources: () => {},
-		reload: async () => {},
-	};
 }
 
 /**

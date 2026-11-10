@@ -961,7 +961,7 @@ describe("openai-codex streaming", () => {
 			transport: "sse",
 		}).result();
 
-		expect(requestedReasoning).toEqual({ effort: "xhigh", summary: "auto" });
+		expect(requestedReasoning).toEqual({ effort: "xhigh", summary: "detailed" });
 	});
 
 	it("forwards required tool choice", async () => {
@@ -1185,7 +1185,7 @@ describe("openai-codex streaming", () => {
 			transport: "sse",
 		});
 		await streamResult.result();
-		expect(requestedReasoning).toEqual({ effort: "low", summary: "auto" });
+		expect(requestedReasoning).toEqual({ effort: "low", summary: "detailed" });
 	});
 
 	it.each([

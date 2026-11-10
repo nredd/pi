@@ -155,10 +155,20 @@ export interface PackageManager {
 	getInstalledPath(source: string, scope: "user" | "project"): string | undefined;
 }
 
-interface PackageManagerOptions {
+export interface PackageManagerOptions {
 	cwd: string;
 	agentDir: string;
+	/** Home for tilde expansion and automatic ~/.agents/skills discovery. Defaults to HOME or os.homedir(). */
+	homeDir?: string;
 	settingsManager: SettingsManager;
+	/**
+	 * Synchronous veto for project-scoped top-level skill paths, before canonical deduplication.
+	 * Receives the discovered absolute path, including disabled candidates. False drops the candidate
+	 * without hiding lower-precedence aliases; true preserves native enabled state and trust decisions.
+	 * Never called for package/user resources or other resource types. Exceptions reject resolution.
+	 * Omission preserves native discovery. This is admission control, not a filesystem sandbox.
+	 */
+	projectSkillPathFilter?: (path: string) => boolean;
 	/** Names of built-in extensions, resolved as `builtin:<name>` extension resources. */
 	builtinExtensions?: string[];
 }
@@ -728,7 +738,7 @@ function resolvePackageChangelogPath(packageRoot: string, manifest: PiManifest |
 	}
 }
 
-function matchesAnyPattern(filePath: string, patterns: string[], baseDir: string): boolean {
+function matchesAnyPattern(filePath: string, patterns: string[], baseDir: string, homeDir?: string): boolean {
 	const rel = toPosixPath(relative(baseDir, filePath));
 	const name = basename(filePath);
 	const filePathPosix = toPosixPath(filePath);
@@ -739,7 +749,7 @@ function matchesAnyPattern(filePath: string, patterns: string[], baseDir: string
 	const parentDirPosix = isSkillFile ? toPosixPath(parentDir!) : undefined;
 
 	return patterns.some((pattern) => {
-		const normalizedPattern = toPosixPath(normalizePath(pattern));
+		const normalizedPattern = toPosixPath(normalizePath(pattern, { homeDir }));
 		if (
 			minimatch(rel, normalizedPattern) ||
 			minimatch(name, normalizedPattern) ||
@@ -756,12 +766,12 @@ function matchesAnyPattern(filePath: string, patterns: string[], baseDir: string
 	});
 }
 
-function normalizeExactPattern(pattern: string): string {
+function normalizeExactPattern(pattern: string, homeDir?: string): string {
 	const normalized = pattern.startsWith("./") || pattern.startsWith(".\\") ? pattern.slice(2) : pattern;
-	return toPosixPath(normalizePath(normalized));
+	return toPosixPath(normalizePath(normalized, { homeDir }));
 }
 
-function matchesAnyExactPattern(filePath: string, patterns: string[], baseDir: string): boolean {
+function matchesAnyExactPattern(filePath: string, patterns: string[], baseDir: string, homeDir?: string): boolean {
 	if (patterns.length === 0) return false;
 	const rel = toPosixPath(relative(baseDir, filePath));
 	const name = basename(filePath);
@@ -772,7 +782,7 @@ function matchesAnyExactPattern(filePath: string, patterns: string[], baseDir: s
 	const parentDirPosix = isSkillFile ? toPosixPath(parentDir!) : undefined;
 
 	return patterns.some((pattern) => {
-		const normalized = normalizeExactPattern(pattern);
+		const normalized = normalizeExactPattern(pattern, homeDir);
 		if (normalized === rel || normalized === filePathPosix) {
 			return true;
 		}
@@ -785,20 +795,20 @@ function getOverridePatterns(entries: string[]): string[] {
 	return entries.filter((pattern) => pattern.startsWith("!") || pattern.startsWith("+") || pattern.startsWith("-"));
 }
 
-function isEnabledByOverrides(filePath: string, patterns: string[], baseDir: string): boolean {
+function isEnabledByOverrides(filePath: string, patterns: string[], baseDir: string, homeDir?: string): boolean {
 	const overrides = getOverridePatterns(patterns);
 	const excludes = overrides.filter((pattern) => pattern.startsWith("!")).map((pattern) => pattern.slice(1));
 	const forceIncludes = overrides.filter((pattern) => pattern.startsWith("+")).map((pattern) => pattern.slice(1));
 	const forceExcludes = overrides.filter((pattern) => pattern.startsWith("-")).map((pattern) => pattern.slice(1));
 
 	let enabled = true;
-	if (excludes.length > 0 && matchesAnyPattern(filePath, excludes, baseDir)) {
+	if (excludes.length > 0 && matchesAnyPattern(filePath, excludes, baseDir, homeDir)) {
 		enabled = false;
 	}
-	if (forceIncludes.length > 0 && matchesAnyExactPattern(filePath, forceIncludes, baseDir)) {
+	if (forceIncludes.length > 0 && matchesAnyExactPattern(filePath, forceIncludes, baseDir, homeDir)) {
 		enabled = true;
 	}
-	if (forceExcludes.length > 0 && matchesAnyExactPattern(filePath, forceExcludes, baseDir)) {
+	if (forceExcludes.length > 0 && matchesAnyExactPattern(filePath, forceExcludes, baseDir, homeDir)) {
 		enabled = false;
 	}
 	return enabled;
@@ -812,7 +822,7 @@ function isEnabledByOverrides(filePath: string, patterns: string[], baseDir: str
  * - `+path`: force-include exact path (overrides exclusions)
  * - `-path`: force-exclude exact path (overrides force-includes)
  */
-function applyPatterns(allPaths: string[], patterns: string[], baseDir: string): Set<string> {
+function applyPatterns(allPaths: string[], patterns: string[], baseDir: string, homeDir?: string): Set<string> {
 	const includes: string[] = [];
 	const excludes: string[] = [];
 	const forceIncludes: string[] = [];
@@ -835,18 +845,18 @@ function applyPatterns(allPaths: string[], patterns: string[], baseDir: string):
 	if (includes.length === 0) {
 		result = [...allPaths];
 	} else {
-		result = allPaths.filter((filePath) => matchesAnyPattern(filePath, includes, baseDir));
+		result = allPaths.filter((filePath) => matchesAnyPattern(filePath, includes, baseDir, homeDir));
 	}
 
 	// Step 2: Apply excludes
 	if (excludes.length > 0) {
-		result = result.filter((filePath) => !matchesAnyPattern(filePath, excludes, baseDir));
+		result = result.filter((filePath) => !matchesAnyPattern(filePath, excludes, baseDir, homeDir));
 	}
 
 	// Step 3: Force-include (add back from allPaths, overriding exclusions)
 	if (forceIncludes.length > 0) {
 		for (const filePath of allPaths) {
-			if (!result.includes(filePath) && matchesAnyExactPattern(filePath, forceIncludes, baseDir)) {
+			if (!result.includes(filePath) && matchesAnyExactPattern(filePath, forceIncludes, baseDir, homeDir)) {
 				result.push(filePath);
 			}
 		}
@@ -854,13 +864,18 @@ function applyPatterns(allPaths: string[], patterns: string[], baseDir: string):
 
 	// Step 4: Force-exclude (remove even if included or force-included)
 	if (forceExcludes.length > 0) {
-		result = result.filter((filePath) => !matchesAnyExactPattern(filePath, forceExcludes, baseDir));
+		result = result.filter((filePath) => !matchesAnyExactPattern(filePath, forceExcludes, baseDir, homeDir));
 	}
 
 	return new Set(result);
 }
 
-function applyAutoloadDisabledPatterns(allPaths: string[], patterns: string[], baseDir: string): Map<string, boolean> {
+function applyAutoloadDisabledPatterns(
+	allPaths: string[],
+	patterns: string[],
+	baseDir: string,
+	homeDir?: string,
+): Map<string, boolean> {
 	const result = new Map<string, boolean>();
 	for (const pattern of patterns) {
 		const target = pattern.slice(
@@ -870,7 +885,9 @@ function applyAutoloadDisabledPatterns(allPaths: string[], patterns: string[], b
 		const exact = pattern.startsWith("+") || pattern.startsWith("-");
 		for (const filePath of allPaths) {
 			if (
-				exact ? matchesAnyExactPattern(filePath, [target], baseDir) : matchesAnyPattern(filePath, [target], baseDir)
+				exact
+					? matchesAnyExactPattern(filePath, [target], baseDir, homeDir)
+					: matchesAnyPattern(filePath, [target], baseDir, homeDir)
 			) {
 				result.set(filePath, enabled);
 			}
@@ -882,17 +899,21 @@ function applyAutoloadDisabledPatterns(allPaths: string[], patterns: string[], b
 export class DefaultPackageManager implements PackageManager {
 	private cwd: string;
 	private agentDir: string;
+	private homeDir: string | undefined;
 	private settingsManager: SettingsManager;
 	private builtinExtensions: string[];
+	private projectSkillPathFilter: PackageManagerOptions["projectSkillPathFilter"];
 	private globalNpmRoot: string | undefined;
 	private globalNpmRootCommandKey: string | undefined;
 	private progressCallback: ProgressCallback | undefined;
 
 	constructor(options: PackageManagerOptions) {
-		this.cwd = resolvePath(options.cwd);
-		this.agentDir = resolvePath(options.agentDir);
+		this.homeDir = options.homeDir;
+		this.cwd = resolvePath(options.cwd, undefined, { homeDir: this.homeDir });
+		this.agentDir = resolvePath(options.agentDir, undefined, { homeDir: this.homeDir });
 		this.settingsManager = options.settingsManager;
 		this.builtinExtensions = options.builtinExtensions ?? [];
+		this.projectSkillPathFilter = options.projectSkillPathFilter;
 	}
 
 	setProgressCallback(callback: ProgressCallback | undefined): void {
@@ -1046,12 +1067,13 @@ export class DefaultPackageManager implements PackageManager {
 				[path],
 				getOverridePatterns(projectSettings.extensions ?? []),
 				projectBaseDir,
+				this.homeDir,
 			).get(path);
 			this.addResource(
 				accumulator.extensions,
 				path,
 				{ source: "builtin", scope: projectEnabled === undefined ? "user" : "project", origin: "top-level" },
-				projectEnabled ?? isEnabledByOverrides(path, globalSettings.extensions ?? [], globalBaseDir),
+				projectEnabled ?? isEnabledByOverrides(path, globalSettings.extensions ?? [], globalBaseDir, this.homeDir),
 			);
 		}
 
@@ -2404,11 +2426,11 @@ export class DefaultPackageManager implements PackageManager {
 	}
 
 	private resolvePath(input: string): string {
-		return resolvePath(input, this.cwd, { homeDir: getHomeDir(), trim: true });
+		return resolvePath(input, this.cwd, { homeDir: this.homeDir ?? getHomeDir(), trim: true });
 	}
 
 	private resolvePathFromBase(input: string, baseDir: string): string {
-		return resolvePath(input, baseDir, { homeDir: getHomeDir(), trim: true });
+		return resolvePath(input, baseDir, { homeDir: this.homeDir ?? getHomeDir(), trim: true });
 	}
 
 	private collectPackageResources(
@@ -2509,7 +2531,7 @@ export class DefaultPackageManager implements PackageManager {
 		}
 
 		// Apply user patterns
-		const enabledByUser = applyPatterns(allFiles, userPatterns, packageRoot);
+		const enabledByUser = applyPatterns(allFiles, userPatterns, packageRoot, this.homeDir);
 
 		for (const f of allFiles) {
 			const enabled = enabledByUser.has(f);
@@ -2529,7 +2551,7 @@ export class DefaultPackageManager implements PackageManager {
 		}
 
 		const { allFiles } = this.collectManifestFiles(packageRoot, resourceType);
-		const enabledByUser = applyAutoloadDisabledPatterns(allFiles, userPatterns, packageRoot);
+		const enabledByUser = applyAutoloadDisabledPatterns(allFiles, userPatterns, packageRoot, this.homeDir);
 		for (const [filePath, enabled] of enabledByUser) {
 			this.addResource(target, filePath, metadata, enabled);
 		}
@@ -2550,7 +2572,9 @@ export class DefaultPackageManager implements PackageManager {
 			const allFiles = this.collectFilesFromManifestEntries(entries, packageRoot, resourceType);
 			const manifestPatterns = entries.filter(isOverridePattern);
 			const enabledByManifest =
-				manifestPatterns.length > 0 ? applyPatterns(allFiles, manifestPatterns, packageRoot) : new Set(allFiles);
+				manifestPatterns.length > 0
+					? applyPatterns(allFiles, manifestPatterns, packageRoot, this.homeDir)
+					: new Set(allFiles);
 			return { allFiles: Array.from(enabledByManifest), enabledByManifest };
 		}
 
@@ -2573,7 +2597,7 @@ export class DefaultPackageManager implements PackageManager {
 
 		const allFiles = this.collectFilesFromManifestEntries(entries, root, resourceType);
 		const patterns = entries.filter(isOverridePattern);
-		const enabledPaths = applyPatterns(allFiles, patterns, root);
+		const enabledPaths = applyPatterns(allFiles, patterns, root, this.homeDir);
 
 		for (const f of allFiles) {
 			if (enabledPaths.has(f)) {
@@ -2609,7 +2633,7 @@ export class DefaultPackageManager implements PackageManager {
 		const allFiles = this.collectFilesFromPaths(resolvedPlain, resourceType);
 
 		// Determine which files are enabled based on patterns
-		const enabledPaths = applyPatterns(allFiles, patterns, baseDir);
+		const enabledPaths = applyPatterns(allFiles, patterns, baseDir, this.homeDir);
 
 		// Add all files with their enabled state
 		for (const f of allFiles) {
@@ -2662,7 +2686,7 @@ export class DefaultPackageManager implements PackageManager {
 			prompts: join(projectBaseDir, "prompts"),
 			themes: join(projectBaseDir, "themes"),
 		};
-		const userAgentsSkillsDir = join(getHomeDir(), ".agents", "skills");
+		const userAgentsSkillsDir = join(this.homeDir ?? getHomeDir(), ".agents", "skills");
 		const projectTrusted = this.settingsManager.isProjectTrusted();
 		const projectAgentsSkillDirs = projectTrusted
 			? collectAncestorAgentsSkillDirs(this.cwd).filter((dir) => !pathsEqual(dir, userAgentsSkillsDir))
@@ -2677,7 +2701,7 @@ export class DefaultPackageManager implements PackageManager {
 		) => {
 			const target = this.getTargetMap(accumulator, resourceType);
 			for (const path of paths) {
-				const enabled = isEnabledByOverrides(path, overrides, baseDir);
+				const enabled = isEnabledByOverrides(path, overrides, baseDir, this.homeDir);
 				this.addResource(target, path, metadata, enabled);
 			}
 		};
@@ -2843,6 +2867,7 @@ export class DefaultPackageManager implements PackageManager {
 
 	private toResolvedPaths(accumulator: ResourceAccumulator): ResolvedPaths {
 		const mapToResolved = (
+			resourceType: ResourceType,
 			entries: Map<string, { metadata: PathMetadata; enabled: boolean }>,
 		): ResolvedResource[] => {
 			const resolved = Array.from(entries.entries()).map(([path, { metadata, enabled }]) => ({
@@ -2854,6 +2879,15 @@ export class DefaultPackageManager implements PackageManager {
 
 			const seen = new Set<string>();
 			return resolved.filter((entry) => {
+				if (
+					resourceType === "skills" &&
+					entry.metadata.scope === "project" &&
+					entry.metadata.origin === "top-level" &&
+					this.projectSkillPathFilter &&
+					!this.projectSkillPathFilter(entry.path)
+				) {
+					return false;
+				}
 				const pathKey = getResourcePathKey(entry.path);
 				if (seen.has(pathKey)) return false;
 				seen.add(pathKey);
@@ -2862,10 +2896,10 @@ export class DefaultPackageManager implements PackageManager {
 		};
 
 		return {
-			extensions: mapToResolved(accumulator.extensions),
-			skills: mapToResolved(accumulator.skills),
-			prompts: mapToResolved(accumulator.prompts),
-			themes: mapToResolved(accumulator.themes),
+			extensions: mapToResolved("extensions", accumulator.extensions),
+			skills: mapToResolved("skills", accumulator.skills),
+			prompts: mapToResolved("prompts", accumulator.prompts),
+			themes: mapToResolved("themes", accumulator.themes),
 		};
 	}
 

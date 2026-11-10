@@ -207,6 +207,7 @@ export {
 	defineTool,
 	discoverAndLoadExtensions,
 	ExtensionRunner,
+	ExtensionStartupError,
 	isBashToolResult,
 	isEditToolResult,
 	isFindToolResult,
@@ -242,6 +243,7 @@ export {
 export type {
 	PackageInstallFailure,
 	PackageManager,
+	PackageManagerOptions,
 	PathMetadata,
 	ProgressCallback,
 	ProgressEvent,
@@ -249,7 +251,12 @@ export type {
 	ResolvedResource,
 } from "./core/package-manager.ts";
 export { DefaultPackageManager } from "./core/package-manager.ts";
-export type { ResourceCollision, ResourceDiagnostic, ResourceLoader } from "./core/resource-loader.ts";
+export type {
+	DefaultResourceLoaderOptions,
+	ResourceCollision,
+	ResourceDiagnostic,
+	ResourceLoader,
+} from "./core/resource-loader.ts";
 export { DefaultResourceLoader, loadProjectContextFiles } from "./core/resource-loader.ts";
 // SDK for programmatic usage
 export {
@@ -405,6 +412,7 @@ export {
 } from "./core/trust-manager.ts";
 export {
 	type ModelRoute,
+	type ModelRouteContext,
 	type ModelRouteReason,
 	type ModelRouteRequest,
 	VIRTUAL_MODEL_STATE_ENTRY,

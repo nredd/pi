@@ -100,6 +100,8 @@ describe("regression #8724: in-memory fork during an active tool turn", () => {
 		]);
 		await runtime.session.prompt("next prompt");
 
-		expect(capturedRoles).toEqual(["system", "system", "user"]);
+		// The replacement runtime registers no tools, so the unregistered-tools notice (a user-role
+		// message in the request) precedes the prompt. The aborted turn is still absent.
+		expect(capturedRoles).toEqual(["system", "system", "user", "user"]);
 	});
 });

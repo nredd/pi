@@ -1471,7 +1471,7 @@ function buildParams(
 		cacheControl,
 		compat.allowEmptySignature,
 		effortMessages ? model.provider : undefined,
-		nativeToolChanges ? convertToolDefinitions : undefined,
+		nativeToolChanges ? { convert: convertToolDefinitions, initial: initialTools } : undefined,
 	);
 	const activeEffort = options?.effort ?? "high";
 	const betaFeatures = getBetaFeatures(model, context, options, {
@@ -1611,6 +1611,13 @@ function convertToolResult(msg: ToolResultMessage, content = msg.content): Conte
 	};
 }
 
+interface NativeToolChanges {
+	/** Converts tool definitions for `tool_addition` blocks. */
+	convert: (tools: Tool[]) => BetaTool[];
+	/** Tools declared in the top-level request field. */
+	initial: readonly Tool[];
+}
+
 interface ConvertedAnthropicMessages {
 	messages: MessageParam[];
 	assistantLevels: Map<number, AnthropicEffort>;
@@ -1622,8 +1629,8 @@ function convertMessages(
 	cacheControl?: CacheControlEphemeral,
 	allowEmptySignature = false,
 	managedProvider?: string,
-	/** Converts tool definitions for native `tool_addition` blocks; undefined when tool changes are not native. */
-	convertToolDefinitions?: (tools: Tool[]) => BetaTool[],
+	/** Native `tool_addition`/`tool_removal` support; undefined when tool changes are not native. */
+	nativeTools?: NativeToolChanges,
 ): ConvertedAnthropicMessages {
 	const params: MessageParam[] = [];
 	const assistantLevels = new Map<number, AnthropicEffort>();
@@ -1635,6 +1642,9 @@ function convertMessages(
 	// also mirrors where the managed-effort system messages are inserted. As a result an
 	// update placed before a user message in the transcript lands after it on the wire.
 	const pendingSystemMessages: MessageParam[] = [];
+	// Names this request has declared so far: the top-level initial tools, then each addition
+	// minus each removal, in order.
+	const declared = new Set(nativeTools?.initial.map((tool) => tool.name));
 	const flushPendingSystemMessages = (): void => {
 		params.push(...pendingSystemMessages);
 		pendingSystemMessages.length = 0;
@@ -1649,18 +1659,24 @@ function convertMessages(
 			const text = renderSystemMessageUpdate(msg);
 			const blocks: ContentBlockParam[] = [];
 			if (text.length > 0) blocks.push({ type: "text", text: sanitizeSurrogates(text) });
-			if (convertToolDefinitions) {
+			if (nativeTools) {
 				const added = msg.toolsAdded ?? [];
 				const redefined = new Set(added.map((tool) => tool.name));
 				for (const tool of msg.toolsRemoved ?? []) {
 					// A new definition under the same name replaces the old one, so no removal is needed.
 					if (redefined.has(tool.name)) continue;
+					// Anthropic rejects a removal of a tool this request never declared
+					// (`tool_reference_unresolved`). A request-time projection can produce one, e.g. a
+					// `context_with_system` handler that hides an inactive tool's earlier addition but
+					// keeps its later removal. Withdrawing an undeclared tool changes nothing, so skip it.
+					if (!declared.delete(tool.name)) continue;
 					blocks.push({
 						type: "tool_removal",
 						tool: { type: "tool_reference", name: isOAuthToken ? toClaudeCodeName(tool.name) : tool.name },
 					});
 				}
-				for (const definition of convertToolDefinitions(added)) {
+				for (const tool of added) declared.add(tool.name);
+				for (const definition of nativeTools.convert(added)) {
 					blocks.push({ type: "tool_addition", tool: { type: "tool_definition", definition } });
 				}
 			}

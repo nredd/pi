@@ -530,7 +530,7 @@ describe("ExtensionStartupError", () => {
 				tools: [waitTool],
 				extensionFactories: [
 					(pi) => {
-						pi.on("session_start", async (event) => {
+						pi.on("session_start", async () => {
 							if (!rebinding.on) return;
 							reloadStarted?.();
 							await new Promise<void>((resolve) => {
@@ -584,7 +584,7 @@ describe("ExtensionStartupError", () => {
 				useModelRuntimeStream: true,
 				extensionFactories: [
 					(pi) => {
-						pi.on("session_start", async (event) => {
+						pi.on("session_start", async () => {
 							if (!state.fatal) return;
 							reloadStarted?.();
 							await new Promise<void>((resolve) => {

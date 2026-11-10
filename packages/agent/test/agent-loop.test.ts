@@ -2198,7 +2198,14 @@ describe("runToolCall", () => {
 			isError: true,
 		});
 		expect(await runToolCall(call("d", "missing", {}), options)).toMatchObject({
-			result: { content: [{ type: "text", text: "Tool missing not found" }] },
+			result: {
+				content: [
+					{
+						type: "text",
+						text: "Tool missing is not available in this session: it is not registered, or the active profile or an exclusion removed it",
+					},
+				],
+			},
 			isError: true,
 		});
 		// Error results keep their details.

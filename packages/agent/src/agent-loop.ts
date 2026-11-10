@@ -732,7 +732,9 @@ async function prepareToolCall(
 	if (!tool) {
 		return {
 			kind: "immediate",
-			result: createErrorToolResult(`Tool ${toolCall.name} not found`),
+			result: createErrorToolResult(
+				`Tool ${toolCall.name} is not available in this session: it is not registered, or the active profile or an exclusion removed it`,
+			),
 			isError: true,
 		};
 	}

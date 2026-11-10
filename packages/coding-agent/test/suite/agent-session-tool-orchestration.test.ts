@@ -97,7 +97,12 @@ describe("AgentSession tool orchestration", () => {
 			(message): message is ToolResultMessage => message.role === "toolResult",
 		);
 		if (!result) throw new Error("No tool result");
-		expect(result.content).toEqual([{ type: "text", text: "helped | echo: hi | Tool run_tools not found" }]);
+		expect(result.content).toEqual([
+			{
+				type: "text",
+				text: "helped | echo: hi | Tool run_tools is not available in this session: it is not registered, or the active profile or an exclusion removed it",
+			},
+		]);
 		const parent = result.toolCallId;
 		expect(toolCalls).toEqual(["run_tools:top", `helper:${parent}`, `echo:${parent}`]);
 		expect(result.nestedCalls?.calls.map((call) => [call.id, call.name, call.status])).toEqual([

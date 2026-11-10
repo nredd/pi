@@ -85,11 +85,17 @@ export const codemodeRenderers: Pick<
 		}
 		component.addChild(new Text(title, 0, 0));
 		if (code) {
-			const state = context.state as CodemodeRenderState;
-			state.scriptHighlighter ??= new CodeHighlighter();
-			const highlighted = state.scriptHighlighter
-				.highlight(replaceTabs(code.replace(/\r/g, "").trimEnd()), "javascript")
-				.join("\n");
+			const script = replaceTabs(code.replace(/\r/g, "").trimEnd());
+			let highlighted: string;
+			if (context.probe) {
+				// A probe compares row text and each probe has fresh state, so highlighting it would
+				// run again on every disclosure check.
+				highlighted = script;
+			} else {
+				const state = context.state as CodemodeRenderState;
+				state.scriptHighlighter ??= new CodeHighlighter();
+				highlighted = state.scriptHighlighter.highlight(script, "javascript").join("\n");
+			}
 			component.addChild(
 				context.expanded
 					? new Text(highlighted, 0, 0)

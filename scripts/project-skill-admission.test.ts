@@ -227,7 +227,7 @@ test("missing-source inspection skips installation before admission", async (t) 
 		return "skip";
 	});
 	assert.deepEqual(seen, [source]);
-	assert.deepEqual(result, { extensions: [], skills: [], prompts: [], themes: [] });
+	assert.deepEqual(result, { extensions: [], skills: [], prompts: [], themes: [], installFailures: [] });
 	assert.equal(called, false);
 	assert.equal(existsSync(join(f.cwd, ".pi", "git")), false);
 });

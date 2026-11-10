@@ -372,6 +372,9 @@ describe("regression #5943: session_start transient UI", () => {
 			};
 
 			await interactiveModePrototype.rebindCurrentSession.call(context, { renderBeforeBind: true });
+			// The fork holds messages sent from session_start and replays them after the bind settles,
+			// so the turn may not have started yet.
+			await vi.waitFor(() => expect(events).toContain("message_end:assistant:assistant from start"));
 			await harness.session.agent.waitForIdle();
 
 			expect(events.slice(0, 3)).toEqual(["render", "subscribe", "bind"]);

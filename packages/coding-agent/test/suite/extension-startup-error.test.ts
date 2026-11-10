@@ -500,7 +500,9 @@ describe("ExtensionStartupError", () => {
 			expect(harness.faux.state.callCount).toBe(0);
 		});
 
-		it("waits for pending reload startup before an in-flight turn's next request", async () => {
+		// SKIPPED in the upstream sync: upstream rejects reload while a turn or compaction runs (earendil-works/pi#9222),
+		// so this reload-in-flight state is unreachable. See nredd/pi#23 for the owner decision.
+		it.skip("waits for pending reload startup before an in-flight turn's next request", async () => {
 			let releaseTool: (() => void) | undefined;
 			let toolStarted: (() => void) | undefined;
 			const toolRan = new Promise<void>((resolve) => {
@@ -564,7 +566,9 @@ describe("ExtensionStartupError", () => {
 			}
 		});
 
-		it("rechecks the startup latch after context handlers before streaming", async () => {
+		// SKIPPED in the upstream sync: upstream rejects reload while a turn or compaction runs (earendil-works/pi#9222),
+		// so this reload-in-flight state is unreachable. See nredd/pi#23 for the owner decision.
+		it.skip("rechecks the startup latch after context handlers before streaming", async () => {
 			const state = { fatal: false };
 			let releaseContext: (() => void) | undefined;
 			let contextStarted: (() => void) | undefined;
@@ -660,7 +664,9 @@ describe("ExtensionStartupError", () => {
 			expect(harness.faux.state.callCount).toBe(0);
 		});
 
-		it("does not send a compaction summary paused in auth when a fatal reload settles", async () => {
+		// SKIPPED in the upstream sync: upstream rejects reload while a turn or compaction runs (earendil-works/pi#9222),
+		// so this reload-in-flight state is unreachable. See nredd/pi#23 for the owner decision.
+		it.skip("does not send a compaction summary paused in auth when a fatal reload settles", async () => {
 			// Summaries build their own request options outside the agent loop; they must carry
 			// the same last-moment gate as a conversational request.
 			const state = { fatal: false };
@@ -731,7 +737,9 @@ describe("ExtensionStartupError", () => {
 		});
 
 		// Refs nredd/pi-harness#581: pending startup still gates dispatch, and completed reload stales the old summary.
-		it("refuses a compaction summary paused in the header transform across its requester's reload", async () => {
+		// SKIPPED in the upstream sync: upstream rejects reload while a turn or compaction runs (earendil-works/pi#9222),
+		// so this reload-in-flight state is unreachable. See nredd/pi#23 for the owner decision.
+		it.skip("refuses a compaction summary paused in the header transform across its requester's reload", async () => {
 			// No abort fires for a successful reload. Keep the startup gate, then reject the
 			// old request's generation rather than dispatching when startup finishes.
 			let finishStartup: (() => void) | undefined;

@@ -208,10 +208,14 @@ describe("AssistantMessageComponent", () => {
 			undefined,
 			"",
 		);
-		expect(withText.render(80).map((line) => stripAnsi(line).trim())).toEqual(["", "answer"]);
+		// A hidden run without a label adds no row and no rule of its own: one rule opens the answer.
+		const rows = withText.render(80).map((line) => stripAnsi(line).trim());
+		expect(rows).toHaveLength(2);
+		expect(isEntryRule(rows[0] ?? "")).toBe(true);
+		expect(rows[1]).toBe("│ answer");
 	});
 
-	test("keeps label row and spacing for hidden thinking with a label", () => {
+	test("keeps label row and rules for hidden thinking with a label", () => {
 		initTheme("dark");
 
 		const component = new AssistantMessageComponent(
@@ -221,7 +225,12 @@ describe("AssistantMessageComponent", () => {
 			]),
 			true,
 		);
-		expect(component.render(80).map((line) => stripAnsi(line).trim())).toEqual(["", "Thinking...", "", "answer"]);
+		const rows = component.render(80).map((line) => stripAnsi(line).trim());
+		expect(rows).toHaveLength(4);
+		expect(isEntryRule(rows[0] ?? "")).toBe(true);
+		expect(rows[1]).toBe("▸ Thinking · reasoning");
+		expect(isEntryRule(rows[2] ?? "")).toBe(true);
+		expect(rows[3]).toBe("│ answer");
 	});
 
 	test("collapses individual thinking runs when clicked", () => {

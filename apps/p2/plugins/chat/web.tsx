@@ -8,6 +8,7 @@ import {
 	grantMode,
 	type Held,
 	isChordError,
+	keptIn,
 	liveIn,
 	serveKeyed,
 	UI_LINGER,
@@ -47,6 +48,7 @@ import {
 	type ModelChoice,
 	ModelPicker,
 	modelName,
+	NEW_SESSION,
 	navigate,
 	OneShotAgents,
 	OpenConversation,
@@ -110,8 +112,11 @@ import { createPortal } from "react-dom";
 import { Drafts } from "../drafts/contract.ts";
 import { Envs } from "../envs/contract.ts";
 import { DirectoryPicker, directoryPickerLayer } from "../envs/contract.web.tsx";
+import { GlyphIcon } from "../glyphs/GlyphIcon.tsx";
+import { placeSeed } from "../glyphs/seed.ts";
 import { Models } from "../models/contract.ts";
 import type { ResourceSnapshot } from "../models/resources.ts";
+import { Projects } from "../projects/contract.ts";
 import { type Session, Sessions } from "../sessions/contract.ts";
 import { SessionMetrics, SessionStatus, WorkerControl } from "../status/contract.ts";
 import { type Child, conversationLocation, SubagentControl, Subagents } from "../subagents/contract.ts";
@@ -228,6 +233,8 @@ type PageObjects = {
 	readonly models: Held<typeof Models> | undefined;
 	/** The owner's only. */
 	readonly envs: Held<typeof Envs> | undefined;
+	/** The owner's only: projects.json and the sessions' projects, for the top bar's project glyph. */
+	readonly projects: Held<typeof Projects> | undefined;
 };
 
 const PageObjectsContext = createContext<PageObjects | undefined>(undefined);
@@ -597,8 +604,19 @@ function TopBar({
 	const nav = useNavigation();
 	const route = useRoute();
 	// Only the owner reads environments (`PageObjects.envs`): guests see the location without the sandbox lock.
-	const envs = useReadable(usePageObjects().envs?.envs);
+	const objects = usePageObjects();
+	const envs = useReadable(objects.envs?.envs);
 	const sandboxed = envs?.find((env) => env.name === session?.env)?.config.type === "gondolin";
+	// The project glyph the sidebar shows for this session (guests read no projects: the path's own glyph).
+	const kept = keptIn(objects.projects, "owner");
+	const projects = useReadable(kept?.projects);
+	const memberships = useReadable(kept?.sessions);
+	const glyph = session && (
+		<GlyphIcon
+			seed={placeSeed(projects ?? [], session.env ?? null, session.cwd, memberships?.[session.id])}
+			size={11}
+		/>
+	);
 	const lock = sandboxed && (
 		<span className="title-lock">
 			<LockIcon size={11} />
@@ -608,6 +626,7 @@ function TopBar({
 		<header className="topbar">
 			<button type="button" className="icon-button menu sidebar-open" onClick={openSidebar} aria-label="Sessions">
 				<MenuIcon />
+				<Slot name="menu-badge" />
 			</button>
 			<div className="title">
 				{child ? (
@@ -639,12 +658,16 @@ function TopBar({
 									) : (
 										<>
 											{lock}
+											{glyph}
 											{locationLabel(session.env, session.cwd)}
 										</>
 									)}
 								</button>
 							) : (
-								<p>{locationLabel(session.env, session.cwd)}</p>
+								<p>
+									{glyph}
+									{locationLabel(session.env, session.cwd)}
+								</p>
 							))}
 					</>
 				)}
@@ -765,7 +788,7 @@ function SessionChat({ sessionId, conversationId }: { sessionId: string; convers
 			// What this device kept of a session the server no longer has goes with it (an archived one stays).
 			if (!session) void forgetSession(sessionId);
 			toast(session ? "Session is archived" : "Session not found");
-			void nav.replace(conversationRoute(current, undefined), current);
+			void nav.replace(NEW_SESSION, current);
 		}
 	}, [listed, session, nav, sessionId, toast]);
 	// Who this browser is, as the server last said: kept while reconnecting (`useOwner`), so the composer stays.
@@ -1766,9 +1789,10 @@ function Main() {
 	const status = useObject(SessionStatus, {});
 	const models = useObject(Models, owner ? {} : undefined);
 	const envs = useObject(Envs, owner ? {} : undefined);
+	const projects = useObject(Projects, owner ? {} : undefined);
 	const objects = useMemo(
-		() => ({ sessions, access, subagents, status, models, envs }),
-		[sessions, access, subagents, status, models, envs],
+		() => ({ sessions, access, subagents, status, models, envs, projects }),
+		[sessions, access, subagents, status, models, envs, projects],
 	);
 	const grant = useReadable(liveIn(access, "guest")?.grant);
 	// A guest stays within the sessions shared with it; anywhere else it lands in the one shared or joined last.
@@ -1800,8 +1824,11 @@ function Main() {
 							<SessionChat key={conversation} sessionId={route.session} conversationId={shownConversation} />
 						</Slot>
 					</Slot>
-				) : (
+				) : route.newSession ? (
 					<NewSession />
+				) : (
+					// Home: what a plugin shows there (the Familiar opens its session), else the new-session screen.
+					<Slot name="home" fallback={<NewSession />} />
 				)}
 				{/* The transcript of the screen above goes into the view (`useChatScreen`), the dock floats over its bottom. */}
 				<div className="chat">

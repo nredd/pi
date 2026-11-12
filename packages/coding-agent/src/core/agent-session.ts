@@ -922,6 +922,17 @@ export class AgentSession {
 		return this._nestedToolCalls.execute(parentToolCallId, name, args, options);
 	}
 
+	/** Register provider-visible instructions at each committed input admission, never during previews. */
+	private _trackPendingInput(entryId: string): void {
+		const entry = this.sessionManager.getEntry(entryId);
+		if (
+			entry?.type === "custom_message" ||
+			(entry?.type === "message" && (entry.message.role === "user" || entry.message.role === "system"))
+		) {
+			this._pendingInputEntryIds.add(entryId);
+		}
+	}
+
 	/** Release only the input captured by this request, not new messages admitted during dispatch. */
 	private _markInputDispatched(entryIds: readonly string[]): void {
 		for (const id of entryIds) this._pendingInputEntryIds.delete(id);
@@ -1221,6 +1232,7 @@ export class AgentSession {
 
 	private _commitBoundaryDrafts(drafts: SessionBoundaryDraft[]): void {
 		const appended = this._applyBoundaryDrafts(this.sessionManager, drafts);
+		for (const entry of appended) this._trackPendingInput(entry.id);
 		this._refreshFinalizedContext();
 		for (const entry of appended) this._emit({ type: "entry_appended", entry });
 	}
@@ -1381,9 +1393,7 @@ export class AgentSession {
 			}
 			if (entryId) {
 				this._entryIdsByMessage.set(event.message, entryId);
-				if (event.message.role === "user" || event.message.role === "custom" || event.message.role === "system") {
-					this._pendingInputEntryIds.add(entryId);
-				}
+				this._trackPendingInput(entryId);
 			}
 			// Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere
 
@@ -2694,7 +2704,7 @@ export class AgentSession {
 			appMessage.display,
 			appMessage.details,
 		);
-		this._pendingInputEntryIds.add(entryId);
+		this._trackPendingInput(entryId);
 		this._refreshFinalizedContext();
 		this._emit({ type: "message_start", message: appMessage });
 		this._emit({ type: "message_end", message: appMessage });

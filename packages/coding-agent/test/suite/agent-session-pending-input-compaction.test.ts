@@ -54,6 +54,84 @@ describe("pending input during threshold compaction", () => {
 	});
 
 	for (const routed of [false, true]) {
+		it.each(["turn_end", "agent_before_settle"] as const)(
+			`preserves the whole ${routed ? "routed" : "direct"} %s boundary batch until dispatch`,
+			async (boundary) => {
+				const instruction = "VERBATIM_BOUNDARY_SENTINEL";
+				const context = `BOUNDARY_CONTEXT:${"x".repeat(8000)}`;
+				let admitted = false;
+				let dispatched = false;
+				let summarizedPending = false;
+				let summarizedAfterDispatch = false;
+				const h = await createHarness({
+					tools: [],
+					useModelRuntimeStream: true,
+					settings: { compaction: { targetTokens: 100, keepRecentTokens: 1 } },
+					extensionFactories: [
+						(pi) => {
+							pi.registerVirtualModel({
+								provider: "router",
+								id: "boundary",
+								name: "Boundary",
+								route(_request, ctx) {
+									return { model: ctx.modelRegistry.find("faux", "faux-1")!, thinkingLevel: "off" };
+								},
+							});
+							const admit = () => {
+								if (admitted) return;
+								admitted = true;
+								return {
+									entries: [instruction, context].map((content) => ({
+										type: "custom_message" as const,
+										customType: "next",
+										content,
+										display: false,
+									})),
+									continue: true,
+								};
+							};
+							if (boundary === "turn_end") pi.on("turn_end", admit);
+							else pi.on("agent_before_settle", admit);
+							pi.on("session_before_compact", (event) => {
+								const summarized = JSON.stringify([
+									event.preparation.messagesToSummarize,
+									event.preparation.turnPrefixMessages,
+								]);
+								if (!dispatched)
+									summarizedPending ||= summarized.includes(instruction) || summarized.includes(context);
+								else summarizedAfterDispatch ||= summarized.includes(instruction);
+								return {
+									compaction: {
+										summary: "checkpoint",
+										firstKeptEntryId: event.preparation.firstKeptEntryId,
+										tokensBefore: event.preparation.tokensBefore,
+									},
+								};
+							});
+						},
+					],
+				});
+				harnesses.push(h);
+				if (routed) await h.session.setModel(h.session.modelRuntime.getModel("router", "boundary")!);
+				let actualInput: string[] = [];
+				h.setResponses([
+					fauxAssistantMessage("one"),
+					(request) => {
+						dispatched = true;
+						actualInput = request.messages.map(getMessageText);
+						return fauxAssistantMessage("two", { timestamp: Date.now() + 1000 });
+					},
+				]);
+				await h.session.prompt("start");
+				expect(actualInput).toContain(instruction);
+				expect(actualInput).toContain(context);
+				expect(summarizedPending).toBe(false);
+				expect(summarizedAfterDispatch).toBe(true);
+				expect(h.faux.state.callCount).toBe(2);
+				expect(h.eventsOfType("compaction_start").length).toBeLessThanOrEqual(4);
+			},
+		);
+
 		for (const history of [false, true]) {
 			it.each(["user", "custom"] as const)(
 				`preserves exact ${routed ? "routed" : "direct"} %s input with history=${history}`,

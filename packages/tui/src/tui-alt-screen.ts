@@ -151,6 +151,21 @@ function selectionOwner(geometry: TranscriptGeometry, point: SelectionPoint) {
 	return [...geometry].findLast(([, box]) => box.row <= point.row && point.row < box.row + box.height);
 }
 
+/** Include every selected source owner, ignoring components that contribute decoration only. */
+function selectionOwners(geometry: TranscriptGeometry, range: SelectionRange, lines: readonly string[]): Component[] {
+	return [...geometry].flatMap(([component, box]) => {
+		const start = Math.max(box.row, range.start.row);
+		const end = Math.min(box.row + box.height, range.end.row + 1);
+		return start < end && lines.slice(start, end).some((line) => selectionRowText(line).length > 0)
+			? [component]
+			: [];
+	});
+}
+
+function sameSelectionOwners(previous: readonly Component[], next: readonly Component[]): boolean {
+	return previous.length === next.length && previous.every((owner, index) => owner === next[index]);
+}
+
 interface ClickTarget {
 	timestamp: number;
 	count: number;
@@ -584,13 +599,13 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 	}
 
 	/** Root-layout geometry shared by canonical navigation and viewport preservation. */
-	private resolveTranscriptGeometry(layout: LayoutFrame): TranscriptGeometry {
+	private resolveTranscriptGeometry(layout: LayoutFrame, leavesOnly = false): TranscriptGeometry {
 		const scrollBox = getScrollViewBox(layout, layout.primaryScrollView ?? this.implicitScrollView);
 		const content = scrollBox?.children[0];
 		const geometry = new Map<Component, { row: number; height: number }>();
 		if (!content) return geometry;
 		const visit = (box: LayoutBox): void => {
-			if (box.rect.height > 0)
+			if (box.rect.height > 0 && (!leavesOnly || box.children.length === 0))
 				geometry.set(box.component, { row: box.rect.y - content.rect.y, height: box.rect.height });
 			for (const child of box.children) visit(child);
 		};
@@ -1872,12 +1887,13 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 			if (!newBox) return undefined;
 			const before = selectionContent(previous.slice(oldBox.row, oldBox.row + oldBox.height));
 			const after = selectionContent(next.slice(newBox.row, newBox.row + newBox.height));
-			if (before.text !== after.text) return undefined;
 			const oldRow = before.rows[point.row - oldBox.row];
 			if (!oldRow) return undefined;
 			const cell = getGraphemeCellRange(previous[point.row] ?? "", point.col);
 			const column = end ? (point.boundary ? point.col : (cell?.end ?? point.col + 1)) : (cell?.start ?? point.col);
 			const offset = oldRow.offset + sliceByColumn(oldRow.text, 0, Math.max(0, column - oldRow.column), true).length;
+			// Appends after this anchor are harmless; changed source preceding it is not a safe offset mapping.
+			if (before.text.slice(0, offset) !== after.text.slice(0, offset)) return undefined;
 			const row = after.rows.findLastIndex((candidate) => candidate.offset <= offset);
 			const target = after.rows[row];
 			if (!target || offset > target.offset + target.text.length) return undefined;
@@ -1894,7 +1910,14 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 			return start && end ? { start, end } : undefined;
 		};
 		const mapped = mapRange(selection);
-		if (!mapped || this.getActiveSelectionText(selection) !== this.getActiveSelectionText(mapped, layout))
+		if (
+			!mapped ||
+			!sameSelectionOwners(
+				selectionOwners(oldGeometry, selection, previous),
+				selectionOwners(newGeometry, mapped, next),
+			) ||
+			this.getActiveSelectionText(selection) !== this.getActiveSelectionText(mapped, layout)
+		)
 			return false;
 		const initial = this.selectionInitialRange ? mapRange(this.selectionInitialRange) : undefined;
 		if (this.selectionInitialRange && !initial) return false;
@@ -1966,14 +1989,16 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		if (selection?.start.scrollView && this.currentLayout) {
 			const previous = getScrollViewBox(this.currentLayout, selection.start.scrollView)?.scrollContentLines;
 			const next = getScrollViewBox(nextLayout, selection.start.scrollView)?.scrollContentLines;
-			const previousGeometry = this.resolveTranscriptGeometry(this.currentLayout);
-			const nextGeometry = this.resolveTranscriptGeometry(nextLayout);
+			const previousGeometry = this.resolveTranscriptGeometry(this.currentLayout, true);
+			const nextGeometry = this.resolveTranscriptGeometry(nextLayout, true);
 			const ownersUnchanged =
 				selection.start.scrollView !== this.getPrimaryScrollView() ||
-				[selection.start, selection.end].every((point) => {
-					const owner = selectionOwner(previousGeometry, point)?.[0];
-					return owner !== undefined && owner === selectionOwner(nextGeometry, point)?.[0];
-				});
+				(previous !== undefined &&
+					next !== undefined &&
+					sameSelectionOwners(
+						selectionOwners(previousGeometry, selection, previous),
+						selectionOwners(nextGeometry, selection, next),
+					));
 			if (
 				!ownersUnchanged ||
 				!next ||

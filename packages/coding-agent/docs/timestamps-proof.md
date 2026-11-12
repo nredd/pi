@@ -61,7 +61,10 @@ checks, not a claim about the desktop clipboard.
 
 Fullscreen selection validation compares copy-visible content, not timestamp/gutter text.
 When rows move or wrap, it maps source offsets within the same native layout components and
-requires the complete selected text to remain equal. Changed selected content, collapsed
-selected detail or replaced owners invalidate selection rather than retaining stale coordinates.
+requires the complete selected text and selected source-owner sequence to remain equal.
+Source appended after an anchor may stream without invalidating it; changed source before an
+anchor is not a safe offset mapping. Changed selected content, collapsed selected detail or
+replaced owners (including intermediate owners with identical text) invalidate selection rather
+than retaining stale coordinates.
 `packages/tui/test/tui-alt-screen-selection-reflow.test.ts` covers native source mapping,
 Unicode/hard wraps, preceding layout changes, streaming tail updates and navigation.

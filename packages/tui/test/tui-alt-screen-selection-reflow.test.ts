@@ -10,8 +10,9 @@ async function selectedFixture(text = "START alpha beta gamma delta epsilon zeta
 	const terminal = new VirtualTerminal(80, 40);
 	const before = new Text("prefix ".repeat(20), 0, 0);
 	const entry = new Text(text, 0, 0);
+	const middle = new Text("middle", 0, 0);
 	const tail = new Text("tail", 0, 0);
-	const document = new VStack([before, entry, tail]);
+	const document = new VStack([before, middle, entry, tail]);
 	const scroll = new ScrollView(document, { primary: true, follow: "end" });
 	const copies: string[] = [];
 	const tui = new TuiAltScreen(terminal, false, undefined, {
@@ -25,6 +26,7 @@ async function selectedFixture(text = "START alpha beta gamma delta epsilon zeta
 	tui.setTranscriptNavigationTargets([{ identity: entry, component: entry }]);
 	tui.start();
 	const paint = async () => {
+		tui.requestRender();
 		tui.renderNow();
 		await terminal.flush();
 	};
@@ -46,6 +48,7 @@ async function selectedFixture(text = "START alpha beta gamma delta epsilon zeta
 		before,
 		entry,
 		tail,
+		middle,
 		document,
 		copies,
 		tui,
@@ -112,7 +115,55 @@ it("clears selection after same-text component replacement", async () => {
 	try {
 		f.document.clear();
 		f.document.addChild(f.before);
+		f.document.addChild(f.middle);
 		f.document.addChild(new Text(f.selected, 0, 0));
+		f.document.addChild(f.tail);
+		await f.paint();
+		assert.equal(f.tui.hasActiveSelection(), false);
+		assert.equal(f.copies.length, 1);
+	} finally {
+		f.dispose();
+	}
+});
+
+// #35: extending unselected source after an endpoint is not a change to selected source.
+it("retains a partial selection while its endpoint component streams an unselected suffix", async () => {
+	const f = await selectedFixture("START END");
+	try {
+		const row = f.terminal.getViewport().findIndex((line) => line.startsWith("START"));
+		f.terminal.sendInput(`\x1b[<0;1;${row + 1}M`);
+		f.terminal.sendInput(`\x1b[<32;5;${row + 1}M`);
+		f.terminal.sendInput(`\x1b[<0;5;${row + 1}m`);
+		await f.paint();
+		assert.equal(await f.tui.copyActiveSelectionToClipboard(), true);
+		assert.equal(f.copies.at(-1), "START");
+		for (const suffix of [" appended", " appended and wrapped ".repeat(5)]) {
+			const count = f.copies.length;
+			f.entry.setText(f.selected + suffix);
+			await f.paint();
+			assert.equal(f.copies.length, count);
+			assert.equal(await f.tui.copyActiveSelectionToClipboard(), true);
+			assert.equal(f.copies.at(-1), "START");
+		}
+	} finally {
+		f.dispose();
+	}
+});
+
+// #35: owner identity belongs to the entire selected range, not just its endpoints.
+it("clears selection when an intermediate owner is replaced with identical text", async () => {
+	const f = await selectedFixture();
+	try {
+		const end = f.terminal.getViewport().findIndex((line) => line.includes("END"));
+		f.terminal.sendInput("\x1b[<0;1;1M");
+		f.terminal.sendInput(`\x1b[<32;80;${end + 1}M`);
+		f.terminal.sendInput(`\x1b[<0;80;${end + 1}m`);
+		await f.paint();
+		assert.equal(f.tui.hasActiveSelection(), true);
+		f.document.clear();
+		f.document.addChild(f.before);
+		f.document.addChild(new Text("middle", 0, 0));
+		f.document.addChild(f.entry);
 		f.document.addChild(f.tail);
 		await f.paint();
 		assert.equal(f.tui.hasActiveSelection(), false);

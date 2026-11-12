@@ -8,8 +8,9 @@ import {
 	type TUI,
 	visibleWidth,
 } from "@earendil-works/pi-tui";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { AssistantMessageComponent } from "../src/modes/interactive/components/assistant-message.ts";
+import { CustomEntryComponent } from "../src/modes/interactive/components/custom-entry.ts";
 import { CustomMessageComponent } from "../src/modes/interactive/components/custom-message.ts";
 import { SkillInvocationMessageComponent } from "../src/modes/interactive/components/skill-invocation-message.ts";
 import { ToolExecutionComponent } from "../src/modes/interactive/components/tool-execution.ts";
@@ -42,6 +43,110 @@ const timestampPattern = /\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{2}:\d{2}/g;
 // nredd/pi#30: decorations occupy framing slots and never replace content components.
 describe("timestamp framing", () => {
 	beforeAll(() => initTheme("dark"));
+
+	// nredd/pi#30: transformed-empty Markdown must not reveal independent entry framing.
+	it.each([false, true])("keeps transformed-empty user content hidden with timestamps %s", (enabled) => {
+		let calls = 0;
+		const component = new UserMessageComponent("hidden", undefined, 1, [
+			() => {
+				calls++;
+				return "";
+			},
+		]);
+		const markdown = component.children.find((child) => child instanceof Markdown)!;
+		const render = vi.spyOn(markdown, "render");
+		component.entryTimestamp.setTime({ messageTimestamp: 0 });
+		component.entryTimestamp.setEnabled(enabled);
+		expect(component.render(80)).toEqual([]);
+		component.entryTimestamp.setEnabled(!enabled);
+		expect(component.render(80)).toEqual([]);
+		expect(calls).toBe(1);
+		expect(render).toHaveBeenCalledTimes(2);
+		expect(component.children).toContain(markdown);
+		expect(component.render(120)).toEqual([]);
+		expect(calls).toBe(2);
+		expect(render).toHaveBeenCalledTimes(3);
+	});
+
+	it.each([false, true])("follows actual transformed user content through reflow with timestamps %s", (enabled) => {
+		const component = new UserMessageComponent("visible at narrow widths", undefined, 1, [
+			(text, context) => (context.availableWidth > 100 ? "" : text),
+		]);
+		component.entryTimestamp.setTime({ messageTimestamp: 0 });
+		component.entryTimestamp.setEnabled(enabled);
+		const visible = component.render(80);
+		expect(visible).toHaveLength(3);
+		expect(visible.join("\n").match(timestampPattern)?.length ?? 0).toBe(enabled ? 1 : 0);
+		expect(component.render(120)).toEqual([]);
+		expect(component.render(80)).toEqual(visible);
+	});
+
+	it.each([false, true])("keeps transformed-empty assistant framing undecorated (multiple=%s)", (multiple) => {
+		let calls = 0;
+		const component = new AssistantMessageComponent(
+			{
+				...message,
+				content: multiple
+					? [
+							{ type: "text", text: "hidden" },
+							{ type: "thinking", thinking: "hidden thought" },
+							{ type: "text", text: "hidden too" },
+						]
+					: [{ type: "text", text: "hidden" }],
+			},
+			false,
+			undefined,
+			undefined,
+			1,
+			[
+				() => {
+					calls++;
+					return "";
+				},
+			],
+		);
+		const baseline = component.render(80);
+		expect(baseline).toHaveLength(multiple ? 2 : 1); // Keep the original separators.
+		component.entryTimestamp.setEnabled(true);
+		expect(component.render(80)).toEqual(baseline);
+		expect(calls).toBe(multiple ? 3 : 1);
+	});
+
+	it.each(["entry", "message"] as const)("keeps empty custom %s framing undecorated", (kind) => {
+		let calls = 0;
+		const body = {
+			render: () => {
+				calls++;
+				return [];
+			},
+			invalidate: () => {},
+		};
+		const component =
+			kind === "entry"
+				? new CustomEntryComponent(
+						{
+							type: "custom",
+							id: "hidden",
+							parentId: null,
+							timestamp: "2020-01-02T03:04:05Z",
+							customType: "example",
+							data: {},
+						},
+						() => body,
+					)
+				: new CustomMessageComponent(
+						{ role: "custom", customType: "example", content: "source", display: true, timestamp: 0 },
+						() => body,
+					);
+		component.setExpanded(true);
+		const baseline = component.render(80);
+		expect(baseline).toHaveLength(1); // Preserve the pre-existing separator, not a timestamp-only entry.
+		expect(calls).toBe(1);
+		component.entryTimestamp.setEnabled(true);
+		calls = 0;
+		expect(component.render(80)).toEqual(baseline);
+		expect(calls).toBe(1);
+	});
 
 	it("uses diagnostic padding for an otherwise empty interrupted assistant entry", () => {
 		const component = new AssistantMessageComponent({ ...message, content: [], stopReason: "aborted" });

@@ -37,6 +37,44 @@ async function toggle(host: InteractiveHarness): Promise<void> {
 
 // nredd/pi#30: real editor, settings, streamed tools and replay on an isolated terminal.
 describe("interactive timestamps", () => {
+	// nredd/pi#30: a transformer-hidden prompt stays hidden through settings and canonical replay.
+	it("does not reveal transformed-away user content through toggles and replay", async () => {
+		const host = await createInteractiveHarness({
+			columns: 120,
+			rows: 40,
+			extensionFactories: [
+				(pi) =>
+					pi.registerMarkdownTransformer((text, context) =>
+						context.messageType === "user" && text === "HIDDEN PROMPT" ? "" : text,
+					),
+			],
+		});
+		try {
+			host.harness.setResponses([fauxAssistantMessage("VISIBLE REPLY", { timestamp: 0 })]);
+			await host.harness.session.prompt("HIDDEN PROMPT");
+			await host.settle();
+			const user = host.harness.session.messages.find((entry) => entry.role === "user");
+			const hiddenLabel = formatEntryTimestamp(user!.timestamp)!;
+			const replyLabel = formatEntryTimestamp(0)!;
+			expect(host.viewport().join("\n")).not.toContain("HIDDEN PROMPT");
+			for (const reload of [false, true]) {
+				if (reload) {
+					host.input("/reload");
+					host.input("\r");
+					await host.settle();
+				}
+				await toggle(host);
+				expect(host.viewport().join("\n")).toContain(replyLabel);
+				expect(host.viewport().join("\n")).not.toContain(hiddenLabel);
+				await toggle(host);
+				expect(host.viewport().join("\n")).not.toContain(replyLabel);
+				expect(host.viewport().join("\n")).not.toContain(hiddenLabel);
+			}
+		} finally {
+			await host.dispose();
+		}
+	});
+
 	it("uses the owning assistant when a provider emits a complete tool call without deltas", async () => {
 		const timestamp = Date.parse("2000-06-01T12:34:56Z");
 		const host = await createInteractiveHarness({

@@ -40,19 +40,13 @@ export class UserMessageComponent extends Container {
 	private rebuild(): void {
 		this.clear();
 		if (!this.text.trim()) return;
-		// Own the existing padding slots so metadata is not inserted into Markdown or its copy text.
-		this.addChild({
-			render: (width) =>
-				this.entryTimestamp.padding(width, this.outputPad, (text) => theme.bg("userMessageBg", text)),
-			invalidate: () => {},
-		});
 		// The Markdown pads and colors its own background: a Box around it would keep a second full-width copy of every
 		// line, with identical output.
 		this.addChild(
 			new Markdown(
 				this.text,
 				this.outputPad,
-				0,
+				1,
 				this.markdownTheme,
 				{
 					color: (content: string) => theme.fg("userMessageText", content),
@@ -65,10 +59,6 @@ export class UserMessageComponent extends Container {
 				},
 			),
 		);
-		this.addChild({
-			render: (width) => [theme.bg("userMessageBg", " ".repeat(width))],
-			invalidate: () => {},
-		});
 	}
 
 	override render(width: number): string[] {
@@ -77,7 +67,10 @@ export class UserMessageComponent extends Container {
 			return lines;
 		}
 
-		lines[0] = OSC133_ZONE_START + lines[0];
+		// Decorate Markdown's existing padding only after it actually rendered content.
+		lines[0] =
+			OSC133_ZONE_START +
+			this.entryTimestamp.padding(width, this.outputPad, (text) => theme.bg("userMessageBg", text))[0];
 		lines[lines.length - 1] = OSC133_ZONE_END + OSC133_ZONE_FINAL + lines[lines.length - 1];
 		return lines;
 	}

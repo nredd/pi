@@ -12,6 +12,7 @@ import { EntryTimestamp } from "./entry-timestamp.ts";
  */
 export class CustomEntryComponent extends Container {
 	readonly entryTimestamp = new EntryTimestamp();
+	private readonly rule = entryRule();
 	private entry: CustomEntry<unknown>;
 	private renderer: EntryRenderer;
 	private customComponent?: Component;
@@ -48,6 +49,12 @@ export class CustomEntryComponent extends Container {
 		this.rebuild();
 	}
 
+	override render(width: number): string[] {
+		const lines = super.render(width);
+		if (lines.length > 1) lines[0] = this.rule.render(width, this.entryTimestamp)[0];
+		return lines;
+	}
+
 	private rebuild(): void {
 		this.clear();
 		this.customComponent = undefined;
@@ -67,7 +74,7 @@ export class CustomEntryComponent extends Container {
 		}
 
 		this.customComponent = component;
-		this.addChild(entryRule(this.entryTimestamp));
+		this.addChild(this.rule);
 		this.addChild(component);
 	}
 }

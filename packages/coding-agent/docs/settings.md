@@ -121,6 +121,8 @@ Enable **Show timestamps** in `/settings`, or set `showTimestamps: true` and `/r
 Project settings override the saved user preference; the toggle displays the resolved value.
 Each displayed entry gets at most one label in an existing rule or padding row. Labels that do
 not fit are omitted, never shortened. Missing or invalid recorded times stay unlabeled.
+Transformed-away Markdown and empty renderer output gain no timestamp. Existing separators
+and attachment-only prompt targets remain intact.
 Message timestamps take precedence over persisted entry ISO times. Tool labels use the owning
 assistant's timestamp (call-context time, not exact execution-start time); custom entries use
 recorded entry time. `!` command message timestamps currently describe completion. Rendering,

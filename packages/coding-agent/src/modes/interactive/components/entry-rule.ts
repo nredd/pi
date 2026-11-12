@@ -20,8 +20,9 @@ export class Rule implements Component {
 		this.entryTimestamp = timestamp ?? new EntryTimestamp();
 	}
 
-	render(width: number): string[] {
-		const label = this.entryTimestamp.label(width - 2);
+	/** A native owner may decorate its existing rule after rendering visible content once. */
+	render(width: number, timestamp = this.entryTimestamp): string[] {
+		const label = timestamp.label(width - 2);
 		if (label !== undefined) {
 			const prefix = `${theme.fg("borderMuted", this.glyph)} ${label}`;
 			return [

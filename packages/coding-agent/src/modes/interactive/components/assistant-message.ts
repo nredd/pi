@@ -3,7 +3,7 @@ import { Container, Markdown, type MarkdownTheme, Spacer, Text } from "@earendil
 import type { MarkdownTransformer } from "../../../core/extensions/types.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
 import { DisclosureGutter } from "./disclosure-gutter.ts";
-import { entryRule } from "./entry-rule.ts";
+import { entryRule, isEntryRule, type Rule } from "./entry-rule.ts";
 import { EntryTimestamp } from "./entry-timestamp.ts";
 import { createMarkdownTransform } from "./markdown-transform.ts";
 import { firstSentence, firstTextLine, OneLineRow, renderedContentLines } from "./one-line.ts";
@@ -36,6 +36,7 @@ export class AssistantMessageComponent extends Container {
 	private markdownTransformers: readonly MarkdownTransformer[];
 	private lastMessage?: AssistantMessage;
 	private hasToolCalls = false;
+	private leadingRule?: Rule;
 	private isStreaming = false;
 	private thinkingVisibilityOverrides = new Map<number, boolean>();
 
@@ -96,6 +97,10 @@ export class AssistantMessageComponent extends Container {
 
 	override render(width: number): string[] {
 		const lines = super.render(width);
+		// Keep existing separators, but never turn transformed-away content into a timestamp-only entry.
+		if (this.leadingRule && lines.some((line) => !isEntryRule(line))) {
+			lines[0] = this.leadingRule.render(width, this.entryTimestamp)[0];
+		}
 		if (this.hasToolCalls || lines.length === 0) {
 			return lines;
 		}
@@ -111,13 +116,15 @@ export class AssistantMessageComponent extends Container {
 
 		// Clear content container
 		this.contentContainer.clear();
+		this.leadingRule = undefined;
 
 		const hasVisibleContent = message.content.some(
 			(c) => (c.type === "text" && c.text.trim()) || (c.type === "thinking" && c.thinking.trim()),
 		);
 
 		if (hasVisibleContent) {
-			this.contentContainer.addChild(entryRule(this.entryTimestamp));
+			this.leadingRule = entryRule();
+			this.contentContainer.addChild(this.leadingRule);
 		}
 
 		// Render content in order

@@ -154,6 +154,33 @@ describe("previous canonical user prompt", () => {
 		}
 	});
 
+	// nredd/pi#30: hiding transformed text must not hide an actual image-only prompt target.
+	it("retains image-only prompt navigation with timestamps enabled", async () => {
+		const manager = SessionManager.inMemory("/tmp");
+		manager.appendMessage({
+			role: "user",
+			content: [{ type: "image", mimeType: "image/png", data: "" }],
+			timestamp: 1,
+		});
+		manager.appendMessage(fauxAssistantMessage(output));
+		const host = await createInteractiveHarness({
+			columns: 80,
+			rows: 18,
+			sessionManager: manager,
+			settings: { fullscreenScrollbar: "hidden", showTimestamps: true },
+		});
+		try {
+			getKeybindings().setUserBindings({ [action]: "f8" });
+			host.input(jump);
+			await host.settle();
+			const prompt = host.viewport().slice(0, 3).join("\n");
+			expect(prompt).toContain("Attachment-only user prompt");
+			expect(prompt).toMatch(/\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{2}:\d{2}/);
+		} finally {
+			await host.dispose();
+		}
+	});
+
 	it("keeps runtime identity when persistence follows delivery and replay uses a new message object", () => {
 		const identities = new TranscriptEntryIdentities();
 		const manager = SessionManager.inMemory("/tmp");

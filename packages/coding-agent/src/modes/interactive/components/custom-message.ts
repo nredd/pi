@@ -18,6 +18,7 @@ import { OneLineRow, renderedContentLines } from "./one-line.ts";
  */
 export class CustomMessageComponent extends Container {
 	readonly entryTimestamp = new EntryTimestamp();
+	private readonly rule = entryRule();
 	private message: CustomMessage<unknown>;
 	private customRenderer?: MessageRenderer;
 	private box: Box;
@@ -39,7 +40,7 @@ export class CustomMessageComponent extends Container {
 		this.markdownTheme = markdownTheme;
 		this.outputPad = outputPad;
 
-		this.addChild(entryRule(this.entryTimestamp));
+		this.addChild(this.rule);
 
 		// Create box with purple background (used for default rendering)
 		this.box = new Box(1, 1, (t) => theme.bg("customMessageBg", t));
@@ -64,6 +65,12 @@ export class CustomMessageComponent extends Container {
 	override invalidate(): void {
 		super.invalidate();
 		this.rebuild();
+	}
+
+	override render(width: number): string[] {
+		const lines = super.render(width);
+		if (lines.length > 1) lines[0] = this.rule.render(width, this.entryTimestamp)[0];
+		return lines;
 	}
 
 	private rebuild(): void {

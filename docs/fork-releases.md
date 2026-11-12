@@ -56,4 +56,7 @@ Pushing a `fork-release.yml` change to an `automation/**` branch runs the same d
 
 ## Not automated
 
-The release workflow does not open the cross-repository tap pull request. Unattended tap PRs require a narrowly scoped GitHub App installed in both `nredd/pi` and `nredd/homebrew-tap`; `GITHUB_TOKEN` cannot write to the tap. Bun standalone artifacts remain tracked by `nredd/pi-harness#72`.
+The release workflow does not open the cross-repository tap pull request. Unattended tap PRs require a narrowly scoped GitHub App installed in both `nredd/pi` and `nredd/homebrew-tap`; `GITHUB_TOKEN` cannot write to the tap. Bun standalone artifacts remain tracked by `nredd/pi-harness#72`. The separate upstream
+`build-binaries.yml` path requires the [tested-byte and pi-memory gates](binary-release-gates.md)
+for future binary releases; it does not add standalone assets to `Fork release` or authorize
+publication of the frozen `.11` release.

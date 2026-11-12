@@ -54,13 +54,21 @@ describe("issue #8328 zero-usage auto-compaction", () => {
 			{ role: "user", content: [{ type: "text", text: "x".repeat(400) }], timestamp: Date.now() - 1 },
 			assistant,
 		];
+		for (const message of harness.session.agent.state.messages) {
+			if (message.role === "user" || message.role === "assistant") harness.sessionManager.appendMessage(message);
+		}
 		const sessionInternals = harness.session as unknown as SessionWithCompactionInternals;
 		const runAutoCompactionSpy = vi.spyOn(sessionInternals, "_runAutoCompaction").mockResolvedValue(false);
 
 		await sessionInternals._checkCompaction(assistant);
 
 		expect(runAutoCompactionSpy).toHaveBeenCalledOnce();
-		expect(runAutoCompactionSpy).toHaveBeenCalledWith("threshold", false);
+		expect(runAutoCompactionSpy).toHaveBeenCalledWith(
+			"threshold",
+			false,
+			expect.objectContaining({ targetTokens: "auto" }),
+			harness.session.model,
+		);
 	});
 
 	it("does not compact when the zero-usage message estimate is below the threshold", async () => {

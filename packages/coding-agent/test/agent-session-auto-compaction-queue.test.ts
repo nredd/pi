@@ -289,7 +289,7 @@ describe("AgentSession auto-compaction queue resume", () => {
 			timestamp: Date.now() + 1000,
 		};
 
-		// Put both messages into agent state so estimateContextTokens can find the successful one
+		// nredd/pi-harness#751: threshold checks read the persisted canonical projection.
 		session.agent.state.messages = [
 			{ role: "user", content: [{ type: "text", text: "hello" }], timestamp: Date.now() - 1000 },
 			successfulAssistant,
@@ -312,9 +312,17 @@ describe("AgentSession auto-compaction queue resume", () => {
 			}
 		)._checkCompaction.bind(session);
 
+		for (const message of session.agent.state.messages) {
+			if (message.role === "user" || message.role === "assistant") sessionManager.appendMessage(message);
+		}
 		await checkCompaction(errorAssistant);
 
-		expect(runAutoCompactionSpy).toHaveBeenCalledWith("threshold", false);
+		expect(runAutoCompactionSpy).toHaveBeenCalledWith(
+			"threshold",
+			false,
+			expect.objectContaining({ targetTokens: "auto" }),
+			session.model,
+		);
 	});
 
 	it("should not trigger threshold compaction for error messages when no prior usage exists", async () => {

@@ -71,13 +71,14 @@ CLI tool options override this setting for one invocation. `--tools` with only `
 | Setting | Type | Default | Description |
 |---|---|---|---|
 | `compaction.enabled` | boolean | `true` | Enable automatic compaction. |
+| `compaction.targetTokens` | `"auto" \| "contextWindow" \| number` | `"auto"` | Operating target independent of response reserve and summary budgets. |
 | `compaction.reserveTokens` | number | `16384` | Tokens reserved for the model response. |
 | `compaction.keepRecentTokens` | number | `20000` | Recent tokens retained without summarization. |
 | `compaction.modelOverrides` | object | None | Per-model token settings keyed by exact `provider/modelId`. |
 
 <a id="per-model-compaction-overrides"></a>
 
-Compaction token values must be non-negative safe integers. Each value resolves independently from the matching model override, then the ordinary compaction setting, then the built-in default. Project and user objects merge before model lookup.
+Reserve and retention values must be non-negative safe integers and resolve from the exact selected-model override, ordinary setting, then built-in default. `targetTokens` additionally consults the exact physical-model override after the selected override. Targets are `"auto"`, `"contextWindow"` (legacy), or positive safe integers. Invalid targets and malformed override maps fail even if masked by another override. Project and user objects merge recursively before model lookup. Auto uses our application fallback, not a claimed provider recommendation: `min(128000, floor(0.5 * applicable input budget))`. Unknown capacity uses the application cap only.
 
 See [Compaction Reference](compaction.md) for trigger, summarization, and validation behavior.
 

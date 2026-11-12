@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Pre-dispatch compaction preserves the entire unsent user/custom input batch, including user instructions preceding large extension context, until the answering request dispatches. Summary requests and failed request gates do not release pending input.
 - Extension custom messages triggered while manual, automatic, or branch compaction is in progress are queued instead of interrupting compaction. They are admitted in order after compaction settles.
 - In-process harnesses preserve default-stream auth checks and restore faux providers during reload with owner-scoped cleanup. Interactive harness settlement awaits submitted editor commands before painting, including asynchronous `/new` and `/reload` work.
 - Interactive shutdown removes its theme callback, watcher and terminal appearance subscription so a disposed embedded host cannot repaint later.
@@ -12,6 +13,7 @@
 
 ### Changed
 
+- Automatic compaction defaults to a conservative `targetTokens: "auto"` operating target, independently of reserve and summary budgets. Exact selected/physical overrides and `"contextWindow"` legacy mode are supported; see `docs/compaction.md`.
 - Settled tool blocks and all thinking blocks show a `▸`/`▾` disclosure marker in both TUI modes, and clicking anywhere in the block toggles it in fullscreen mode. Modified clicks, drag selection, and links keep their behavior.
 - Collapsed built-in `bash`, `edit`, `write`, `grep`, `find`, and `ls` results show a one-line summary instead of an output preview.
 - Transcript framing: a dashed `┄` rule separates entries instead of a blank line, a solid `─` rule opens every user turn after the first, assistant prose carries a `│` rule in `borderAccent` (replacing its `outputPad` indent), and collapsed thinking rows read `Thinking · <first sentence>`.

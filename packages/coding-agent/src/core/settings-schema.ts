@@ -10,12 +10,23 @@ function timeoutSetting(options?: TSchemaOptions) {
 	return Type.Union([Type.Number({ minimum: 0 }), Type.Literal("disabled")], options);
 }
 
+const CompactionTargetSchema = Type.Union(
+	[
+		Type.Literal("auto"),
+		Type.Literal("contextWindow"),
+		Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER }),
+	],
+	{ default: SETTINGS_DEFAULTS.compaction.targetTokens },
+);
+
 const CompactionModelOverrideSchema = Type.Object({
+	targetTokens: Type.Optional(CompactionTargetSchema),
 	reserveTokens: Type.Optional(nonNegativeSafeInteger()),
 	keepRecentTokens: Type.Optional(nonNegativeSafeInteger()),
 });
 
 const CompactionSettingsSchema = Type.Object({
+	targetTokens: Type.Optional(CompactionTargetSchema),
 	enabled: Type.Optional(Type.Boolean({ default: SETTINGS_DEFAULTS.compaction.enabled })),
 	reserveTokens: Type.Optional(nonNegativeSafeInteger({ default: SETTINGS_DEFAULTS.compaction.reserveTokens })),
 	keepRecentTokens: Type.Optional(nonNegativeSafeInteger({ default: SETTINGS_DEFAULTS.compaction.keepRecentTokens })),

@@ -79,6 +79,7 @@ import {
 	prepareCompaction,
 	shouldCompact,
 } from "./compaction/index.ts";
+import { resolveCompactionPolicy } from "./compaction/policy.ts";
 import { DEFAULT_THINKING_LEVEL, THINKING_LEVEL_OPTIONS } from "./defaults.ts";
 import { exportSessionToHtml, type ToolHtmlRenderer } from "./export-html/index.ts";
 import { createToolHtmlRenderer } from "./export-html/tool-renderer.ts";
@@ -447,6 +448,12 @@ export class AgentSession {
 	private _compactionAbortController: AbortController | undefined = undefined;
 	private _autoCompactionAbortController: AbortController | undefined = undefined;
 	private _overflowRecoveryAttempted = false;
+	/** Avoid repeating a no-progress threshold attempt on unchanged projected history. */
+	private _thresholdAttemptKey: string | undefined;
+	/** Persisted input is not summary material until an answering request dispatches it. */
+	private readonly _pendingInputEntryIds = new Set<string>();
+	/** Current answering request's snapshot, for custom streams that do not invoke provider gates. */
+	private _preparedInputEntryIds: readonly string[] = [];
 
 	// Branch summarization state
 	private _branchSummaryAbortController: AbortController | undefined = undefined;
@@ -559,8 +566,22 @@ export class AgentSession {
 	private _gatedSummarizationStream(session: ModelRouteContext["session"]): AgentSession["agent"]["streamFunction"] {
 		const stream = this.agent.streamFunction;
 		const beforeProviderRequest = withRequestGeneration(this._providerRequestGate, session);
-		return (model, context, options) =>
-			stream(model, context, { ...options, beforeProviderRequest } as typeof options);
+		return (model, context, options) => {
+			// A separately routed summarizer has its own hard input/output capacity, not the pending route's target.
+			const budget = resolveCompactionPolicy(
+				model.contextWindow,
+				options?.maxTokens ?? 0,
+				"contextWindow",
+				model.inputLimits?.maxInputTokens,
+			).inputBudget;
+			const tokens = estimateContextTokens(context.messages).tokens;
+			if (budget !== undefined && tokens > budget) {
+				throw new Error(
+					"Summary input exceeds the summarizer's hard input budget. Choose a larger summarizer or reduce history manually; summary and retention budgets were not changed.",
+				);
+			}
+			return stream(model, context, { ...options, beforeProviderRequest } as typeof options);
+		};
 	}
 	/** Session-owned model view, used for every extension-originated provider request. */
 	private _models!: Models;
@@ -901,13 +922,29 @@ export class AgentSession {
 		return this._nestedToolCalls.execute(parentToolCallId, name, args, options);
 	}
 
+	/** Register provider-visible instructions at each committed input admission, never during previews. */
+	private _trackPendingInput(entryId: string): void {
+		const entry = this.sessionManager.getEntry(entryId);
+		if (
+			entry?.type === "custom_message" ||
+			(entry?.type === "message" && (entry.message.role === "user" || entry.message.role === "system"))
+		) {
+			this._pendingInputEntryIds.add(entryId);
+		}
+	}
+
+	/** Release only the input captured by this request, not new messages admitted during dispatch. */
+	private _markInputDispatched(entryIds: readonly string[]): void {
+		for (const id of entryIds) this._pendingInputEntryIds.delete(id);
+	}
+
 	/** Whether `projection`, the current session projection, exceeds the compaction threshold of `model`. */
 	private _exceedsCompactionThreshold(model: Model<any>, projection: SessionProjection): boolean {
-		if (model.contextWindow <= 0) return false;
 		return shouldCompact(
 			estimateProjectedContextTokens(projection, this.sessionManager.getBranch()).tokens,
 			model.contextWindow,
-			this.settingsManager.getCompactionSettings(this.model),
+			this.settingsManager.getCompactionSettings(this.model, model),
+			model.inputLimits?.maxInputTokens,
 		);
 	}
 
@@ -952,12 +989,29 @@ export class AgentSession {
 			};
 			const routeContext = this._createModelRouteContext();
 			let { previous, context, projection } = await prepare();
-			const gateFor = (prepared: typeof previous) =>
-				withRequestGeneration(prepared?.beforeProviderRequest, routeContext.session);
+			const gateFor = (prepared: typeof previous) => {
+				const pendingInputIds = [...this._pendingInputEntryIds];
+				this._preparedInputEntryIds = pendingInputIds;
+				const gate = withRequestGeneration(prepared?.beforeProviderRequest, routeContext.session);
+				return async () => {
+					const recheck = await gate();
+					return () => {
+						recheck();
+						// Summary dispatch has its own gate and must not release the answering input batch.
+						this._markInputDispatched(pendingInputIds);
+					};
+				};
+			};
 			const model = previous?.model ?? this.agent.state.model;
 			const thinkingLevel = previous?.thinkingLevel ?? this.agent.state.thinkingLevel;
-			if (!isVirtualModel(model))
+			if (!isVirtualModel(model)) {
+				const settings = this.settingsManager.getCompactionSettings(this.model, model);
+				if (this._exceedsCompactionThreshold(model, projection)) {
+					await this._runAutoCompaction("threshold", false, settings, model);
+					({ previous, context } = await prepare());
+				}
 				return { ...previous, context, model, thinkingLevel, beforeProviderRequest: gateFor(previous) };
+			}
 
 			// The selection stays in agent state; only this request uses the routed model. A routing
 			// failure rejects, which ends the run with an error response. Only messages the user wrote
@@ -983,7 +1037,8 @@ export class AgentSession {
 			// The route stands: the router already decided this request. The state entry does not change
 			// the projection.
 			if (this._exceedsCompactionThreshold(route.model, projection)) {
-				await this._runAutoCompaction("threshold", false);
+				const settings = this.settingsManager.getCompactionSettings(this.model, route.model);
+				await this._runAutoCompaction("threshold", false, settings, route.model);
 				({ previous, context } = await prepare());
 			}
 			return {
@@ -1177,6 +1232,7 @@ export class AgentSession {
 
 	private _commitBoundaryDrafts(drafts: SessionBoundaryDraft[]): void {
 		const appended = this._applyBoundaryDrafts(this.sessionManager, drafts);
+		for (const entry of appended) this._trackPendingInput(entry.id);
 		this._refreshFinalizedContext();
 		for (const entry of appended) this._emit({ type: "entry_appended", entry });
 	}
@@ -1299,6 +1355,17 @@ export class AgentSession {
 			}
 		}
 
+		// Custom SDK streams may bypass provider gates. An actual pending/successful assistant
+		// response proves dispatch too; synthetic pre-dispatch failures and aborts do not.
+		if (
+			event.type === "message_start" &&
+			event.message.role === "assistant" &&
+			event.message.stopReason !== "error" &&
+			event.message.stopReason !== "aborted"
+		) {
+			this._markInputDispatched(this._preparedInputEntryIds);
+		}
+
 		// Emit to extensions first, then notify public listeners.
 		await this._emitExtensionEvent(event);
 		this._emit(event.type === "agent_end" ? { ...event, willRetry: this._willRetryAfterAgentEnd(event) } : event);
@@ -1324,7 +1391,10 @@ export class AgentSession {
 				// Regular LLM message - persist as SessionMessageEntry
 				entryId = this.sessionManager.appendMessage(event.message);
 			}
-			if (entryId) this._entryIdsByMessage.set(event.message, entryId);
+			if (entryId) {
+				this._entryIdsByMessage.set(event.message, entryId);
+				this._trackPendingInput(entryId);
+			}
 			// Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere
 
 			if (event.message.role === "assistant") {
@@ -2628,12 +2698,13 @@ export class AgentSession {
 	}
 
 	private _appendCustomMessage(appMessage: CustomMessage): void {
-		this.sessionManager.appendCustomMessageEntry(
+		const entryId = this.sessionManager.appendCustomMessageEntry(
 			appMessage.customType,
 			appMessage.content,
 			appMessage.display,
 			appMessage.details,
 		);
+		this._trackPendingInput(entryId);
 		this._refreshFinalizedContext();
 		this._emit({ type: "message_start", message: appMessage });
 		this._emit({ type: "message_end", message: appMessage });
@@ -3364,7 +3435,9 @@ export class AgentSession {
 		skipAbortedCheck = true,
 		toolResults: AgentMessage[] = [],
 	): Promise<boolean> {
-		const settings = this.settingsManager.getCompactionSettings(this.model);
+		const messageModel = this._modelForMessage(assistantMessage);
+		const physicalModel = messageModel ?? this._limitsModel();
+		const settings = this.settingsManager.getCompactionSettings(this.model, physicalModel);
 		if (!settings.enabled) return false;
 
 		// Skip if message was aborted (user cancelled) - unless skipAbortedCheck is false
@@ -3375,9 +3448,8 @@ export class AgentSession {
 		// to a larger-context model (e.g. codex) - the overflow error from the old model
 		// shouldn't trigger compaction for the new model. Under a virtual selection, the
 		// physical model that produced the message supplies the limits.
-		const messageModel = this._modelForMessage(assistantMessage);
 		const sameModel = messageModel !== undefined;
-		const contextWindow = (messageModel ?? this.model)?.contextWindow ?? 0;
+		const contextWindow = physicalModel?.contextWindow ?? 0;
 
 		// Skip compaction checks if this assistant message is older than the latest
 		// compaction boundary. This prevents a stale pre-compaction usage/error
@@ -3428,7 +3500,7 @@ export class AgentSession {
 			// Case 2: the response completed successfully. Compact, but do not retry because
 			// agent.continue() cannot continue from a completed assistant response.
 			if (!willRetry) {
-				return await this._runAutoCompaction("overflow", false);
+				return await this._runAutoCompaction("overflow", false, settings, physicalModel);
 			}
 
 			if (this._overflowRecoveryAttempted) {
@@ -3456,45 +3528,26 @@ export class AgentSession {
 			// Persistently omit the selected final attempt before post-run recovery compaction.
 			this._overflowRecoveryAttempted = true;
 			this._omitRecoveryAttempt(assistantMessage, toolResults);
-			const retry = await this._runAutoCompaction("overflow", willRetry);
+			const retry = await this._runAutoCompaction("overflow", willRetry, settings, physicalModel);
 			if (retry) this._failedResponse = assistantMessage;
 			return retry;
 		}
 
-		// Case 3: threshold compaction without retry.
-		// For error messages or all-zero usage messages, estimate from the last valid response.
-		// This ensures sessions that hit persistent API errors (e.g. 529) or malformed zero-usage
-		// responses can still compact and do not reset context accounting.
-		let contextTokens: number;
-		const projection = currentProjection;
-		const hasContextEdits = projection.entries.some((entry) => entry.sourceEntry.type === "context_edit");
-		const directContextTokens = assistantMessage.usage ? calculateContextTokens(assistantMessage.usage) : 0;
-		if (hasContextEdits) {
-			contextTokens = estimateProjectedContextTokens(projection, branch).tokens;
-		} else if (assistantMessage.stopReason === "error" || directContextTokens === 0) {
-			const messages = this.agent.state.messages;
-			const estimate = estimateContextTokens(messages);
-			// Without provider usage, estimate.tokens is the pure message-size estimate.
-			// Only usage-backed estimates need the stale pre-compaction check.
-			if (estimate.lastUsageIndex !== null) {
-				// Verify the usage source is post-compaction. Kept pre-compaction messages
-				// have stale usage reflecting the old (larger) context and would falsely
-				// trigger compaction right after one just finished.
-				const usageMsg = messages[estimate.lastUsageIndex];
-				if (
-					compactionEntry &&
-					usageMsg.role === "assistant" &&
-					(usageMsg as AssistantMessage).timestamp <= new Date(compactionEntry.timestamp).getTime()
-				) {
-					return false;
-				}
-			}
-			contextTokens = estimate.tokens;
-		} else {
-			contextTokens = directContextTokens;
-		}
-		if (shouldCompact(contextTokens, contextWindow, settings)) {
-			return await this._runAutoCompaction("threshold", false);
+		// A final tool-use response with results ended the run via a terminating tool. Its results
+		// need no next request unless queued work resumes; do not compact merely to settle it.
+		if (
+			skipAbortedCheck &&
+			assistantMessage.stopReason === "toolUse" &&
+			toolResults.length > 0 &&
+			!this.agent.hasQueuedMessages()
+		)
+			return false;
+
+		// Case 3 uses the same canonical projection as pre-prompt and physical dispatch.
+		// This helper invalidates usage anchors after context edits and compaction boundaries.
+		const contextTokens = estimateProjectedContextTokens(currentProjection, branch).tokens;
+		if (shouldCompact(contextTokens, contextWindow, settings, physicalModel?.inputLimits?.maxInputTokens)) {
+			return await this._runAutoCompaction("threshold", false, settings, physicalModel);
 		}
 		return false;
 	}
@@ -3509,9 +3562,13 @@ export class AgentSession {
 	 * @param willRetry Whether to continue the interrupted turn after overflow compaction
 	 * @returns Whether the post-run loop should call `agent.continue()`
 	 */
-	private async _runAutoCompaction(reason: "overflow" | "threshold", willRetry: boolean): Promise<boolean> {
+	private async _runAutoCompaction(
+		reason: "overflow" | "threshold",
+		willRetry: boolean,
+		settings = this.settingsManager.getCompactionSettings(this.model, this._limitsModel()),
+		limitsModel = this._limitsModel(),
+	): Promise<boolean> {
 		const model = this.model;
-		const settings = this.settingsManager.getCompactionSettings(model);
 		let abortController: AbortController | undefined;
 		let started = false;
 		let fromExtension = false;
@@ -3522,9 +3579,35 @@ export class AgentSession {
 				return false;
 			}
 
+			const attemptKey = () =>
+				JSON.stringify([
+					this.sessionManager.getLeafId(),
+					settings,
+					limitsModel?.provider,
+					limitsModel?.id,
+					limitsModel?.contextWindow,
+					limitsModel?.inputLimits?.maxInputTokens,
+				]);
+			if (reason === "threshold" && this._thresholdAttemptKey === attemptKey()) return false;
+			if (reason === "threshold") this._thresholdAttemptKey = attemptKey();
 			const pathEntries = this.sessionManager.getBranch();
-			const preparation = prepareCompaction(pathEntries, settings);
+			const projection = this.sessionManager.buildSessionProjection();
+			const pending = projection.entries.find(
+				(entry) => entry.messages.length > 0 && this._pendingInputEntryIds.has(entry.sourceEntry.id),
+			);
+			// Keep the whole pending suffix, while sizing retention against the full projection.
+			const preparation = prepareCompaction(pathEntries, settings, pending?.sourceEntry.id);
 			if (!preparation) {
+				const errorMessage =
+					"Auto-compaction cannot reduce this context with the configured keepRecentTokens. Compact manually, reduce retained history, or raise targetTokens; budgets were not changed.";
+				this._emit({
+					type: "compaction_end",
+					reason,
+					result: undefined,
+					aborted: false,
+					willRetry: false,
+					errorMessage,
+				});
 				return false;
 			}
 
@@ -3623,7 +3706,22 @@ export class AgentSession {
 					willRetry,
 				});
 			}
-			this._emit({ type: "compaction_end", reason, result, aborted: false, willRetry });
+			if (reason === "threshold" && estimatedTokensAfter >= preparation.tokensBefore) {
+				this._thresholdAttemptKey = attemptKey();
+			}
+			this._emit({
+				type: "compaction_end",
+				reason,
+				result,
+				aborted: false,
+				willRetry,
+				...(reason === "threshold" && estimatedTokensAfter >= preparation.tokensBefore
+					? {
+							errorMessage:
+								"Auto-compaction made no progress. Adjust targetTokens or keepRecentTokens, or compact manually; budgets were not changed.",
+						}
+					: {}),
+			});
 
 			if (willRetry) return true;
 

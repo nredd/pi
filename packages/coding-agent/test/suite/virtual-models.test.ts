@@ -44,6 +44,11 @@ describe("AgentSession virtual models", () => {
 		const requests: ModelRouteRequest[] = [];
 		const harness = await createHarness({
 			...options,
+			// These routing regressions use legacy thresholds; #751 auto-target cases are below.
+			settings: {
+				...options.settings,
+				compaction: { targetTokens: "contextWindow", reserveTokens: 0, ...options.settings?.compaction },
+			},
 			models: [
 				{ id: "small", contextWindow: 1000 },
 				{ id: "large", contextWindow: 50_000, maxTokens: 4000, reasoning: true },
@@ -80,6 +85,74 @@ describe("AgentSession virtual models", () => {
 			);
 		return { harness, requests, reasons, dispatched };
 	}
+
+	// Refs nredd/pi-harness#751: equal physical capacity does not imply equal operating targets.
+	it.each(["user", "continuation", "retry"] as const)(
+		"uses the upcoming physical target for %s without rerouting compaction",
+		async (reason) => {
+			const routes: string[] = [];
+			const preparations: unknown[] = [];
+			const h = await createHarness({
+				models: [
+					{ id: "wide", contextWindow: 100000 },
+					{ id: "early", contextWindow: 100000 },
+				],
+				tools: [echoTool],
+				settings: {
+					retry: { baseDelayMs: 1 },
+					compaction: {
+						reserveTokens: 2000,
+						keepRecentTokens: 1,
+						modelOverrides: { "faux/wide": { targetTokens: 90000 }, "faux/early": { targetTokens: 1000 } },
+					},
+				},
+				extensionFactories: [
+					(pi) => {
+						pi.registerVirtualModel({
+							provider: "router",
+							id: "policy",
+							name: "Policy",
+							route(request, ctx) {
+								routes.push(request.reason);
+								const id = request.reason === reason ? "early" : "wide";
+								return { model: ctx.modelRegistry.find("faux", id)!, thinkingLevel: "off" };
+							},
+						});
+						pi.on("session_before_compact", (event) => {
+							preparations.push(event.preparation.settings);
+							return {
+								compaction: {
+									summary: "checkpoint",
+									firstKeptEntryId: event.preparation.firstKeptEntryId,
+									tokensBefore: event.preparation.tokensBefore,
+								},
+							};
+						});
+					},
+				],
+			});
+			harnesses.push(h);
+			await h.session.setModel(h.session.modelRuntime.getModel("router", "policy")!);
+			// No assistant usage exists: the first dispatch must use projected input too.
+			for (const text of ["a", "b"])
+				h.sessionManager.appendMessage({ role: "user", content: text.repeat(8000), timestamp: Date.now() });
+			h.session.refreshContext();
+			h.setResponses([
+				...(reason === "continuation"
+					? [fauxAssistantMessage(fauxToolCall("echo", { text: "hi" }), { stopReason: "toolUse" })]
+					: reason === "retry"
+						? [fauxAssistantMessage("", { stopReason: "error", errorMessage: "overloaded_error" })]
+						: []),
+				fauxAssistantMessage("answer"),
+			]);
+			await h.session.prompt("continue");
+			expect(preparations).toHaveLength(1);
+			expect(preparations[0]).toMatchObject({ targetTokens: 1000, reserveTokens: 2000 });
+			expect(routes).toEqual(reason === "user" ? ["user"] : ["user", reason]);
+			expect(h.session.messages.at(-1)).toMatchObject({ provider: "faux", model: "early" });
+			expect(h.session.model?.id).toBe("policy");
+		},
+	);
 
 	it("routes each request, including retries, while the selection stays virtual", async () => {
 		const { harness, requests, reasons, dispatched } = await createRoutedHarness(defaultRoute, {
@@ -411,7 +484,7 @@ describe("AgentSession virtual models", () => {
 	it("routes compaction summaries before sizing them", async () => {
 		const summaries: string[] = [];
 		const { harness, reasons } = await createRoutedHarness(defaultRoute, {
-			settings: { compaction: { keepRecentTokens: 1 } },
+			settings: { compaction: { keepRecentTokens: 1, reserveTokens: 16384 } },
 		});
 		const summary: FauxResponseStep = (_context, options, _state, model) => {
 			summaries.push(`${model.id}:${options?.reasoning ?? "off"}:${options?.maxTokens}`);

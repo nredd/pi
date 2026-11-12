@@ -166,6 +166,34 @@ describe("generated configuration schemas", () => {
 		).toBe(true);
 	});
 
+	// Refs nredd/pi-harness#751: hard input metadata follows the existing configuration path.
+	it("validates hard input ceilings and targets in generated schemas", () => {
+		const models = Compile(JSON.parse(renderConfigSchemas().get("schemas/models.schema.json") ?? ""));
+		const settings = Compile(SettingsSchema);
+		for (const value of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+			expect(
+				models.Check({
+					providers: { synthetic: { models: [{ id: "family/model", inputLimits: { maxInputTokens: value } }] } },
+				}),
+			).toBe(false);
+			expect(settings.Check({ compaction: { targetTokens: value } })).toBe(false);
+		}
+		expect(
+			models.Check({
+				providers: {
+					synthetic: { modelOverrides: { "family/model": { inputLimits: { maxInputTokens: 272000 } } } },
+				},
+			}),
+		).toBe(true);
+		for (const targetTokens of ["auto", "contextWindow", 128000]) {
+			expect(
+				settings.Check({
+					compaction: { targetTokens, modelOverrides: { "synthetic/family/model": { targetTokens } } },
+				}),
+			).toBe(true);
+		}
+	});
+
 	it("validates keybinding syntax", () => {
 		const schema = JSON.parse(renderConfigSchemas().get("schemas/keybindings.schema.json") ?? "");
 		const validator = Compile(schema);

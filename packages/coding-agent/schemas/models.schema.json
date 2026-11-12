@@ -414,6 +414,12 @@
     "ModelInputLimits": {
       "type": "object",
       "properties": {
+        "maxInputTokens": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991,
+          "description": "Verified hard input-token ceiling, independent of maximum output tokens."
+        },
         "maxRequestBytes": {
           "type": "integer",
           "minimum": 1,

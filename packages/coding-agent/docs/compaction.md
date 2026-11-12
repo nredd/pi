@@ -29,10 +29,16 @@ Both use closely related structured formats and track file operations cumulative
 Auto-compaction triggers when:
 
 ```
-contextTokens > contextWindow - reserveTokens
+B = min(contextWindow - reserveTokens, verified hard input ceiling if supplied)
+autoTarget = min(128000, floor(0.5 * B))
+contextTokens > min(B, targetTokens)
 ```
 
-By default, `reserveTokens` is 16384 tokens (configurable in `~/.pi/agent/settings.json` or `<project-dir>/.pi/settings.json`). This leaves room for the LLM's response.
+`targetTokens` defaults to `"auto"`, which uses the application fallback above. No provider recommendations currently qualify for this client surface. Unknown capacity uses a 128000 application target, not an invented hard window. A positive safe integer sets an explicit target; `"contextWindow"` restores legacy triggering at `B` (no threshold for unknown capacity). Verified hard input ceilings use `inputLimits.maxInputTokens`; maximum output is never subtracted from that ceiling a second time. Nonpositive/impossible budgets produce actionable errors.
+
+By default, `reserveTokens` is 16384 tokens (configurable in `~/.pi/agent/settings.json` or `<project-dir>/.pi/settings.json`). Reserve, summary output budgets, retention and hard capacity are independent of the operating target. Summary generation still uses the existing reserve fractions and output caps. See [evidence and design](compaction-policy-evidence.md) for sources and limitations.
+
+Checks use canonical projected history before prompts, before physical dispatch (including first dispatch, tool continuations and retries), and after runs. A virtual route is captured before asynchronous compaction; refreshing context never reroutes that pending request. Automatic attempts on unchanged history are bounded; no-progress diagnostics suggest explicit settings changes rather than silently shrinking retention or summary budgets. Newly admitted input stays verbatim until the answering request dispatches it: a user request followed by extension/custom context is one protected pending suffix, not summary material. Committed `turn_end` and `agent_before_settle` custom-message batches use the same pending-input registration as prompts and queued sends, including `display: false` messages (which remain provider-visible). Boundary previews do not register input. A summary request does not release that protection. Only already-dispatched history may be summarized before the first answer; a failed request gate or cancellation leaves the input protected. Custom SDK streams that bypass provider gates release their captured input when they emit a real assistant response. Manual compaction remains explicit and unchanged.
 
 During a multi-turn agent run, Pi checks the canonical projected context after tools finish and their results are appended, before starting the next assistant response. If the threshold is crossed, Pi compacts during `prepareNextTurn`, then performs the existing catch-up steering poll before `turn_start`. It skips this between-turn check when the completed tool batch terminates the run and no queued message requires another response. Pi also checks before a new user prompt and performs final-attempt overflow recovery after the low-level run ends.
 
@@ -431,6 +437,7 @@ Configure compaction in `~/.pi/agent/settings.json` or `<project-dir>/.pi/settin
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `enabled` | `true` | Enable auto-compaction |
+| `targetTokens` | `"auto"` | Application operating target, positive safe integer, or `"contextWindow"` legacy mode |
 | `reserveTokens` | `16384` | Tokens to reserve for LLM response |
 | `keepRecentTokens` | `20000` | Recent tokens to keep (not summarized) |
 
@@ -447,14 +454,14 @@ Use `compaction.modelOverrides` to tune token budgets for different models:
     "keepRecentTokens": 20000,
     "modelOverrides": {
       "some-provider/big-model": {
-        "reserveTokens": 400000
+        "targetTokens": 100000
       }
     }
   }
 }
 ```
 
-For a model with a 1M context window, this override triggers compaction above 600K tokens and keeps the ordinary 20000 recent tokens. Other models retain the ordinary 16384-token reserve. `reserveTokens` also influences summarization output limits, capped by the model's maximum output tokens; it is not solely a trigger threshold.
+For a model with a 1M context window, this override triggers compaction above 100000 tokens while retaining the ordinary reserve and 20000 recent tokens. `targetTokens` resolves through the exact selected-model override, exact physical-model override, ordinary setting, then `"auto"`. Explicit `"auto"` uses physical limits, not the virtual model's advertised capacity. All targets and override-map shapes are validated before dispatch, even masked or nonmatching targets. `reserveTokens` and `keepRecentTokens` retain selected-model-only lookup semantics. `reserveTokens` also influences summary output limits and must not be used as a substitute for a working target.
 
 Keys are exact, case-sensitive `provider/modelId` values, including any slashes within the model ID. Each `reserveTokens` and `keepRecentTokens` value falls back independently from the model override to the ordinary setting to the built-in default. Values must be non-negative safe integers. Invalid values in the matching model override produce an error when read; only omitted fields fall back to the ordinary setting. Model override entries must be objects. Invalid ordinary token settings produce an error when read, even if the active model has a valid override. Only omitted ordinary values use built-in defaults. `enabled` remains global, not model-specific.
 

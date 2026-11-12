@@ -34,6 +34,7 @@ import {
 	sessionEntryToContextMessages,
 } from "../session-manager.ts";
 import { combineUsage } from "../usage-totals.ts";
+import { type CompactionTarget, resolveCompactionPolicy } from "./policy.ts";
 import {
 	computeFileLists,
 	createFileOps,
@@ -118,12 +119,14 @@ export interface CompactionResult<T = unknown> {
 // ============================================================================
 
 export interface CompactionSettings {
+	targetTokens?: CompactionTarget;
 	enabled: boolean;
 	reserveTokens: number;
 	keepRecentTokens: number;
 }
 
 export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
+	targetTokens: "auto",
 	enabled: true,
 	reserveTokens: 16384,
 	keepRecentTokens: 20000,
@@ -264,9 +267,14 @@ export function estimateProjectedContextTokens(
 /**
  * Check if compaction should trigger based on context usage.
  */
-export function shouldCompact(contextTokens: number, contextWindow: number, settings: CompactionSettings): boolean {
-	if (!settings.enabled) return false;
-	return contextTokens > contextWindow - settings.reserveTokens;
+export function shouldCompact(
+	contextTokens: number,
+	contextWindow: number,
+	settings: CompactionSettings,
+	maxInputTokens?: number,
+): boolean {
+	const policy = resolveCompactionPolicy(contextWindow, settings.reserveTokens, settings.targetTokens, maxInputTokens);
+	return settings.enabled && contextTokens > policy.threshold;
 }
 
 // ============================================================================
@@ -869,9 +877,11 @@ function findProjectedCutPoint(
 	};
 }
 
+/** Prepare a summary without cutting into an optional unsent-input suffix. */
 export function prepareCompaction(
 	pathEntries: SessionEntry[],
 	settings: CompactionSettings,
+	firstProtectedEntryId?: string,
 ): CompactionPreparation | undefined {
 	if (pathEntries.length > 0 && pathEntries[pathEntries.length - 1].type === "compaction") {
 		return undefined;
@@ -895,7 +905,22 @@ export function prepareCompaction(
 	}
 	const boundaryEnd = projectedEntries.length;
 	const tokensBefore = estimateProjectedContextTokens(projection, pathEntries).tokens;
-	const cutPoint = findProjectedCutPoint(projectedEntries, boundaryStart, boundaryEnd, settings.keepRecentTokens);
+	let cutPoint = findProjectedCutPoint(projectedEntries, boundaryStart, boundaryEnd, settings.keepRecentTokens);
+	const protectedIndex =
+		firstProtectedEntryId === undefined
+			? -1
+			: projectedEntries.findIndex((entry) => entry.sourceEntry.id === firstProtectedEntryId);
+	if (protectedIndex >= boundaryStart && cutPoint.firstKeptEntryIndex > protectedIndex) {
+		const startsTurn = isProjectedTurnStart(projectedEntries[protectedIndex]);
+		const turnStartIndex = startsTurn
+			? -1
+			: findProjectedTurnStartIndex(projectedEntries, protectedIndex, boundaryStart);
+		cutPoint = {
+			firstKeptEntryIndex: protectedIndex,
+			turnStartIndex,
+			isSplitTurn: !startsTurn && turnStartIndex !== -1,
+		};
+	}
 
 	const firstKeptEntry = projectedEntries[cutPoint.firstKeptEntryIndex]?.sourceEntry;
 	if (!firstKeptEntry?.id) return undefined;

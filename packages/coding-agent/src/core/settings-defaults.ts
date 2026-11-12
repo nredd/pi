@@ -7,6 +7,7 @@ export const SETTINGS_DEFAULTS = {
 	steeringMode: "one-at-a-time",
 	followUpMode: "one-at-a-time",
 	compaction: {
+		targetTokens: "auto",
 		enabled: true,
 		reserveTokens: 16384,
 		keepRecentTokens: 20000,

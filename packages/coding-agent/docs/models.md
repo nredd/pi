@@ -89,6 +89,8 @@ Use `inputLimits.images.resize` to control how Pi encodes new image attachments,
 
 `maxBytes` limits the base64-encoded payload. Omitted resize fields use conservative defaults of 2000 by 2000 pixels, 4.5 MiB encoded, and JPEG quality 80. Images are encoded once; changing models does not rewrite historical images. The catalog can also describe hard request limits with `inputLimits.maxRequestBytes`, `images.maxPerMessage`, and `images.maxPerRequest`, but Pi does not yet rewrite or reject history based on them.
 
+`inputLimits.maxInputTokens` optionally records a verified positive safe-integer hard input-token ceiling. Compaction bounds its input budget by that ceiling without subtracting maximum output twice. This is capacity metadata, not a preferred working-context size; configure `compaction.targetTokens` independently. Catalogs and `models.json` overrides carry this field through the existing input-limits path. Do not populate it from model names or inferred output subtraction.
+
 <a id="prompt-cache-lifetimes"></a>
 
 Use `promptCache` to declare the provider's best-effort cache lifetime in seconds for the `short` or `long` retention tier:

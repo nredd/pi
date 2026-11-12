@@ -146,11 +146,6 @@ function selectionContent(lines: readonly string[]): {
 type SelectionGranularity = "character" | "word" | "line";
 type TranscriptGeometry = Map<Component, { row: number; height: number }>;
 
-/** Use the deepest native layout owner, not a text search that could match another entry. */
-function selectionOwner(geometry: TranscriptGeometry, point: SelectionPoint) {
-	return [...geometry].findLast(([, box]) => box.row <= point.row && point.row < box.row + box.height);
-}
-
 /** Include every selected source owner, ignoring components that contribute decoration only. */
 function selectionOwners(geometry: TranscriptGeometry, range: SelectionRange, lines: readonly string[]): Component[] {
 	return [...geometry].flatMap(([component, box]) => {
@@ -1880,7 +1875,8 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		const next = getScrollViewBox(layout, scrollView)?.scrollContentLines;
 		if (!previous || !next) return false;
 		const mapPoint = (point: SelectionPoint, end: boolean): SelectionPoint | undefined => {
-			const owner = selectionOwner(oldGeometry, point);
+			// Use the native layout owner, never matching text from another entry.
+			const owner = [...oldGeometry].findLast(([, box]) => box.row <= point.row && point.row < box.row + box.height);
 			if (!owner) return undefined;
 			const [component, oldBox] = owner;
 			const newBox = newGeometry.get(component);

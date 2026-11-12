@@ -441,7 +441,7 @@ Configure compaction in `~/.pi/agent/settings.json` or `<project-dir>/.pi/settin
 | `reserveTokens` | `16384` | Tokens to reserve for LLM response |
 | `keepRecentTokens` | `20000` | Recent tokens to keep (not summarized) |
 
-Disable auto-compaction with `"enabled": false`. You can still compact manually with `/compact`.
+Disable auto-compaction with `"enabled": false`. Automatic checks then skip operating-budget resolution, so a valid reserve larger than a small model's window does not block normal provider requests. Targets, override-map shapes and token-setting types remain validated; disabled compaction does not hide malformed configuration. You can still compact manually with `/compact`, and actual summarizer requests retain their own hard-limit checks.
 
 ### Per-model overrides
 

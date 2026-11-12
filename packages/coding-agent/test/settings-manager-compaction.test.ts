@@ -24,6 +24,18 @@ describe("compaction targets", () => {
 		expect(manager.getCompactionTargetTokens(model, physical)).toBe("auto");
 		expect(manager.getCompactionTargetTokens({ provider: "synthetic", id: "Family/physical" })).toBe(90000);
 	});
+	// Regression #33: disabling automatic compaction never masks invalid configuration.
+	it.each([
+		{ targetTokens: 0, modelOverrides: { [modelKey]: { targetTokens: 1000 } } },
+		{ modelOverrides: { "other/masked": { targetTokens: 0 } } },
+		{ modelOverrides: [] },
+		{ reserveTokens: -1 },
+		{ keepRecentTokens: -1 },
+	])("validates disabled settings before lookup: %j", (compaction) => {
+		const manager = SettingsManager.inMemory();
+		manager.applyOverrides({ compaction: { ...compaction, enabled: false } as never });
+		expect(() => manager.getCompactionSettings(model, physical)).toThrow(/Invalid compaction\./);
+	});
 	it("merges exact override fields recursively across trusted layers", () => {
 		const storage = new InMemorySettingsStorage();
 		storage.withLock("global", () =>

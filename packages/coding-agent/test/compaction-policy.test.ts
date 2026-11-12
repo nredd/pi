@@ -35,6 +35,27 @@ describe("compaction operating policy", () => {
 		expect(shouldCompact(45001, 100000, settings)).toBe(true);
 		expect(shouldCompact(95000, 100000, { ...settings, enabled: false })).toBe(false);
 	});
+	// Regression #33: disabled automatic compaction has no operating budget to resolve.
+	it.each([undefined, "auto", "contextWindow", 1000] as const)(
+		"ignores an unused impossible budget when disabled with target %s",
+		(targetTokens) => {
+			const settings = { enabled: false, targetTokens, reserveTokens: 16384, keepRecentTokens: 20000 };
+			expect(shouldCompact(100, 8192, settings)).toBe(false);
+			expect(shouldCompact(100, 8192, { ...settings, reserveTokens: 8192 })).toBe(false);
+			expect(() => shouldCompact(100, 8192, { ...settings, enabled: true })).toThrow("No input budget remains");
+		},
+	);
+	// Regression #33: disabling automatic triggering must not hide malformed targets.
+	it.each([0, -1, 1.5, NaN, Infinity, "invalid", null])("validates disabled target %s", (targetTokens) => {
+		expect(() =>
+			shouldCompact(100, 8192, {
+				enabled: false,
+				reserveTokens: 16384,
+				keepRecentTokens: 20000,
+				targetTokens: targetTokens as never,
+			}),
+		).toThrow("compaction.targetTokens");
+	});
 	it.each([
 		[100, 100],
 		[100, 101],

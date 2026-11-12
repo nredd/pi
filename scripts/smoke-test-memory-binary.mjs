@@ -2,6 +2,7 @@
 /** Exercise the real pinned pi-memory extension through Pi's CLI and loopback model API, without user state. */
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
+import { realpathSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -293,7 +294,7 @@ async function main() {
 		await rm(root, { recursive: true, force: true });
 	}
 }
-if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url)
+if (process.argv[1] && pathToFileURL(realpathSync(process.argv[1])).href === import.meta.url)
 	main().catch((error) => {
 		console.error(error.message);
 		process.exitCode = 1;

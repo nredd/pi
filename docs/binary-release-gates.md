@@ -31,11 +31,25 @@ releases, not a Type3 fix, a release authorization or closure of harness #72.
    `smoke-<platform>.json`. Each immutable `binary-smoke-<platform>` Actions artifact binds
    source SHA, release tag, platform, both digests and exact memory package identity/success.
 6. Stage only after all six receipts match the original build identity and current archives.
-   Publish the original manifest and combined `BINARY-SMOKE.json` alongside archives and
-   `SHA256SUMS`. The final publication job re-downloads the actual draft assets and checks
-   them against the **original current-run Actions evidence**, not just JSON/checksums in
-   the mutable draft. Replacing archives and regenerating all draft metadata still fails.
+   Require the exact asset-name allowlist at staging and final publication: six binary
+   archives, the versioned source archive, two installer manifests, `BUILD-IDENTITY.json`,
+   `BINARY-SMOKE.json` and `SHA256SUMS`. Extra binaries (including unknown architectures),
+   benign unexpected files, missing assets, duplicate remote names, unsafe names and
+   nonregular local entries fail. Release notes are release text, moved outside the asset
+   directory rather than silently allowed as an unlisted attachment.
+   The final publication job validates the remote asset list **before downloading**, then
+   re-downloads the actual draft assets and checks them against the **original current-run
+   Actions evidence**, not just JSON/checksums in the mutable draft. Replacing archives and
+   regenerating all draft metadata still fails. Just before publication, re-query and compare
+   asset IDs, names, sizes, digests and update timestamps to detect mutation during validation.
    Existing npm/announcement ordering and failed-draft cleanup remain unchanged.
+
+GitHub does not offer an atomic compare-asset-set-and-publish operation. The last inventory
+comparison narrows the race but cannot prevent a contents writer changing the draft between
+that comparison and `gh release edit --draft=false`. The existing per-tag workflow concurrency
+serializes workflow runs, not outside API writers. Only the release workflow should mutate
+its draft once validation begins; repository contents-write authority must enforce that
+operational ownership. This guard does not claim total atomicity against a concurrent writer.
 
 The source SHA is the exact `SOURCE_REF` checkout, including an explicitly requested recovery
 ref. Staging/publication checkouts must agree; moving the ref fails admission. Receipts are
@@ -74,5 +88,8 @@ The developer CLI proof loads genuine published memory and exercises real tools 
 Contract fixtures use small synthetic files to cover failures without compiling binaries;
 they are not represented as installed memory or runtime evidence. The negative CLI fixture
 printing the success marker alone is refused because no real tool/API exchange occurred.
+The actual inventory CLI also tests extra architecture archives, unexpected files, duplicate,
+missing and unsafe remote names. Both CLI entry guards resolve symlinks before identifying the
+entrypoint, so invocation through a symlinked checkout cannot silently skip gate execution.
 All contract tests run in the existing scripts suite; `npm run check` includes their strict
 JavaScript type check, and Biome owns all new scripts.

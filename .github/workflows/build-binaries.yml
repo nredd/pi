@@ -286,6 +286,8 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Notes are release text, not an attached asset in the publication allowlist.
+          mv release-assets/RELEASE_NOTES.md RELEASE_NOTES.md
           node scripts/binary-release-contract.mjs collect release-assets \
             "$(git rev-parse HEAD)" "$RELEASE_TAG" smoke-receipts
           node scripts/binary-release-contract.mjs verify release-assets "$(git rev-parse HEAD)" "$RELEASE_TAG"
@@ -307,7 +309,6 @@ jobs:
             BUILD-IDENTITY.json
             BINARY-SMOKE.json
             SHA256SUMS
-            RELEASE_NOTES.md
           )
 
           for asset in "${expected_assets[@]}"; do
@@ -354,7 +355,7 @@ jobs:
             --verify-tag \
             --draft \
             --title "${RELEASE_TAG}" \
-            --notes-file RELEASE_NOTES.md \
+            --notes-file ../RELEASE_NOTES.md \
             "${release_assets[@]}"
 
           expected_asset_names="$(printf '%s\n' "${release_assets[@]}" | sort)"
@@ -538,6 +539,10 @@ jobs:
             exit 1
           fi
 
+          # Validate the exact remote name set before downloading; never silently ignore extra assets.
+          gh release view "$RELEASE_TAG" --json assets \
+            --jq '[.assets[] | {id,name,size,digest,updatedAt}] | sort_by(.id)' > draft-asset-identity.json
+          node scripts/binary-release-contract.mjs assets draft-asset-identity.json "$RELEASE_TAG"
           # Re-download the actual draft payload. Earlier smoke success cannot bless replaced assets.
           gh release download "$RELEASE_TAG" --dir draft-assets
           node scripts/binary-release-contract.mjs collect trusted-evidence \
@@ -546,6 +551,11 @@ jobs:
           cmp trusted-evidence/SHA256SUMS draft-assets/SHA256SUMS
           node scripts/binary-release-contract.mjs verify draft-assets "$(git rev-parse HEAD)" "$RELEASE_TAG" trusted-evidence
           (cd draft-assets && sha256sum -c SHA256SUMS)
+          # Detect changes during validation. GitHub has no atomic compare-assets-and-publish API;
+          # contents writers must not mutate the draft while this workflow owns publication.
+          gh release view "$RELEASE_TAG" --json assets \
+            --jq '[.assets[] | {id,name,size,digest,updatedAt}] | sort_by(.id)' > final-asset-identity.json
+          cmp draft-asset-identity.json final-asset-identity.json
           gh release edit "${RELEASE_TAG}" --draft=false
 
   cleanup-draft-github-release:

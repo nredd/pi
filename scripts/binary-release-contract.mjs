@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 /** Bind binary publication to successful memory smoke of the same build, source and archive bytes. */
 import { createHash } from "node:crypto";
-import { createReadStream } from "node:fs";
-import { readFile, writeFile } from "node:fs/promises";
+import { createReadStream, realpathSync } from "node:fs";
+import { lstat, readdir, readFile, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
@@ -22,6 +22,35 @@ export const MEMORY = Object.freeze({
 export function archiveName(platform) {
 	if (!PLATFORMS.includes(platform)) throw new Error(`Unknown binary platform: ${platform}`);
 	return `pi-${platform}.${platform.startsWith("windows-") ? "zip" : "tar.gz"}`;
+}
+/** The staged/public allowlist includes only tested binaries and intentional release metadata.
+ * @param {string} releaseTag
+ */
+export function releaseAssetNames(releaseTag) {
+	if (!/^v[0-9]+\.[0-9]+\.[0-9]+(?:-nredd\.[0-9]+)?$/.test(releaseTag)) throw new Error("Invalid release asset tag");
+	return [
+		...PLATFORMS.map(archiveName),
+		`pi-${releaseTag.slice(1)}-source.tar.gz`,
+		"pi-coding-agent-install-package.json",
+		"pi-coding-agent-install-package-lock.json",
+		"BUILD-IDENTITY.json",
+		"BINARY-SMOKE.json",
+		"SHA256SUMS",
+	];
+}
+/** Refuse extra, missing, duplicate or unsafe remote/local names before downloading or publishing.
+ * @param {unknown} names @param {string} releaseTag
+ */
+export function verifyAssetNames(names, releaseTag) {
+	const expected = releaseAssetNames(releaseTag);
+	if (
+		!Array.isArray(names) ||
+		names.some((name) => typeof name !== "string" || !/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(name)) ||
+		new Set(names).size !== names.length ||
+		names.length !== expected.length ||
+		expected.some((name) => !names.includes(name))
+	)
+		throw new Error("Release asset names are extra, missing, duplicate or unsafe");
 }
 /** Stream large binary artifacts instead of retaining them in memory.
  * @param {string} path
@@ -82,6 +111,12 @@ export async function readBuildIdentity(directory, sourceSha, releaseTag) {
  * @returns {Promise<SmokeReceipt[]>}
  */
 export async function verifyRelease(directory, sourceSha, releaseTag, trustedDirectory) {
+	const names = await readdir(directory);
+	verifyAssetNames(names, releaseTag);
+	for (const name of names) {
+		if (!(await lstat(join(directory, name))).isFile())
+			throw new Error(`Release asset is not a regular file: ${name}`);
+	}
 	if (trustedDirectory) {
 		for (const name of ["BUILD-IDENTITY.json", "BINARY-SMOKE.json"]) {
 			if ((await sha256(join(directory, name))) !== (await sha256(join(trustedDirectory, name))))
@@ -117,7 +152,15 @@ export async function verifyRelease(directory, sourceSha, releaseTag, trustedDir
 }
 async function main() {
 	const [command, directory, sourceSha, releaseTag, extra] = process.argv.slice(2);
-	if (command === "record" && extra) {
+	if (command === "assets" && directory && sourceSha && !releaseTag) {
+		const assets = JSON.parse(await readFile(directory, "utf8"));
+		if (!Array.isArray(assets)) throw new Error("Release asset inventory must be an array");
+		verifyAssetNames(
+			assets.map((asset) => asset?.name),
+			sourceSha,
+		);
+		console.log("Release asset-name admission passed");
+	} else if (command === "record" && extra) {
 		const identity = await createBuildIdentity(resolve(directory), sourceSha, releaseTag, extra);
 		await writeFile(join(directory, "BUILD-IDENTITY.json"), `${JSON.stringify(identity, null, 2)}\n`, { flag: "wx" });
 	} else if (command === "collect" && extra) {
@@ -130,10 +173,10 @@ async function main() {
 		console.log("Binary release tested-byte admission passed");
 	} else
 		throw new Error(
-			"Usage: binary-release-contract.mjs record|collect|verify <directory> <source-sha> <release-tag> [bun-version|receipt-dir|trusted-dir]",
+			"Usage: binary-release-contract.mjs assets <inventory.json> <release-tag> OR record|collect|verify <directory> <source-sha> <release-tag> [bun-version|receipt-dir|trusted-dir]",
 		);
 }
-if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url)
+if (process.argv[1] && pathToFileURL(realpathSync(process.argv[1])).href === import.meta.url)
 	main().catch((error) => {
 		console.error(error.message);
 		process.exitCode = 1;

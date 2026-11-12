@@ -24,4 +24,13 @@ test("verifies tested bytes before staging and again from draft assets before pu
 	assert.ok(publish.includes("gh release download"));
 	assert.ok(publish.indexOf("binary-release-contract.mjs verify") < publish.indexOf("gh release edit"));
 	assert.ok(publish.includes("binary-release-contract.mjs verify"));
+	const names = publish.indexOf("binary-release-contract.mjs assets draft-asset-identity.json");
+	assert.ok(names >= 0 && names < publish.indexOf("gh release download"));
+	const inventoryRecheck = publish.indexOf("cmp draft-asset-identity.json final-asset-identity.json");
+	assert.ok(
+		inventoryRecheck > publish.indexOf("sha256sum -c SHA256SUMS") &&
+			inventoryRecheck < publish.indexOf("gh release edit"),
+	);
+	assert.ok(stage.includes("mv release-assets/RELEASE_NOTES.md RELEASE_NOTES.md"));
+	assert.ok(stage.includes("--notes-file ../RELEASE_NOTES.md"));
 });

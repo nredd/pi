@@ -34,7 +34,7 @@ import {
 	sessionEntryToContextMessages,
 } from "../session-manager.ts";
 import { combineUsage } from "../usage-totals.ts";
-import { type CompactionTarget, resolveCompactionPolicy } from "./policy.ts";
+import { type CompactionTarget, resolveCompactionPolicy, validateCompactionTarget } from "./policy.ts";
 import {
 	computeFileLists,
 	createFileOps,
@@ -273,8 +273,10 @@ export function shouldCompact(
 	settings: CompactionSettings,
 	maxInputTokens?: number,
 ): boolean {
+	validateCompactionTarget(settings.targetTokens, "compaction.targetTokens");
+	if (!settings.enabled) return false;
 	const policy = resolveCompactionPolicy(contextWindow, settings.reserveTokens, settings.targetTokens, maxInputTokens);
-	return settings.enabled && contextTokens > policy.threshold;
+	return contextTokens > policy.threshold;
 }
 
 // ============================================================================

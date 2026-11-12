@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Disabled automatic compaction no longer rejects normal provider requests when a valid reserve exceeds the model window. Malformed target settings remain rejected ([#33](https://github.com/nredd/pi/issues/33)).
 - Pre-dispatch compaction preserves the entire unsent user/custom input batch, including user instructions preceding large extension context, until the answering request dispatches. Summary requests and failed request gates do not release pending input.
 - Extension custom messages triggered while manual, automatic, or branch compaction is in progress are queued instead of interrupting compaction. They are admitted in order after compaction settles.
 - In-process harnesses preserve default-stream auth checks and restore faux providers during reload with owner-scoped cleanup. Interactive harness settlement awaits submitted editor commands before painting, including asynchronous `/new` and `/reload` work.

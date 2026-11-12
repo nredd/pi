@@ -1,6 +1,7 @@
-import { Container, Markdown, type MarkdownTheme } from "@earendil-works/pi-tui";
+import { Container, copyGutterEndMarker, Markdown, type MarkdownTheme, visibleWidth } from "@earendil-works/pi-tui";
 import type { MarkdownTransformer } from "../../../core/extensions/types.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
+import { EntryTimestamp } from "./entry-timestamp.ts";
 import { createMarkdownTransform } from "./markdown-transform.ts";
 
 const OSC133_ZONE_START = "\x1b]133;A\x07";
@@ -11,6 +12,7 @@ const OSC133_ZONE_FINAL = "\x1b]133;C\x07";
  * Component that renders a user message
  */
 export class UserMessageComponent extends Container {
+	readonly entryTimestamp = new EntryTimestamp();
 	private text: string;
 	private markdownTheme: MarkdownTheme;
 	private outputPad: number;
@@ -37,13 +39,24 @@ export class UserMessageComponent extends Container {
 
 	private rebuild(): void {
 		this.clear();
+		if (!this.text.trim()) return;
+		// Own the existing padding slots so metadata is not inserted into Markdown or its copy text.
+		this.addChild({
+			render: (width) => {
+				const label = this.entryTimestamp.label(width - this.outputPad * 2);
+				const content = label === undefined ? "" : " ".repeat(this.outputPad) + label;
+				const row = theme.bg("userMessageBg", content + " ".repeat(Math.max(0, width - visibleWidth(content))));
+				return [row + (label === undefined ? "" : copyGutterEndMarker())];
+			},
+			invalidate: () => {},
+		});
 		// The Markdown pads and colors its own background: a Box around it would keep a second full-width copy of every
 		// line, with identical output.
 		this.addChild(
 			new Markdown(
 				this.text,
 				this.outputPad,
-				1,
+				0,
 				this.markdownTheme,
 				{
 					color: (content: string) => theme.fg("userMessageText", content),
@@ -56,6 +69,10 @@ export class UserMessageComponent extends Container {
 				},
 			),
 		);
+		this.addChild({
+			render: (width) => [theme.bg("userMessageBg", " ".repeat(width))],
+			invalidate: () => {},
+		});
 	}
 
 	override render(width: number): string[] {

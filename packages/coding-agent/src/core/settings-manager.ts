@@ -954,6 +954,17 @@ export class SettingsManager {
 		return this.settings.hideThinkingBlock ?? SETTINGS_DEFAULTS.hideThinkingBlock;
 	}
 
+	/** Invalid unvalidated settings must not enable transcript metadata. */
+	getShowTimestamps(): boolean {
+		return this.settings.showTimestamps === true;
+	}
+
+	setShowTimestamps(show: boolean): void {
+		this.globalSettings.showTimestamps = show;
+		this.markModified("showTimestamps");
+		this.save();
+	}
+
 	getShowCacheMissNotices(): boolean {
 		return this.settings.showCacheMissNotices ?? SETTINGS_DEFAULTS.showCacheMissNotices;
 	}

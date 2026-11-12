@@ -203,6 +203,11 @@
       "type": "boolean",
       "default": false
     },
+    "showTimestamps": {
+      "type": "boolean",
+      "description": "Show recorded transcript entry times in the viewer's local timezone.",
+      "default": false
+    },
     "showCacheMissNotices": {
       "type": "boolean",
       "description": "Show cache cost and provider recovery notices.",

@@ -243,6 +243,12 @@ export const SettingsSchema = Type.Object(
 		branchSummary: Type.Optional(BranchSummarySettingsSchema),
 		retry: Type.Optional(RetrySettingsSchema),
 		hideThinkingBlock: Type.Optional(Type.Boolean({ default: SETTINGS_DEFAULTS.hideThinkingBlock })),
+		showTimestamps: Type.Optional(
+			Type.Boolean({
+				description: "Show recorded transcript entry times in the viewer's local timezone.",
+				default: SETTINGS_DEFAULTS.showTimestamps,
+			}),
+		),
 		showCacheMissNotices: Type.Optional(
 			Type.Boolean({
 				description: "Show cache cost and provider recovery notices.",

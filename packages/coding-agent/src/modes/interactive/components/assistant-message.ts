@@ -4,6 +4,7 @@ import type { MarkdownTransformer } from "../../../core/extensions/types.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
 import { DisclosureGutter } from "./disclosure-gutter.ts";
 import { entryRule } from "./entry-rule.ts";
+import { EntryTimestamp } from "./entry-timestamp.ts";
 import { createMarkdownTransform } from "./markdown-transform.ts";
 import { firstSentence, firstTextLine, OneLineRow, renderedContentLines } from "./one-line.ts";
 import { RuledBlock } from "./ruled-block.ts";
@@ -26,6 +27,7 @@ const OSC133_ZONE_FINAL = "\x1b]133;C\x07";
  * Component that renders a complete assistant message
  */
 export class AssistantMessageComponent extends Container {
+	readonly entryTimestamp = new EntryTimestamp();
 	private contentContainer: Container;
 	private hideThinkingBlock: boolean;
 	private markdownTheme: MarkdownTheme;
@@ -58,6 +60,7 @@ export class AssistantMessageComponent extends Container {
 		this.addChild(this.contentContainer);
 
 		if (message) {
+			this.entryTimestamp.setTime({ messageTimestamp: message.timestamp });
 			this.updateContent(message);
 		}
 	}
@@ -114,7 +117,7 @@ export class AssistantMessageComponent extends Container {
 		);
 
 		if (hasVisibleContent) {
-			this.contentContainer.addChild(entryRule());
+			this.contentContainer.addChild(entryRule(this.entryTimestamp));
 		}
 
 		// Render content in order

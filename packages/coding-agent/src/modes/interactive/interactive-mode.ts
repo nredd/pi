@@ -148,6 +148,7 @@ import { DynamicBorder } from "./components/dynamic-border.ts";
 import { EarendilAnnouncementComponent } from "./components/earendil-announcement.ts";
 import { playArmin3d, playPiLogo3d } from "./components/easter-egg-3d.lazy.ts";
 import { entryRule, Rule, TURN_RULE_GLYPH } from "./components/entry-rule.ts";
+import { EntryTimestamp } from "./components/entry-timestamp.ts";
 import { ExtensionEditorComponent } from "./components/extension-editor.ts";
 import { ExtensionInputComponent } from "./components/extension-input.ts";
 import { ExtensionSelectorComponent } from "./components/extension-selector.ts";
@@ -2103,6 +2104,7 @@ export class InteractiveMode {
 		this.footer.setAutoCompactEnabled(this.session.autoCompactionEnabled);
 		this.footerDataProvider.setCwd(this.sessionManager.getCwd());
 		this.hideThinkingBlock = this.settingsManager.getHideThinkingBlock();
+		this.updateTimestampVisibility();
 		this.outputPad = this.settingsManager.getOutputPad();
 		this.ui.setShowHardwareCursor(this.settingsManager.getShowHardwareCursor());
 		const clearOnShrink = this.settingsManager.getClearOnShrink();
@@ -4966,6 +4968,19 @@ export class InteractiveMode {
 		this.ui.requestRender();
 	}
 
+	/** Update only framing state. Disclosure state, streamed content, and renderer caches stay intact. */
+	private updateTimestampVisibility(): void {
+		const enabled = this.settingsManager.getShowTimestamps();
+		for (const container of [this.chatContainer, this.pendingMessagesContainer]) {
+			for (const child of container.children) {
+				if ("entryTimestamp" in child && child.entryTimestamp instanceof EntryTimestamp) {
+					child.entryTimestamp.setEnabled(enabled);
+				}
+			}
+		}
+		this.ui.requestRender();
+	}
+
 	private showSettingsSelector(): void {
 		this.showSelector((done) => {
 			let selector: SettingsSelectorComponent | undefined;
@@ -4996,6 +5011,7 @@ export class InteractiveMode {
 					terminalTheme: this.themeController.getTerminalTheme(),
 					availableThemes: getAvailableThemes(),
 					hideThinkingBlock: this.hideThinkingBlock,
+					showTimestamps: this.settingsManager.getShowTimestamps(),
 					mermaidRenderingMode: this.settingsManager.getMermaidRenderingMode(),
 					collapseChangelog: this.settingsManager.getCollapseChangelog(),
 					enableInstallTelemetry: this.settingsManager.getEnableInstallTelemetry(),
@@ -5100,6 +5116,11 @@ export class InteractiveMode {
 						this.hideThinkingBlock = hidden;
 						this.settingsManager.setHideThinkingBlock(hidden);
 						this.updateThinkingBlockVisibility();
+					},
+					onShowTimestampsChange: (shown) => {
+						this.settingsManager.setShowTimestamps(shown);
+						this.updateTimestampVisibility();
+						return this.settingsManager.getShowTimestamps();
 					},
 					onMermaidRenderingModeChange: (mode) => {
 						this.settingsManager.setMermaidRenderingMode(mode);

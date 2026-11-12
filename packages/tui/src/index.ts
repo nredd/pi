@@ -108,6 +108,8 @@ export {
 } from "./keys.ts";
 // LaTeX rendering
 export { type RenderLatexOptions, renderLatex } from "./latex.ts";
+// Structural layout metadata for host-owned component trees.
+export { LAYOUT_NODE, type StackLayoutNode } from "./layout-node.ts";
 // Native platform integration
 export { getNativeClipboard, type NativeClipboard } from "./native-platform.ts";
 export { oklabToOkhslLightness } from "./oklab.ts";
@@ -181,7 +183,7 @@ export {
 	type TuiStopOptions,
 	type ViewportTUI,
 } from "./tui.ts";
-export { TuiAltScreen, type TuiAltScreenOptions } from "./tui-alt-screen.ts";
+export { type TranscriptNavigationTarget, TuiAltScreen, type TuiAltScreenOptions } from "./tui-alt-screen.ts";
 export { TuiMainScreen, type TuiMainScreenRenderState } from "./tui-main-screen.ts";
 // Utilities
 export {

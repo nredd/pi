@@ -16,6 +16,8 @@ export interface InteractiveHarnessOptions extends HarnessOptions {
 	columns?: number;
 	rows?: number;
 	tuiMode?: "regular" | "fullscreen";
+	/** Caller-owned bindings, including an optional isolated file path for /reload tests. */
+	keybindings?: KeybindingsManager;
 	/** Inject a caller-owned emulator. Otherwise the harness owns and disposes one. */
 	terminal?: VirtualTerminal;
 	/** Static branch for footer fixtures; null (default) disables git discovery/watchers. */
@@ -78,7 +80,7 @@ export async function createInteractiveHarness(options: InteractiveHarnessOption
 		terminal,
 		tuiMode: options.tuiMode ?? "fullscreen",
 		initialThemeSetting: "dark",
-		keybindings: new KeybindingsManager(),
+		keybindings: options.keybindings ?? new KeybindingsManager(),
 		footerDataProvider: new FooterDataProvider(first.cwd, options.gitBranch ?? null),
 		prepareTools: async () => ({}),
 		onInput: (text) => {

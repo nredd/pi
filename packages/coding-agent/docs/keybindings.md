@@ -117,10 +117,29 @@ In fullscreen mode, these actions control the transcript and take precedence ove
 | `tui.altScreen.top` | `ctrl+home` | Scroll to the beginning of the transcript |
 | `tui.altScreen.bottom` | `ctrl+end` | Scroll to the transcript end and follow new output |
 
+### Previous user prompt
+
+`/previous-prompt` scrolls upward through canonical user-role entries in fullscreen mode. It is also available as `app.transcript.previousUserPrompt`, **unbound by default**. Opt in with an unused key, for example:
+
+```json
+{
+  "app.transcript.previousUserPrompt": "f8"
+}
+```
+
+Run `/reload` after editing; `/hotkeys` shows the effective key or `Unbound`. Use `[]` to disable the shortcut again. Choose a key your terminal and OS do not already reserve. The slash command works without extended keyboard support.
+
+From the live bottom, the first jump selects the latest user prompt, even if it is already visible. Otherwise it selects the prompt containing the viewport top, or the previous prompt when exactly aligned. Repeated jumps move to earlier entries, including when a short final prompt cannot align at the top without adding blank rows. Skill invocation plus trailing text is one target; attachment-only prompts have a visible placeholder. Assistant messages, tools, notices and summaries are not targets. Extension-sent user-role messages are targets too.
+
+A successful jump stops following output. Streaming, disclosure changes and resizing keep the selected prompt anchored where possible. Manual scrolling resets that anchor; `tui.altScreen.bottom` restores live following. The shortcut preserves the editor draft, cursor, history, focus and valid text selection, and never copies. The slash command consumes only the submitted command. No earlier target produces transient feedback without changing navigation. Regular mode reports `Requires fullscreen transcript navigation.` without switching modes.
+
+This is separate from `tui.altScreen.previousPrompt` / `nextPrompt`, which intentionally traverse OSC133-marked messages, including assistant messages. Those defaults and editor-history bindings are unchanged. Native-terminal reproduction and recorded interactions are in [Previous-prompt terminal proof](previous-prompt-proof.md).
+
 ### Application
 
 | Keybinding id | Default | Description |
 |--------|---------|-------------|
+| `app.transcript.previousUserPrompt` | None | Jump upward through canonical user prompts (`/previous-prompt`, fullscreen) |
 | `app.interrupt` | `escape` | Cancel / abort |
 | `app.clear` | `ctrl+c` | Clear editor (first) / exit (second, within 1 second; the first press says so) |
 | `app.exit` | `ctrl+d` | Exit (when editor empty) |

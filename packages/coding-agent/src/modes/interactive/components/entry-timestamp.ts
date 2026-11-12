@@ -61,6 +61,15 @@ export class EntryTimestamp implements Component {
 		return label !== undefined && visibleWidth(label) <= width ? theme.fg("muted", label) : undefined;
 	}
 
+	/** Reuse a leading padding row, retaining the original blank output while disabled. */
+	padding(width: number, paddingX = 0, background?: (text: string) => string): string[] {
+		const label = this.label(width - paddingX * 2);
+		if (label === undefined) return [background ? background(" ".repeat(width)) : ""];
+		const content = " ".repeat(paddingX) + label;
+		const row = content + " ".repeat(Math.max(0, width - visibleWidth(content)));
+		return [(background ? background(row) : row) + copyGutterEndMarker()];
+	}
+
 	/** Metadata slot for an entry without an existing separator. Hidden state takes no rows. */
 	render(width: number): string[] {
 		const label = this.label(width);

@@ -1,4 +1,4 @@
-import { Container, copyGutterEndMarker, Markdown, type MarkdownTheme, visibleWidth } from "@earendil-works/pi-tui";
+import { Container, Markdown, type MarkdownTheme } from "@earendil-works/pi-tui";
 import type { MarkdownTransformer } from "../../../core/extensions/types.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
 import { EntryTimestamp } from "./entry-timestamp.ts";
@@ -42,12 +42,8 @@ export class UserMessageComponent extends Container {
 		if (!this.text.trim()) return;
 		// Own the existing padding slots so metadata is not inserted into Markdown or its copy text.
 		this.addChild({
-			render: (width) => {
-				const label = this.entryTimestamp.label(width - this.outputPad * 2);
-				const content = label === undefined ? "" : " ".repeat(this.outputPad) + label;
-				const row = theme.bg("userMessageBg", content + " ".repeat(Math.max(0, width - visibleWidth(content))));
-				return [row + (label === undefined ? "" : copyGutterEndMarker())];
-			},
+			render: (width) =>
+				this.entryTimestamp.padding(width, this.outputPad, (text) => theme.bg("userMessageBg", text)),
 			invalidate: () => {},
 		});
 		// The Markdown pads and colors its own background: a Box around it would keep a second full-width copy of every

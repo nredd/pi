@@ -3572,6 +3572,7 @@ export class InteractiveMode {
 			case "message_update":
 				if (this.streamingComponent && event.message.role === "assistant") {
 					this.streamingMessage = event.message;
+					this.configureEntryTimestamp(this.streamingComponent, { messageTimestamp: event.message.timestamp });
 					this.streamingComponent.updateContent(this.streamingMessage, true);
 
 					for (const content of this.streamingMessage.content) {
@@ -3619,6 +3620,10 @@ export class InteractiveMode {
 								: "Operation aborted";
 						this.streamingMessage.errorMessage = errorMessage;
 					}
+					this.configureEntryTimestamp(this.streamingComponent, { messageTimestamp: event.message.timestamp });
+					for (const component of this.pendingTools.values()) {
+						this.configureEntryTimestamp(component, { messageTimestamp: event.message.timestamp });
+					}
 					this.streamingComponent.updateContent(this.streamingMessage, false);
 
 					if (this.streamingMessage.stopReason === "aborted" || this.streamingMessage.stopReason === "error") {
@@ -3646,6 +3651,13 @@ export class InteractiveMode {
 					this.footer.invalidate();
 				}
 				this.ui.requestRender();
+				break;
+
+			case "bash_execution_recorded":
+				if (this.bashComponent) {
+					this.configureEntryTimestamp(this.bashComponent, { messageTimestamp: event.message.timestamp });
+					this.ui.requestRender();
+				}
 				break;
 
 			case "bash_execution_update":
@@ -3762,11 +3774,7 @@ export class InteractiveMode {
 					// The latest compaction is prepended for model context; append it below at its chronological position.
 					this.renderSessionEntries(entries.slice(1));
 					this.addMessageToChat(
-						createCompactionSummaryMessage(
-							event.result.summary,
-							event.result.tokensBefore,
-							new Date().toISOString(),
-						),
+						createCompactionSummaryMessage(event.result.summary, event.result.tokensBefore, entries[0].timestamp),
 					);
 					if (event.result.usage) {
 						this.addCompactionCostNotice({
@@ -4008,6 +4016,7 @@ export class InteractiveMode {
 							this.outputPad,
 						);
 						component.setExpanded(this.toolOutputExpanded);
+						this.configureEntryTimestamp(component, { messageTimestamp: message.timestamp });
 						this.chatContainer.addChild(component);
 						// Render user message separately if present
 						if (skillBlock.userMessage) {
@@ -4018,7 +4027,6 @@ export class InteractiveMode {
 								this.outputPad,
 								this.getMarkdownTransformers(),
 							);
-							this.configureEntryTimestamp(userComponent, { messageTimestamp: message.timestamp });
 							this.chatContainer.addChild(userComponent);
 						}
 					} else {

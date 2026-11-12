@@ -1,6 +1,7 @@
-import { Box, Container, Markdown, type MarkdownTheme, MouseRegion, Text } from "@earendil-works/pi-tui";
+import { Box, Container, Markdown, type MarkdownTheme, MouseRegion, Spacer, Text } from "@earendil-works/pi-tui";
 import type { ParsedSkillBlock } from "../../../core/agent-session.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
+import { EntryTimestamp } from "./entry-timestamp.ts";
 import { keyText } from "./keybinding-hints.ts";
 
 /**
@@ -9,12 +10,13 @@ import { keyText } from "./keybinding-hints.ts";
  * Only renders the skill block itself - user message is rendered separately.
  */
 export class SkillInvocationMessageComponent extends Box {
+	readonly entryTimestamp = new EntryTimestamp();
 	private expanded = false;
 	private skillBlock: ParsedSkillBlock;
 	private markdownTheme: MarkdownTheme;
 
 	constructor(skillBlock: ParsedSkillBlock, markdownTheme: MarkdownTheme = getMarkdownTheme(), outputPad = 1) {
-		super(outputPad, 1, (t) => theme.bg("customMessageBg", t));
+		super(outputPad, 0, (t) => theme.bg("customMessageBg", t));
 		this.skillBlock = skillBlock;
 		this.markdownTheme = markdownTheme;
 		this.updateDisplay();
@@ -36,6 +38,7 @@ export class SkillInvocationMessageComponent extends Box {
 
 	private updateDisplay(): void {
 		this.clear();
+		this.addChild({ render: (width) => this.entryTimestamp.padding(width), invalidate: () => {} });
 		const content = new Container();
 
 		if (this.expanded) {
@@ -64,5 +67,6 @@ export class SkillInvocationMessageComponent extends Box {
 				return { handled: true };
 			}),
 		);
+		this.addChild(new Spacer(1));
 	}
 }

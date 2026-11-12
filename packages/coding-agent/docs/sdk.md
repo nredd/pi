@@ -104,6 +104,11 @@ Session events report message updates, tool execution, queues, compaction, retri
 
 Use `agent_settled` when the host needs to know that Pi will not continue automatically.
 
+`bash_execution_recorded` carries the exact `BashExecutionMessage` created by `executeBash()`
+or `recordBashResult()`, including its completion timestamp. During an agent run this message
+is queued before persistence, then the same recorded instant is retained when it is flushed.
+Hosts can decorate the corresponding live command without inventing a render-time timestamp.
+
 ## Configuring a session
 
 Without overrides, the factory creates a `ModelRuntime`, file-backed `SettingsManager`, persistent `SessionManager`, `DefaultResourceLoader`, and the configured default tools.

@@ -3,6 +3,7 @@ import { Markdown, stripTerminalSequences, Text, type TUI, visibleWidth } from "
 import { beforeAll, describe, expect, it } from "vitest";
 import { AssistantMessageComponent } from "../src/modes/interactive/components/assistant-message.ts";
 import { CustomMessageComponent } from "../src/modes/interactive/components/custom-message.ts";
+import { SkillInvocationMessageComponent } from "../src/modes/interactive/components/skill-invocation-message.ts";
 import { ToolExecutionComponent } from "../src/modes/interactive/components/tool-execution.ts";
 import { UserMessageComponent } from "../src/modes/interactive/components/user-message.ts";
 import { getMarkdownTheme, initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
@@ -33,6 +34,37 @@ const timestampPattern = /\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{2}:\d{2}/g;
 // nredd/pi#30: decorations occupy framing slots and never replace content components.
 describe("timestamp framing", () => {
 	beforeAll(() => initTheme("dark"));
+
+	it("uses diagnostic padding for an otherwise empty interrupted assistant entry", () => {
+		const component = new AssistantMessageComponent({ ...message, content: [], stopReason: "aborted" });
+		const baseline = component.render(80);
+		component.entryTimestamp.setEnabled(true);
+		const decorated = component.render(80);
+		expect(decorated).toHaveLength(baseline.length);
+		expect(decorated.slice(1)).toEqual(baseline.slice(1));
+		expect(decorated.join("\n").match(timestampPattern)).toHaveLength(1);
+		component.entryTimestamp.setEnabled(false);
+		expect(component.render(80)).toEqual(baseline);
+	});
+
+	it("reuses skill invocation padding without changing its expanded state", () => {
+		const component = new SkillInvocationMessageComponent({
+			name: "fixture",
+			location: "/fixture",
+			content: "details",
+			userMessage: undefined,
+		});
+		component.setExpanded(true);
+		const baseline = component.render(80);
+		component.entryTimestamp.setTime({ messageTimestamp: 0 });
+		component.entryTimestamp.setEnabled(true);
+		const decorated = component.render(80);
+		expect(decorated).toHaveLength(baseline.length);
+		expect(decorated.slice(1)).toEqual(baseline.slice(1));
+		expect(decorated.join("\n").match(timestampPattern)).toHaveLength(1);
+		component.entryTimestamp.setEnabled(false);
+		expect(component.render(80)).toEqual(baseline);
+	});
 
 	it.each([20, 40, 80, 120])("keeps assistant content and OSC133 identical at width %i", (width) => {
 		const component = new AssistantMessageComponent(message, true);

@@ -238,6 +238,7 @@ export type AgentSessionEvent =
 			reason: "manual" | "threshold" | "overflow";
 	  }
 	| { type: "summarization_retry_finished" }
+	| { type: "bash_execution_recorded"; message: BashExecutionMessage }
 	| { type: "bash_execution_update"; id?: string; delta: string };
 
 /** Listener function for agent session events */
@@ -4566,6 +4567,8 @@ export class AgentSession {
 			this.sessionManager.appendMessage(bashMessage);
 			this._refreshFinalizedContext();
 		}
+		// The UI needs this exact recorded object even while persistence is deferred during a turn.
+		this._emit({ type: "bash_execution_recorded", message: bashMessage });
 	}
 
 	/**

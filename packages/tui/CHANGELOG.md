@@ -13,6 +13,7 @@
 
 ### Fixed
 
+- Preserve fullscreen selections across copy-excluded decoration and safely mappable reflow using stable layout owners and source offsets. Changed selected text or replaced owners still invalidate selection without copying ([#35](https://github.com/nredd/pi/issues/35)).
 - Run the virtual-terminal and render-flush tests with `node:test` and strict assertions, matching pi-tui's test runner instead of failing during Vitest initialization.
 - Fixed `Container` mouse dispatch misplacing clicks when a child transforms its own render output, by aligning the child's rendered lines with the geometry it recorded.
 - Fixed `TuiAltScreen` synthesized clicks carrying the release's button 3 instead of the pressed button, which stopped left-click handlers from firing.

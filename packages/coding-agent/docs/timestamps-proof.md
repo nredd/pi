@@ -52,3 +52,19 @@ hidden messages, exact recorded bash completion, live/replay labels, disclosure 
 and narrow/wide resize. `entry-timestamp.test.ts` checks numeric/ISO precedence, epoch zero,
 invalid times, midnight/year boundaries, UTC offsets and repeated DST hours. Component
 checks preserve OSC133, content rows, native tool identity and renderer caches.
+
+`interactive-timestamp-selection.test.ts` checks the actual selected text through the native
+copy shortcut with copy-on-select disabled: timestamps off/on, narrow omitted labels, width
+reflow and real tool disclosure. Toggling or reflow never copies implicitly. Entry/turn rules
+are copy-excluded decoration with timestamps both off and on. These remain injected clipboard
+checks, not a claim about the desktop clipboard.
+
+Fullscreen selection validation compares copy-visible content, not timestamp/gutter text.
+When rows move or wrap, it maps source offsets within the same native layout components and
+requires the complete selected text and selected source-owner sequence to remain equal.
+Source appended after an anchor may stream without invalidating it; changed source before an
+anchor is not a safe offset mapping. Changed selected content, collapsed selected detail or
+replaced owners (including intermediate owners with identical text) invalidate selection rather
+than retaining stale coordinates.
+`packages/tui/test/tui-alt-screen-selection-reflow.test.ts` covers native source mapping,
+Unicode/hard wraps, preceding layout changes, streaming tail updates and navigation.

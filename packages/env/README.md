@@ -63,4 +63,8 @@ run through Git Bash as `NodeExecutionEnv` runs them there; argv commands run di
 `npm run build:daemon` builds the daemon with Cargo; the tests talk to `daemon/target/debug/pi-env` over a pipe, or to
 the binary named by `PI_ENV_DAEMON` (CI tests the release builds this way). They run Durable's env conformance suite
 against `RemoteExecutionEnv` and compare random operation sequences and Durable's tools against `NodeExecutionEnv` on
-the same machine. `test/ssh-external.test.ts` runs the suite over a real SSH server when `PI_ENV_SSH_HOST` is set.
+the same machine. Tool fixtures implement the retained-output API, and successful cases must return a result rather
+than merely agree on an adapter error. Stdout and stderr are checked independently: their relative arrival order across
+two pipes is not a cross-environment guarantee. Exact combined-output comparisons use one redirected pipe (`2>&1`),
+without sorting or normalizing output. `test/ssh-external.test.ts` runs the suite over a real SSH server when
+`PI_ENV_SSH_HOST` is set.

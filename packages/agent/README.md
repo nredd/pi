@@ -503,6 +503,14 @@ execute: async (toolCallId, params, signal, onUpdate) => {
 
 Thrown errors are caught by the agent and reported to the LLM as tool errors with `isError: true`.
 
+A tool call whose name is absent from the current executable loadout returns an immediate
+`isError: true` result: `Tool <name> is not available in this request: it is not active
+(deferred tools must be loaded first), not registered, or excluded by the active profile`.
+This describes request-level availability, not an OS executable lookup or proof of which
+cause applies. The loop does not load deferred tools or override a profile automatically;
+the host must activate/register an allowed tool before the model calls it. A declaration
+in older transcript history does not make that tool executable in the current request.
+
 Return `terminate: true` from `execute()`, a blocked `beforeToolCall`, or `afterToolCall` to hint that the agent should stop after the current tool batch. This only takes effect when every finalized tool result in the batch is terminating. The hint is runtime-only; emitted `toolResult` transcript messages remain standard LLM tool results.
 
 ### MCP and Codemode

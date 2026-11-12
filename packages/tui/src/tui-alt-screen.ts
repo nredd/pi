@@ -89,6 +89,14 @@ const COPY_ERROR_FLASH_DURATION_MS = 5000;
 const TERMINAL_WORD_SELECTION_JOINERS = new Set(["/", "-"]);
 const wordSegmenter = getWordSegmenter();
 
+/** Compare source-visible cells, never copy-excluded entry framing or ANSI styles. */
+function selectionRowText(line: string): string {
+	const { gutterEnd } = getCopyRowInfo(line);
+	return stripTerminalSequences(
+		sliceByColumn(line, gutterEnd, Math.max(0, visibleWidth(line) - gutterEnd), true),
+	).trimEnd();
+}
+
 interface CachedKittyImage {
 	transmissionGeneration: number;
 	transmissionBytes: number;
@@ -111,7 +119,47 @@ interface SelectionRange {
 	end: SelectionPoint;
 }
 
+/** Copy-source offsets for one stable layout component, independent of wrapping and gutters. */
+function selectionContent(lines: readonly string[]): {
+	text: string;
+	rows: Array<{ offset: number; column: number; text: string }>;
+} {
+	let text = "";
+	const rows: Array<{ offset: number; column: number; text: string }> = [];
+	for (const [index, line] of lines.entries()) {
+		const info = getCopyRowInfo(line);
+		let content = selectionRowText(line);
+		let column = info.gutterEnd;
+		if (index > 0) {
+			text += info.join === "none" ? "\n" : info.join === "space" ? " " : "";
+			if (info.join !== "none") {
+				column += visibleWidth(content) - visibleWidth(content.trimStart());
+				content = content.trimStart();
+			}
+		}
+		rows.push({ offset: text.length, column, text: content });
+		text += content;
+	}
+	return { text, rows };
+}
+
 type SelectionGranularity = "character" | "word" | "line";
+type TranscriptGeometry = Map<Component, { row: number; height: number }>;
+
+/** Include every selected source owner, ignoring components that contribute decoration only. */
+function selectionOwners(geometry: TranscriptGeometry, range: SelectionRange, lines: readonly string[]): Component[] {
+	return [...geometry].flatMap(([component, box]) => {
+		const start = Math.max(box.row, range.start.row);
+		const end = Math.min(box.row + box.height, range.end.row + 1);
+		return start < end && lines.slice(start, end).some((line) => selectionRowText(line).length > 0)
+			? [component]
+			: [];
+	});
+}
+
+function sameSelectionOwners(previous: readonly Component[], next: readonly Component[]): boolean {
+	return previous.length === next.length && previous.every((owner, index) => owner === next[index]);
+}
 
 interface ClickTarget {
 	timestamp: number;
@@ -546,13 +594,13 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 	}
 
 	/** Root-layout geometry shared by canonical navigation and viewport preservation. */
-	private resolveTranscriptGeometry(layout: LayoutFrame): Map<Component, { row: number; height: number }> {
+	private resolveTranscriptGeometry(layout: LayoutFrame, leavesOnly = false): TranscriptGeometry {
 		const scrollBox = getScrollViewBox(layout, layout.primaryScrollView ?? this.implicitScrollView);
 		const content = scrollBox?.children[0];
 		const geometry = new Map<Component, { row: number; height: number }>();
 		if (!content) return geometry;
 		const visit = (box: LayoutBox): void => {
-			if (box.rect.height > 0)
+			if (box.rect.height > 0 && (!leavesOnly || box.children.length === 0))
 				geometry.set(box.component, { row: box.rect.y - content.rect.y, height: box.rect.height });
 			for (const child of box.children) visit(child);
 		};
@@ -1607,13 +1655,15 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		return { start: Math.max(minColumn, start), end: Math.min(maxColumn, end) };
 	}
 
-	private getActiveSelectionText(): string | undefined {
-		const selection = this.getSelectionBounds();
+	private getActiveSelectionText(
+		selection = this.getSelectionBounds(),
+		layout = this.currentLayout,
+	): string | undefined {
 		if (!selection) return undefined;
 		let sourceLines: readonly string[] = this.previousCopyLines;
 		if (selection.start.scrollView) {
-			if (!this.currentLayout) return undefined;
-			const box = getScrollViewBox(this.currentLayout, selection.start.scrollView);
+			if (!layout) return undefined;
+			const box = getScrollViewBox(layout, selection.start.scrollView);
 			if (!box?.scrollContentLines) return undefined;
 			sourceLines = box.scrollContentLines;
 		}
@@ -1811,6 +1861,70 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		});
 	}
 
+	/** Re-anchor only unchanged source in the same components, and verify the complete selected text. */
+	private remapSelection(
+		selection: SelectionRange,
+		layout: LayoutFrame,
+		oldGeometry: TranscriptGeometry,
+		newGeometry: TranscriptGeometry,
+	): boolean {
+		if (!this.currentLayout || selection.start.scrollView !== this.getPrimaryScrollView()) return false;
+		const scrollView = selection.start.scrollView;
+		if (!scrollView || (layout.primaryScrollView && layout.primaryScrollView !== scrollView)) return false;
+		const previous = getScrollViewBox(this.currentLayout, scrollView)?.scrollContentLines;
+		const next = getScrollViewBox(layout, scrollView)?.scrollContentLines;
+		if (!previous || !next) return false;
+		const mapPoint = (point: SelectionPoint, end: boolean): SelectionPoint | undefined => {
+			// Use the native layout owner, never matching text from another entry.
+			const owner = [...oldGeometry].findLast(([, box]) => box.row <= point.row && point.row < box.row + box.height);
+			if (!owner) return undefined;
+			const [component, oldBox] = owner;
+			const newBox = newGeometry.get(component);
+			if (!newBox) return undefined;
+			const before = selectionContent(previous.slice(oldBox.row, oldBox.row + oldBox.height));
+			const after = selectionContent(next.slice(newBox.row, newBox.row + newBox.height));
+			const oldRow = before.rows[point.row - oldBox.row];
+			if (!oldRow) return undefined;
+			const cell = getGraphemeCellRange(previous[point.row] ?? "", point.col);
+			const column = end ? (point.boundary ? point.col : (cell?.end ?? point.col + 1)) : (cell?.start ?? point.col);
+			const offset = oldRow.offset + sliceByColumn(oldRow.text, 0, Math.max(0, column - oldRow.column), true).length;
+			// Appends after this anchor are harmless; changed source preceding it is not a safe offset mapping.
+			if (before.text.slice(0, offset) !== after.text.slice(0, offset)) return undefined;
+			const row = after.rows.findLastIndex((candidate) => candidate.offset <= offset);
+			const target = after.rows[row];
+			if (!target || offset > target.offset + target.text.length) return undefined;
+			return {
+				...point,
+				row: newBox.row + row,
+				col: target.column + visibleWidth(target.text.slice(0, offset - target.offset)),
+				boundary: true,
+			};
+		};
+		const mapRange = (range: SelectionRange): SelectionRange | undefined => {
+			const start = mapPoint(range.start, false);
+			const end = mapPoint(range.end, true);
+			return start && end ? { start, end } : undefined;
+		};
+		const mapped = mapRange(selection);
+		if (
+			!mapped ||
+			!sameSelectionOwners(
+				selectionOwners(oldGeometry, selection, previous),
+				selectionOwners(newGeometry, mapped, next),
+			) ||
+			this.getActiveSelectionText(selection) !== this.getActiveSelectionText(mapped, layout)
+		)
+			return false;
+		const initial = this.selectionInitialRange ? mapRange(this.selectionInitialRange) : undefined;
+		if (this.selectionInitialRange && !initial) return false;
+		const forward = this.selectionAnchor === selection.start;
+		this.selectionAnchor = forward ? mapped.start : mapped.end;
+		this.selectionFocus = forward ? mapped.end : mapped.start;
+		this.selectionInitialRange = initial;
+		this.lastClick = undefined;
+		return true;
+	}
+
 	private isMouseSequence(data: string): boolean {
 		return /^\x1b\[<\d+;\d+;\d+[Mm]$/.test(data) || (data.length === 6 && data.startsWith("\x1b[M"));
 	}
@@ -1866,23 +1980,37 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		if (this.refreshNavigationAnchor(nextLayout) || this.refreshSearch(nextLayout) || moved) {
 			nextLayout = renderLayoutFrame(root, width, height, () => this.requestRender());
 		}
-		// Content-coordinate selections survive scrolling, but not a reflow or replacement of their rows.
+		// Ignore excluded framing. Reflow may remap unchanged source; actual replacement invalidates it.
 		const selection = this.getSelectionBounds();
 		if (selection?.start.scrollView && this.currentLayout) {
 			const previous = getScrollViewBox(this.currentLayout, selection.start.scrollView)?.scrollContentLines;
 			const next = getScrollViewBox(nextLayout, selection.start.scrollView)?.scrollContentLines;
+			const previousGeometry = this.resolveTranscriptGeometry(this.currentLayout, true);
+			const nextGeometry = this.resolveTranscriptGeometry(nextLayout, true);
+			const ownersUnchanged =
+				selection.start.scrollView !== this.getPrimaryScrollView() ||
+				(previous !== undefined &&
+					next !== undefined &&
+					sameSelectionOwners(
+						selectionOwners(previousGeometry, selection, previous),
+						selectionOwners(nextGeometry, selection, next),
+					));
 			if (
+				!ownersUnchanged ||
 				!next ||
 				!previous ||
 				previous
 					.slice(selection.start.row, selection.end.row + 1)
 					.some(
 						(line, index) =>
-							stripTerminalSequences(line).trimEnd() !==
-							stripTerminalSequences(next[selection.start.row + index] ?? "").trimEnd(),
+							selectionRowText(line) !== selectionRowText(next[selection.start.row + index] ?? "") ||
+							getCopyRowInfo(line).join !== getCopyRowInfo(next[selection.start.row + index] ?? "").join ||
+							(selectionRowText(line).length > 0 &&
+								getCopyRowInfo(line).gutterEnd !==
+									getCopyRowInfo(next[selection.start.row + index] ?? "").gutterEnd),
 					)
 			) {
-				this.resetTextSelection();
+				if (!this.remapSelection(selection, nextLayout, previousGeometry, nextGeometry)) this.resetTextSelection();
 			}
 		}
 		// Resolve fake cursors before highlighting and compositing, which only track SGR codes

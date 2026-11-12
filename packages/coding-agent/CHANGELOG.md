@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- Fullscreen text selection survives timestamp toggles and safely mappable reflow without implicit copying; changed selected content and replaced components still invalidate it. Entry rules stay out of copied text with timestamps off or on ([#35](https://github.com/nredd/pi/issues/35)).
 - Disabled automatic compaction no longer rejects normal provider requests when a valid reserve exceeds the model window. Malformed target settings remain rejected ([#33](https://github.com/nredd/pi/issues/33)).
 - Pre-dispatch compaction preserves the entire unsent user/custom input batch, including user instructions preceding large extension context, until the answering request dispatches. Summary requests and failed request gates do not release pending input.
 - Extension custom messages triggered while manual, automatic, or branch compaction is in progress are queued instead of interrupting compaction. They are admitted in order after compaction settles.

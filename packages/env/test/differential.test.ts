@@ -306,6 +306,26 @@ describe("RemoteExecutionEnv against NodeExecutionEnv", () => {
 		},
 	);
 
+	// PR #36 full-CI regression: two pipes guarantee order within each stream, not across streams.
+	it("preserves stdout and stderr independently without requiring inter-stream ordering", async () => {
+		const { local, remote } = pair();
+		for (const env of [local, remote]) {
+			const streams = { stdout: "", stderr: "" };
+			const result = await env.exec(
+				"printf 'one\\ntwo\\n'; printf 'error\\n' >&2",
+				{
+					onOutput: (text, _context, info) => {
+						streams[info.stream] += text;
+					},
+				},
+				context,
+			);
+			expect(result).toMatchObject({ ok: true, value: { exitCode: 0 } });
+			expect(streams).toEqual({ stdout: "one\ntwo\n", stderr: "error\n" });
+		}
+	});
+
+	// PR #36 full-CI regression: successful differential cases must not agree on a broken stub error.
 	it("gives the same read and bash tool results", async () => {
 		const { local, remote, roots } = pair();
 		const files: [string, string | Uint8Array][] = [
@@ -323,10 +343,15 @@ describe("RemoteExecutionEnv against NodeExecutionEnv", () => {
 			({
 				env,
 				outputWindow: undefined,
-				output: (chunk: string | Uint8Array) => output.push(String(chunk)),
+				output: (chunk: string | Uint8Array) =>
+					output.push(typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk)),
+				retainedOutput: () => ({ text: output.join(""), truncated: false }),
 				diagnostic: () => {},
 				details: async () => {},
-			}) as unknown as ToolExecutionApi;
+			}) satisfies Pick<
+				ToolExecutionApi,
+				"env" | "outputWindow" | "output" | "retainedOutput" | "diagnostic" | "details"
+			> as unknown as ToolExecutionApi;
 		const run = async (
 			env: ExecutionEnv,
 			tool: ReturnType<typeof createReadTool> | ReturnType<typeof createBashTool>,
@@ -340,6 +365,8 @@ describe("RemoteExecutionEnv against NodeExecutionEnv", () => {
 				return { error: (error as Error).message, output: output.join("") };
 			}
 		};
+		// One pipe gives this exact combined-text oracle a deterministic order without sorting output.
+		const orderedOutputCommand = "{ cat text.txt; echo err >&2; } 2>&1";
 		const cases: [ReturnType<typeof createReadTool> | ReturnType<typeof createBashTool>, object][] = [
 			[createReadTool(), { path: "text.txt" }],
 			[createReadTool(), { path: "text.txt", offset: 2, limit: 1 }],
@@ -348,13 +375,32 @@ describe("RemoteExecutionEnv against NodeExecutionEnv", () => {
 			[createReadTool(), { path: "bom.txt" }],
 			[createReadTool(), { path: "bad.txt" }],
 			[createReadTool(), { path: "missing.txt" }],
-			[createBashTool(), { command: "cat text.txt; echo err >&2; exit 0" }],
+			[createBashTool(), { command: orderedOutputCommand }],
 			[createBashTool(), { command: "exit 3" }],
 			[createBashTool(), { command: "printf 'a\\nb'; ls" }],
 		];
 		for (const [tool, args] of cases) {
-			const expected = normalize(await run(local, tool, args), roots[0]);
-			const actual = normalize(await run(remote, tool, args), roots[1]);
+			const expectedResult = await run(local, tool, args);
+			const actualResult = await run(remote, tool, args);
+			const outcome = "path" in args && args.path === "missing.txt" ? "error" : "result";
+			// A broken test API must not pass merely because both environments throw the same error.
+			expect(expectedResult, JSON.stringify(args)).toHaveProperty(outcome);
+			expect(actualResult, JSON.stringify(args)).toHaveProperty(outcome);
+			if ("command" in args && args.command === orderedOutputCommand) {
+				for (const result of [expectedResult, actualResult]) {
+					expect(result).toMatchObject({
+						output: "one\ntwo\n\nthreeerr\n",
+						result: { structuredOutput: { output: "one\ntwo\n\nthreeerr\n", truncated: false, exitCode: 0 } },
+					});
+				}
+			}
+			if ("command" in args && args.command === "exit 3") {
+				for (const result of [expectedResult, actualResult]) {
+					expect(result).toMatchObject({ result: { isError: true, structuredOutput: { exitCode: 3 } } });
+				}
+			}
+			const expected = normalize(expectedResult, roots[0]);
+			const actual = normalize(actualResult, roots[1]);
 			expect(actual, JSON.stringify(args)).toEqual(expected);
 		}
 	}, 60_000);

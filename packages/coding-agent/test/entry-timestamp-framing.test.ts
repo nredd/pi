@@ -1,8 +1,9 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { Markdown, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
+import { Markdown, stripTerminalSequences, Text, type TUI, visibleWidth } from "@earendil-works/pi-tui";
 import { beforeAll, describe, expect, it } from "vitest";
 import { AssistantMessageComponent } from "../src/modes/interactive/components/assistant-message.ts";
 import { CustomMessageComponent } from "../src/modes/interactive/components/custom-message.ts";
+import { ToolExecutionComponent } from "../src/modes/interactive/components/tool-execution.ts";
 import { UserMessageComponent } from "../src/modes/interactive/components/user-message.ts";
 import { getMarkdownTheme, initTheme, theme } from "../src/modes/interactive/theme/theme.ts";
 
@@ -72,6 +73,47 @@ describe("timestamp framing", () => {
 		component.entryTimestamp.setEnabled(false);
 		expect(component.render(width)).toEqual(baseline);
 	});
+
+	it.each(["default", "self"] as const)(
+		"preserves tool instances, one-line rows, disclosure, and cached renderers with %s shell",
+		(renderShell) => {
+			let calls = 0;
+			const ui = { requestRender: () => {} } as unknown as TUI;
+			const component = new ToolExecutionComponent(
+				"example",
+				"call-1",
+				{},
+				{},
+				{
+					renderShell,
+					renderCall: () => {
+						calls++;
+						return new Text("call", 0, 0);
+					},
+					renderResult: (_result, { expanded }) => new Text(expanded ? "result\\nmore details" : "summary", 0, 0),
+				},
+				ui,
+				process.cwd(),
+			);
+			component.entryTimestamp.setTime({ messageTimestamp: 0 });
+			component.updateResult({ content: [{ type: "text", text: "result\\nmore details" }], isError: false });
+			const baseline = component.render(80);
+			const renderCalls = calls;
+			component.entryTimestamp.setEnabled(true);
+			expect(component).toBeInstanceOf(ToolExecutionComponent);
+			expect(component.render(80)).toHaveLength(2);
+			expect(component.render(80).slice(1)).toEqual(baseline.slice(1));
+			expect(calls).toBe(renderCalls);
+			component.setExpanded(true);
+			const expanded = component.render(80);
+			component.entryTimestamp.setEnabled(false);
+			expect(component.render(80).slice(1)).toEqual(expanded.slice(1));
+			component.entryTimestamp.setEnabled(true);
+			expect(component.render(80)).toEqual(expanded);
+			component.updateResult({ content: [{ type: "text", text: "updated" }], isError: false });
+			expect(component.render(80).join("\n").match(timestampPattern)).toHaveLength(1);
+		},
+	);
 
 	it("keeps extension message disclosure state across timestamp toggles", () => {
 		const component = new CustomMessageComponent(

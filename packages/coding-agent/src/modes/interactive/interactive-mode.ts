@@ -148,7 +148,7 @@ import { DynamicBorder } from "./components/dynamic-border.ts";
 import { EarendilAnnouncementComponent } from "./components/earendil-announcement.ts";
 import { playArmin3d, playPiLogo3d } from "./components/easter-egg-3d.lazy.ts";
 import { entryRule, Rule, TURN_RULE_GLYPH } from "./components/entry-rule.ts";
-import { EntryTimestamp } from "./components/entry-timestamp.ts";
+import { type EntryTime, EntryTimestamp } from "./components/entry-timestamp.ts";
 import { ExtensionEditorComponent } from "./components/extension-editor.ts";
 import { ExtensionInputComponent } from "./components/extension-input.ts";
 import { ExtensionSelectorComponent } from "./components/extension-selector.ts";
@@ -3562,6 +3562,7 @@ export class InteractiveMode {
 						this.getMarkdownTransformers(),
 					);
 					this.streamingMessage = event.message;
+					this.configureEntryTimestamp(this.streamingComponent, { messageTimestamp: event.message.timestamp });
 					this.chatContainer.addChild(this.streamingComponent);
 					this.streamingComponent.updateContent(this.streamingMessage, true);
 					this.ui.requestRender();
@@ -3590,6 +3591,7 @@ export class InteractiveMode {
 									this.sessionManager.getCwd(),
 								);
 								component.setExpanded(this.toolOutputExpanded);
+								this.configureEntryTimestamp(component, { messageTimestamp: this.streamingMessage.timestamp });
 								this.chatContainer.addChild(component);
 								this.pendingTools.set(content.id, component);
 							} else {
@@ -3908,6 +3910,7 @@ export class InteractiveMode {
 			return;
 		}
 		const component = new CustomEntryComponent(entry, renderer, this.outputPad);
+		this.configureEntryTimestamp(component, { entryTimestamp: entry.timestamp });
 		component.setExpanded(this.toolOutputExpanded);
 		if (!component.hasContent()) {
 			return;
@@ -3933,6 +3936,7 @@ export class InteractiveMode {
 					message.excludeFromContext,
 					this.outputPad,
 				);
+				this.configureEntryTimestamp(component, { messageTimestamp: message.timestamp });
 				if (message.output) {
 					component.appendOutput(message.output);
 				}
@@ -3955,12 +3959,15 @@ export class InteractiveMode {
 						this.outputPad,
 					);
 					component.setExpanded(this.toolOutputExpanded);
+					this.configureEntryTimestamp(component, { messageTimestamp: message.timestamp });
 					this.chatContainer.addChild(component);
 				}
 				break;
 			}
 			case "compactionSummary": {
-				this.chatContainer.addChild(entryRule());
+				this.chatContainer.addChild(
+					this.configureEntryTimestamp(entryRule(), { messageTimestamp: message.timestamp }),
+				);
 				const component = new CompactionSummaryMessageComponent(
 					message,
 					this.getMarkdownThemeWithSettings(),
@@ -3971,7 +3978,9 @@ export class InteractiveMode {
 				break;
 			}
 			case "branchSummary": {
-				this.chatContainer.addChild(entryRule());
+				this.chatContainer.addChild(
+					this.configureEntryTimestamp(entryRule(), { messageTimestamp: message.timestamp }),
+				);
 				const component = new BranchSummaryMessageComponent(
 					message,
 					this.getMarkdownThemeWithSettings(),
@@ -4009,6 +4018,7 @@ export class InteractiveMode {
 								this.outputPad,
 								this.getMarkdownTransformers(),
 							);
+							this.configureEntryTimestamp(userComponent, { messageTimestamp: message.timestamp });
 							this.chatContainer.addChild(userComponent);
 						}
 					} else {
@@ -4018,6 +4028,7 @@ export class InteractiveMode {
 							this.outputPad,
 							this.getMarkdownTransformers(),
 						);
+						this.configureEntryTimestamp(userComponent, { messageTimestamp: message.timestamp });
 						this.chatContainer.addChild(userComponent);
 					}
 					if (options?.populateHistory) {
@@ -4035,6 +4046,7 @@ export class InteractiveMode {
 					this.outputPad,
 					this.getMarkdownTransformers(),
 				);
+				this.configureEntryTimestamp(assistantComponent, { messageTimestamp: message.timestamp });
 				this.chatContainer.addChild(assistantComponent);
 				break;
 			}
@@ -4100,6 +4112,7 @@ export class InteractiveMode {
 							this.sessionManager.getCwd(),
 						);
 						component.setExpanded(this.toolOutputExpanded);
+						this.configureEntryTimestamp(component, { messageTimestamp: message.timestamp });
 						this.chatContainer.addChild(component);
 
 						if (message.stopReason === "aborted" || message.stopReason === "error") {
@@ -4966,6 +4979,16 @@ export class InteractiveMode {
 		this.editorContainer.addChild(created.component);
 		this.ui.setFocus(created.focus);
 		this.ui.requestRender();
+	}
+
+	/** Configure framing without wrapping or replacing the native component. */
+	private configureEntryTimestamp<T extends Component & { entryTimestamp: EntryTimestamp }>(
+		component: T,
+		time: EntryTime,
+	): T {
+		component.entryTimestamp.setTime(time);
+		component.entryTimestamp.setEnabled(this.settingsManager.getShowTimestamps());
+		return component;
 	}
 
 	/** Update only framing state. Disclosure state, streamed content, and renderer caches stay intact. */

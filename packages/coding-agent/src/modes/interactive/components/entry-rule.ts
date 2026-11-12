@@ -1,6 +1,6 @@
 import { type Component, copyGutterEndMarker, visibleWidth } from "@earendil-works/pi-tui";
 import { theme } from "../theme/theme.ts";
-import type { EntryTimestamp } from "./entry-timestamp.ts";
+import { EntryTimestamp } from "./entry-timestamp.ts";
 
 /** Between two entries of the same turn. Dashed, so it is lighter than the turn rule. */
 export const ENTRY_RULE_GLYPH = "┄";
@@ -13,15 +13,15 @@ export const TURN_RULE_GLYPH = "─";
  */
 export class Rule implements Component {
 	private glyph: string;
-	private timestamp?: EntryTimestamp;
+	readonly entryTimestamp: EntryTimestamp;
 
 	constructor(glyph: string, timestamp?: EntryTimestamp) {
 		this.glyph = glyph;
-		this.timestamp = timestamp;
+		this.entryTimestamp = timestamp ?? new EntryTimestamp();
 	}
 
 	render(width: number): string[] {
-		const label = this.timestamp?.label(width - 2);
+		const label = this.entryTimestamp.label(width - 2);
 		if (label !== undefined) {
 			const prefix = `${theme.fg("borderMuted", this.glyph)} ${label}`;
 			return [

@@ -14,6 +14,7 @@ import { AuthStorage } from "../src/core/auth-storage.ts";
 import { ModelRuntime } from "../src/core/model-runtime.ts";
 import { createAgentSession } from "../src/core/sdk.ts";
 import { SessionManager } from "../src/core/session-manager.ts";
+import { SettingsManager } from "../src/core/settings-manager.ts";
 import { getBranchSelection, type ModelRouteRequest, type VirtualModelDefinition } from "../src/core/virtual-models.ts";
 import { createTestResourceLoader } from "./utilities.ts";
 
@@ -279,7 +280,16 @@ describe("createAgentSession with virtual models", () => {
 		sessionManager.appendMessage({ role: "user", content: "hi", timestamp: 1 });
 		sessionManager.appendMessage(assistantFrom(runtime.getModel("faux", "large")!, "hello"));
 		const resourceLoader = createTestResourceLoader();
-		const options = { cwd: tempDir, agentDir: tempDir, modelRuntime: runtime, sessionManager, resourceLoader, model };
+		// nredd/pi-harness#751: the synthetic 1k physical model needs a feasible response reserve.
+		const options = {
+			cwd: tempDir,
+			agentDir: tempDir,
+			modelRuntime: runtime,
+			sessionManager,
+			resourceLoader,
+			model,
+			settingsManager: SettingsManager.inMemory({ compaction: { reserveTokens: 0 } }),
+		};
 		const { session } = await createAgentSession(options);
 		onTestFinished(() => session.dispose());
 		return { session, sessionManager };

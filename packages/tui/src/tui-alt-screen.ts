@@ -13,6 +13,7 @@ import {
 	getScrollbarGeometry,
 	getScrollViewBox,
 	getScrollViewsAt,
+	type LayoutBox,
 	type LayoutFrame,
 	renderLayoutFrame,
 	type ScrollbarGeometry,
@@ -204,6 +205,12 @@ export interface TuiAltScreenOptions {
 	copySelection?: (text: string) => Promise<boolean | string>;
 }
 
+/** A semantic target in the primary transcript, identified independently of rendered rows. */
+export interface TranscriptNavigationTarget {
+	readonly identity: object;
+	readonly component: Component;
+}
+
 /** Alternate-screen TUI with a scrollable, application-owned viewport. */
 export class TuiAltScreen extends TuiBase implements ViewportTUI {
 	readonly mode = "fullscreen" as const;
@@ -236,6 +243,8 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 	private scrollbarHover?: ScrollView;
 	private scrollToEndIndicatorRect?: ScrollToEndIndicatorRect;
 	private activeSearch?: ActiveSearch;
+	private navigationTargets: readonly TranscriptNavigationTarget[] = [];
+	private navigationAnchor?: object;
 	private pressedUrl?: string;
 	private selectionDragged = false;
 	private mouseCapture?: TuiMouseDispatchTarget;
@@ -336,6 +345,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 
 	setLayoutRoot(component: Component | undefined): void {
 		if (this.layoutRoot === component) return;
+		this.navigationAnchor = undefined;
 		this.layoutRoot = component;
 		this.currentLayout = undefined;
 		this.requestRender();
@@ -503,21 +513,85 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 	}
 
 	scrollBy(lines: number): void {
+		this.navigationAnchor = undefined;
 		this.getPrimaryScrollView().scrollBy(lines);
 		this.requestRender();
 	}
 
 	scrollToTop(): void {
+		this.navigationAnchor = undefined;
 		this.getPrimaryScrollView().scrollToStart();
 		this.requestRender();
 	}
 
 	scrollToBottom(): void {
+		this.navigationAnchor = undefined;
 		this.getPrimaryScrollView().scrollToEnd();
 		this.requestRender();
 	}
 
+	/** Replace the host's canonical targets. Missing identities are discarded on the next layout. */
+	setTranscriptNavigationTargets(targets: readonly TranscriptNavigationTarget[]): void {
+		this.navigationTargets = targets;
+		this.requestRender();
+	}
+
+	/** Forget semantic navigation when the host replaces the session, even if entry IDs overlap. */
+	resetTranscriptNavigation(): void {
+		this.navigationAnchor = undefined;
+		this.navigationTargets = [];
+	}
+
+	private resolveNavigationTargets(layout: LayoutFrame): Array<TranscriptNavigationTarget & { row: number }> {
+		const scrollBox = getScrollViewBox(layout, layout.primaryScrollView ?? this.implicitScrollView);
+		const content = scrollBox?.children[0];
+		if (!content) return [];
+		const rows = new Map<Component, number>();
+		const visit = (box: LayoutBox): void => {
+			if (box.rect.height > 0) rows.set(box.component, box.rect.y - content.rect.y);
+			for (const child of box.children) visit(child);
+		};
+		visit(content);
+		return this.navigationTargets.flatMap((target) => {
+			const row = rows.get(target.component);
+			return row === undefined ? [] : [{ ...target, row }];
+		});
+	}
+
+	/** Move upward through canonical host targets without touching input, focus, or selection. */
+	scrollToPreviousTranscriptTarget(): boolean {
+		if (!this.currentLayout || this.hasOverlay()) return false;
+		const targets = this.resolveNavigationTargets(this.currentLayout);
+		const scrollView = this.getPrimaryScrollView();
+		const selected = targets.findIndex((target) => target.identity === this.navigationAnchor);
+		const target =
+			selected >= 0
+				? targets[selected - 1]
+				: scrollView.isFollowingEnd
+					? targets[targets.length - 1]
+					: targets.findLast((candidate) => candidate.row < scrollView.scrollTop);
+		if (!target) return false;
+		this.navigationAnchor = target.identity;
+		scrollView.scrollTo(target.row, { disableFollow: true });
+		this.requestRender();
+		return true;
+	}
+
+	private refreshNavigationAnchor(layout: LayoutFrame): boolean {
+		if (!this.navigationAnchor) return false;
+		const target = this.resolveNavigationTargets(layout).find((item) => item.identity === this.navigationAnchor);
+		if (!target) {
+			this.navigationAnchor = undefined;
+			return false;
+		}
+		const scrollView = layout.primaryScrollView ?? this.implicitScrollView;
+		const before = scrollView.scrollTop;
+		scrollView.scrollTo(target.row, { disableFollow: true });
+		return scrollView.scrollTop !== before;
+	}
+
 	private scrollToPrompt(direction: -1 | 1): void {
+		this.navigationAnchor = undefined;
 		if (!this.currentLayout) return;
 		const scrollView = this.getPrimaryScrollView();
 		const lines = getScrollViewBox(this.currentLayout, scrollView)?.scrollContentLines;
@@ -532,6 +606,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 	}
 
 	private toggleSearch(): void {
+		this.navigationAnchor = undefined;
 		if (this.activeSearch) {
 			this.closeSearch();
 			return;
@@ -719,6 +794,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 
 		const wheelEvent = this.parseWheelEvent(data);
 		if (wheelEvent) {
+			this.navigationAnchor = undefined;
 			const lines = this.wheelScroll.next(wheelEvent.direction, performance.now());
 			// SGR mouse button codes use bit 3 (value 8) for the Alt modifier.
 			const wheelDelta =
@@ -1096,6 +1172,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		pointerY: number,
 		grabOffset: number,
 	): void {
+		this.navigationAnchor = undefined;
 		const maxThumbOffset = geometry.trackHeight - geometry.thumbHeight;
 		const thumbOffset = Math.max(0, Math.min(maxThumbOffset, pointerY - geometry.trackTop - grabOffset));
 		const scrollTop = maxThumbOffset === 0 ? 0 : Math.round((thumbOffset / maxThumbOffset) * geometry.maxScrollTop);
@@ -1357,6 +1434,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 			this.stopSelectionAutoScroll();
 			return;
 		}
+		this.navigationAnchor = undefined;
 		const remaining = scrollView.scrollBy(direction);
 		if (remaining === direction) {
 			this.stopSelectionAutoScroll();
@@ -1746,8 +1824,27 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		const height = Math.max(1, this.terminal.rows);
 		const root = this.layoutRoot ?? this.implicitScrollView;
 		let nextLayout = renderLayoutFrame(root, width, height, () => this.requestRender());
-		if (this.refreshSearch(nextLayout)) {
+		if (this.refreshNavigationAnchor(nextLayout) || this.refreshSearch(nextLayout)) {
 			nextLayout = renderLayoutFrame(root, width, height, () => this.requestRender());
+		}
+		// Content-coordinate selections survive scrolling, but not a reflow or replacement of their rows.
+		const selection = this.getSelectionBounds();
+		if (selection?.start.scrollView && this.currentLayout) {
+			const previous = getScrollViewBox(this.currentLayout, selection.start.scrollView)?.scrollContentLines;
+			const next = getScrollViewBox(nextLayout, selection.start.scrollView)?.scrollContentLines;
+			if (
+				!next ||
+				!previous ||
+				previous
+					.slice(selection.start.row, selection.end.row + 1)
+					.some(
+						(line, index) =>
+							stripTerminalSequences(line).trimEnd() !==
+							stripTerminalSequences(next[selection.start.row + index] ?? "").trimEnd(),
+					)
+			) {
+				this.resetTextSelection();
+			}
 		}
 		// Resolve fake cursors before highlighting and compositing, which only track SGR codes
 		let screen = this.resolveFakeCursors(

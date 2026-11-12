@@ -44,6 +44,7 @@ import {
 	setKeybindings,
 	type Terminal,
 	Text,
+	type TranscriptNavigationTarget,
 	TruncatedText,
 	type TUI,
 	TuiAltScreen,
@@ -203,6 +204,7 @@ import {
 	theme,
 } from "./theme/theme.ts";
 import { InteractiveThemeController } from "./theme/theme-controller.ts";
+import { TranscriptContainer, TranscriptEntryIdentities } from "./transcript-entries.ts";
 import { createInteractiveTui, createInteractiveTuiReference } from "./tui-renderer.ts";
 
 export { createInteractiveTui, createInteractiveTuiReference } from "./tui-renderer.ts";
@@ -470,6 +472,8 @@ export class InteractiveMode {
 	private mainScreenRenderState: TuiMainScreenRenderState | undefined;
 	private loadedResourcesContainer: Container;
 	private chatContainer: Container;
+	private transcriptIdentities = new TranscriptEntryIdentities();
+	private transcriptTargets: TranscriptNavigationTarget[] = [];
 	private documentContainer: Container;
 	private transcriptScrollView: TuiLayouts.ScrollView | undefined;
 	private fullscreenLayoutRoot: Component | undefined;
@@ -648,8 +652,8 @@ export class InteractiveMode {
 		this.ui.setClearOnShrink(this.settingsManager.getClearOnShrink());
 		this.headerContainer = new Container();
 		this.loadedResourcesContainer = new Container();
-		this.chatContainer = new Container();
-		this.documentContainer = new Container();
+		this.chatContainer = new TranscriptContainer();
+		this.documentContainer = new TranscriptContainer();
 		this.documentContainer.addChild(this.headerContainer);
 		this.documentContainer.addChild(this.loadedResourcesContainer);
 		this.documentContainer.addChild(this.chatContainer);
@@ -891,6 +895,7 @@ export class InteractiveMode {
 		if (TuiLayouts.isViewportTUI(tui)) {
 			if (!this.fullscreenLayoutRoot) throw new Error("Fullscreen layout is not initialized");
 			tui.setLayoutRoot(this.fullscreenLayoutRoot);
+			if (tui instanceof TuiAltScreen) tui.setTranscriptNavigationTargets(this.transcriptTargets);
 		}
 	}
 
@@ -2241,6 +2246,9 @@ export class InteractiveMode {
 	}
 
 	private renderCurrentSessionState(): void {
+		this.transcriptIdentities = new TranscriptEntryIdentities();
+		this.transcriptTargets = [];
+		if (this.renderer instanceof TuiAltScreen) this.renderer.resetTranscriptNavigation();
 		this.loadedResourcesContainer.clear();
 		this.chatContainer.clear();
 		this.pendingMessagesContainer.clear();
@@ -3154,6 +3162,7 @@ export class InteractiveMode {
 		this.defaultEditor.onAction("app.session.tree", () => this.showTreeSelector());
 		this.defaultEditor.onAction("app.session.fork", () => this.showUserMessageSelector());
 		this.defaultEditor.onAction("app.session.resume", () => this.showSessionSelector());
+		this.defaultEditor.onAction("app.transcript.previousUserPrompt", () => this.previousUserPrompt());
 
 		this.defaultEditor.onChange = (text: string) => {
 			const wasBashMode = this.isBashMode;
@@ -3298,6 +3307,11 @@ export class InteractiveMode {
 			if (text === "/changelog") {
 				this.handleChangelogCommand();
 				this.editor.setText("");
+				return;
+			}
+			if (text === "/previous-prompt") {
+				this.editor.setText("");
+				this.previousUserPrompt();
 				return;
 			}
 			if (text === "/hotkeys") {
@@ -3983,44 +3997,56 @@ export class InteractiveMode {
 				break;
 			case "user": {
 				const textContent = this.getUserMessageText(message);
-				if (textContent) {
-					// A solid rule, not a blank line, opens every turn after the first.
-					if (this.chatContainer.children.length > 0) {
-						this.chatContainer.addChild(new Rule(TURN_RULE_GLYPH));
-					}
-					const skillBlock = parseSkillBlock(textContent);
-					if (skillBlock) {
-						// Render skill block (collapsible)
-						const component = new SkillInvocationMessageComponent(
-							skillBlock,
-							this.getMarkdownThemeWithSettings(),
-							this.outputPad,
-						);
-						component.setExpanded(this.toolOutputExpanded);
-						this.chatContainer.addChild(component);
-						// Render user message separately if present
-						if (skillBlock.userMessage) {
-							this.chatContainer.addChild(entryRule());
-							const userComponent = new UserMessageComponent(
-								skillBlock.userMessage,
-								this.getMarkdownThemeWithSettings(),
-								this.outputPad,
-								this.getMarkdownTransformers(),
-							);
-							this.chatContainer.addChild(userComponent);
-						}
-					} else {
+				const firstChild = this.chatContainer.children.length;
+				// Image-only and empty canonical prompts still need a visible navigation target.
+				const displayText =
+					textContent ||
+					(typeof message.content !== "string" && message.content.some((part) => part.type === "image")
+						? "[Attachment-only user prompt]"
+						: "[Empty user prompt]");
+				// A solid rule, not a blank line, opens every turn after the first.
+				if (this.chatContainer.children.length > 0) {
+					this.chatContainer.addChild(new Rule(TURN_RULE_GLYPH));
+				}
+				const skillBlock = parseSkillBlock(displayText);
+				if (skillBlock) {
+					// Render skill block (collapsible)
+					const component = new SkillInvocationMessageComponent(
+						skillBlock,
+						this.getMarkdownThemeWithSettings(),
+						this.outputPad,
+					);
+					component.setExpanded(this.toolOutputExpanded);
+					this.chatContainer.addChild(component);
+					// Render user message separately if present
+					if (skillBlock.userMessage) {
+						this.chatContainer.addChild(entryRule());
 						const userComponent = new UserMessageComponent(
-							textContent,
+							skillBlock.userMessage,
 							this.getMarkdownThemeWithSettings(),
 							this.outputPad,
 							this.getMarkdownTransformers(),
 						);
 						this.chatContainer.addChild(userComponent);
 					}
-					if (options?.populateHistory) {
-						this.editor.addToHistory?.(textContent);
-					}
+				} else {
+					const userComponent = new UserMessageComponent(
+						displayText,
+						this.getMarkdownThemeWithSettings(),
+						this.outputPad,
+						this.getMarkdownTransformers(),
+					);
+					this.chatContainer.addChild(userComponent);
+				}
+				if (textContent && options?.populateHistory) {
+					this.editor.addToHistory?.(textContent);
+				}
+				// The turn rule belongs to framing, not the prompt. Skill plus trailing text is one target.
+				const component = this.chatContainer.children.slice(firstChild).find((child) => !(child instanceof Rule));
+				if (component) {
+					this.transcriptTargets.push({ identity: this.transcriptIdentities.get(message), component });
+					if (this.renderer instanceof TuiAltScreen)
+						this.renderer.setTranscriptNavigationTargets(this.transcriptTargets);
 				}
 				break;
 			}
@@ -4152,6 +4178,13 @@ export class InteractiveMode {
 	): void {
 		// Selection coordinates point into the transcript being replaced (#9311).
 		if (this.renderer instanceof TuiAltScreen) this.renderer.resetTextSelection();
+		this.transcriptIdentities.associate(this.sessionManager.getEntries());
+		const mounted = new Set(this.chatContainer.children);
+		this.transcriptTargets = this.transcriptTargets.filter((target) => mounted.has(target.component));
+		if (this.renderer instanceof TuiAltScreen) this.renderer.setTranscriptNavigationTargets(this.transcriptTargets);
+		for (const entry of entries) {
+			if (entry.type === "message") this.transcriptIdentities.get(entry.message, entry.id);
+		}
 		const items = entries.flatMap((entry): RenderSessionItem[] => {
 			if (entry.type === "custom" || (entry.type === "usage" && entry.kind === "cache_warm")) {
 				return [entry];
@@ -6870,6 +6903,20 @@ export class InteractiveMode {
 		return keyDisplayText(action);
 	}
 
+	private previousUserPrompt(): void {
+		if (this.renderer.getFocusedComponent() !== this.editor || this.renderer.hasOverlay()) return;
+		if (!(this.renderer instanceof TuiAltScreen)) {
+			// Regular mode has no application-owned transcript. Keep feedback out of history.
+			const text = new Text("Requires fullscreen transcript navigation.", 1, 0);
+			const overlay = this.renderer.showOverlay(text, { anchor: "top-right", nonCapturing: true });
+			setTimeout(() => overlay.hide(), 2000).unref();
+			return;
+		}
+		this.transcriptIdentities.associate(this.sessionManager.getEntries());
+		this.renderer.renderNow();
+		if (!this.renderer.scrollToPreviousTranscriptTarget()) this.renderer.flash("No previous user prompt.");
+	}
+
 	private handleHotkeysCommand(): void {
 		// Navigation keybindings
 		const cursorUp = this.getEditorKeyDisplay("tui.editor.cursorUp");
@@ -6925,6 +6972,7 @@ export class InteractiveMode {
 | \`${jumpForward}\` | Jump forward to character |
 | \`${jumpBackward}\` | Jump backward to character |
 | \`${pageUp}\` / \`${pageDown}\` | Scroll by page |
+| \`${this.getAppKeyDisplay("app.transcript.previousUserPrompt") || "Unbound"}\` | Previous user prompt (fullscreen), also /previous-prompt |
 
 **Editing**
 | Key | Action |

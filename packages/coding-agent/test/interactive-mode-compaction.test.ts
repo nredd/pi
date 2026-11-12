@@ -4,6 +4,7 @@ import { describe, expect, test, vi } from "vitest";
 import type { SessionEntry } from "../src/core/session-manager.ts";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
+import { TranscriptEntryIdentities } from "../src/modes/interactive/transcript-entries.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
 
 describe("InteractiveMode compaction events", () => {
@@ -87,7 +88,13 @@ describe("InteractiveMode compaction events", () => {
 				usage: previousUsage,
 			},
 		];
-		const fakeThis = { renderSessionItems: vi.fn() };
+		const fakeThis = {
+			renderSessionItems: vi.fn(),
+			chatContainer: new Container(),
+			transcriptTargets: [],
+			transcriptIdentities: new TranscriptEntryIdentities(),
+			sessionManager: { getEntries: () => entries },
+		};
 		const renderSessionEntries = Reflect.get(InteractiveMode.prototype, "renderSessionEntries") as (
 			this: typeof fakeThis,
 			entries: SessionEntry[],

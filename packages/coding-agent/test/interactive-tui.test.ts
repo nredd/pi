@@ -18,6 +18,7 @@ import {
 	InteractiveMode,
 } from "../src/modes/interactive/interactive-mode.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
+import { TranscriptEntryIdentities } from "../src/modes/interactive/transcript-entries.ts";
 
 const clipboardMocks = vi.hoisted(() => ({
 	copyToClipboard: vi.fn<(text: string) => Promise<void>>(),
@@ -366,6 +367,10 @@ describe("InteractiveMode copy confirmation", () => {
 });
 
 type RenderSessionEntriesContext = {
+	transcriptIdentities: TranscriptEntryIdentities;
+	transcriptTargets: [];
+	chatContainer: Container;
+	sessionManager: { getEntries(): [] };
 	renderer: ReturnType<typeof createInteractiveTui>;
 	renderSessionItems: (items: unknown[]) => void;
 };
@@ -382,7 +387,14 @@ describe("InteractiveMode transcript rebuild", () => {
 			fullscreenCopyOnSelect: false,
 		});
 		ui.addChild(new Text("alpha\nbeta\ngamma\ndelta", 0, 0));
-		const context: RenderSessionEntriesContext = { renderer: ui, renderSessionItems: vi.fn() };
+		const context: RenderSessionEntriesContext = {
+			renderer: ui,
+			renderSessionItems: vi.fn(),
+			transcriptIdentities: new TranscriptEntryIdentities(),
+			transcriptTargets: [],
+			chatContainer: new Container(),
+			sessionManager: { getEntries: () => [] },
+		};
 		const { renderSessionEntries } = InteractiveMode.prototype as unknown as {
 			renderSessionEntries(this: RenderSessionEntriesContext, entries: unknown[]): void;
 		};

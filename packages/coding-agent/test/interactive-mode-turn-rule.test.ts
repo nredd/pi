@@ -1,11 +1,14 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { Container } from "@earendil-works/pi-tui";
+import { Container, type TranscriptNavigationTarget } from "@earendil-works/pi-tui";
 import { describe, expect, test } from "vitest";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
 import { getMarkdownTheme, initTheme } from "../src/modes/interactive/theme/theme.ts";
+import { TranscriptEntryIdentities } from "../src/modes/interactive/transcript-entries.ts";
 import { stripAnsi } from "../src/utils/ansi.ts";
 
 type ChatContext = {
+	transcriptIdentities: TranscriptEntryIdentities;
+	transcriptTargets: TranscriptNavigationTarget[];
 	chatContainer: Container;
 	outputPad: number;
 	editor: { addToHistory?: (text: string) => void };
@@ -29,6 +32,8 @@ function user(text: string): AgentMessage {
 function createContext(): ChatContext {
 	return {
 		chatContainer: new Container(),
+		transcriptIdentities: new TranscriptEntryIdentities(),
+		transcriptTargets: [],
 		outputPad: 1,
 		editor: {},
 		getUserMessageText,

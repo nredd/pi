@@ -263,6 +263,10 @@
       "$ref": "#/$defs/KeybindingValue",
       "description": "Paste files on macOS, images, or text from clipboard"
     },
+    "app.transcript.previousUserPrompt": {
+      "$ref": "#/$defs/KeybindingValue",
+      "description": "Jump to the previous canonical user prompt"
+    },
     "app.session.new": {
       "$ref": "#/$defs/KeybindingValue",
       "description": "Start a new session"

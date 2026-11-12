@@ -25,10 +25,13 @@ Extensions, prompt templates, and skills can add commands. The command menu in P
 | `/name [name]` | Set the session display name, or show the current name when omitted |
 | `/session` | Show current session information and statistics |
 | `/tree` | Navigate the session tree |
+| `/previous-prompt` | Scroll upward through canonical user prompts (fullscreen only, no default shortcut) |
 | `/fork` | Create a new session from an earlier user message |
 | `/clone` | Duplicate the current session at its current position |
 | `/compact [instructions]` | Compact the current context, optionally with custom instructions |
 | `/import <path>` | Import and resume a JSONL session |
+
+`/previous-prompt` navigates the rendered transcript, not editor history or session branches. A jump stops live following; the existing transcript-bottom action restores it. See [Keybindings](keybindings.md#previous-user-prompt) for opt-in binding and anchoring behavior.
 
 ## Export and share
 

@@ -7,6 +7,7 @@ import type { SessionEntry } from "../../../src/core/session-manager.ts";
 import type { ToolExecutionComponent } from "../../../src/modes/interactive/components/tool-execution.ts";
 import { InteractiveMode } from "../../../src/modes/interactive/interactive-mode.ts";
 import { initTheme } from "../../../src/modes/interactive/theme/theme.ts";
+import { TranscriptEntryIdentities } from "../../../src/modes/interactive/transcript-entries.ts";
 import { stripAnsi } from "../../../src/utils/ansi.ts";
 
 const TOOL_CALL_ID = "tool-4167";
@@ -34,6 +35,8 @@ type RenderSessionItems = (
 ) => void;
 
 type RenderSessionContextThis = {
+	transcriptIdentities: TranscriptEntryIdentities;
+	transcriptTargets: [];
 	pendingTools: Map<string, ToolExecutionComponent>;
 	chatContainer: Container;
 	footer: { invalidate(): void };
@@ -67,6 +70,8 @@ function createFakeInteractiveModeThis(): RenderSessionContextThis {
 	const chatContainer = new Container();
 	return {
 		pendingTools: new Map<string, ToolExecutionComponent>(),
+		transcriptIdentities: new TranscriptEntryIdentities(),
+		transcriptTargets: [],
 		chatContainer,
 		footer: { invalidate: vi.fn() },
 		programStatus: { handleEvent: vi.fn() },

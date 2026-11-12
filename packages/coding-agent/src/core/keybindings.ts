@@ -76,6 +76,7 @@ const APP_KEYBINDINGS = {
 		defaultKeys: windowsKeybindings ? "alt+v" : "ctrl+v",
 		description: "Paste files on macOS, images, or text from clipboard",
 	},
+	"app.transcript.previousUserPrompt": { defaultKeys: [], description: "Jump to the previous canonical user prompt" },
 	"app.session.new": { defaultKeys: [], description: "Start a new session" },
 	"app.session.tree": { defaultKeys: [], description: "Open session tree" },
 	"app.session.fork": { defaultKeys: [], description: "Fork current session" },

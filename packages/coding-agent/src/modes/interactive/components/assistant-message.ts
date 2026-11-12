@@ -4,6 +4,7 @@ import type { MarkdownTransformer } from "../../../core/extensions/types.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
 import { DisclosureGutter } from "./disclosure-gutter.ts";
 import { entryRule } from "./entry-rule.ts";
+import { EntryTimestamp } from "./entry-timestamp.ts";
 import { createMarkdownTransform } from "./markdown-transform.ts";
 import { firstSentence, firstTextLine, OneLineRow, renderedContentLines } from "./one-line.ts";
 import { RuledBlock } from "./ruled-block.ts";
@@ -26,6 +27,7 @@ const OSC133_ZONE_FINAL = "\x1b]133;C\x07";
  * Component that renders a complete assistant message
  */
 export class AssistantMessageComponent extends Container {
+	readonly entryTimestamp = new EntryTimestamp();
 	private contentContainer: Container;
 	private hideThinkingBlock: boolean;
 	private markdownTheme: MarkdownTheme;
@@ -58,6 +60,7 @@ export class AssistantMessageComponent extends Container {
 		this.addChild(this.contentContainer);
 
 		if (message) {
+			this.entryTimestamp.setTime({ messageTimestamp: message.timestamp });
 			this.updateContent(message);
 		}
 	}
@@ -114,7 +117,7 @@ export class AssistantMessageComponent extends Container {
 		);
 
 		if (hasVisibleContent) {
-			this.contentContainer.addChild(entryRule());
+			this.contentContainer.addChild(entryRule(this.entryTimestamp));
 		}
 
 		// Render content in order
@@ -216,10 +219,13 @@ export class AssistantMessageComponent extends Container {
 		// Check if incomplete/failed - show after partial content.
 		// For aborted/error tool calls, tool execution components show the error.
 		// Length stops can happen before a tool call is complete, so surface them here too.
+		const diagnosticSpacer = hasVisibleContent
+			? new Spacer(1)
+			: { render: (width: number) => this.entryTimestamp.padding(width), invalidate: () => {} };
 		const hasToolCalls = message.content.some((c) => c.type === "toolCall");
 		this.hasToolCalls = hasToolCalls;
 		if (message.stopReason === "length") {
-			this.contentContainer.addChild(new Spacer(1));
+			this.contentContainer.addChild(diagnosticSpacer);
 			this.contentContainer.addChild(
 				new Text(theme.fg("error", "Response was truncated before completion."), this.outputPad, 0),
 			);
@@ -229,11 +235,11 @@ export class AssistantMessageComponent extends Container {
 					message.errorMessage && message.errorMessage !== "Request was aborted"
 						? message.errorMessage
 						: "Operation aborted";
-				this.contentContainer.addChild(new Spacer(1));
+				this.contentContainer.addChild(diagnosticSpacer);
 				this.contentContainer.addChild(new Text(theme.fg("error", abortMessage), this.outputPad, 0));
 			} else if (message.stopReason === "error") {
 				const errorMsg = message.errorMessage || "Unknown error";
-				this.contentContainer.addChild(new Spacer(1));
+				this.contentContainer.addChild(diagnosticSpacer);
 				this.contentContainer.addChild(new Text(theme.fg("error", `Error: ${errorMsg}`), this.outputPad, 0));
 			}
 		}

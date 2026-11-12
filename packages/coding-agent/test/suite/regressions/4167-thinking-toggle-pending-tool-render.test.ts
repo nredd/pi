@@ -1,9 +1,10 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type { AssistantMessage, ToolResultMessage, Usage } from "@earendil-works/pi-ai";
-import { Container, Text, type TUI } from "@earendil-works/pi-tui";
+import { type Component, Container, Text, type TUI } from "@earendil-works/pi-tui";
 import { beforeAll, describe, expect, test, vi } from "vitest";
 import type { AgentSessionEvent } from "../../../src/core/agent-session.ts";
 import type { SessionEntry } from "../../../src/core/session-manager.ts";
+import type { EntryTimestamp } from "../../../src/modes/interactive/components/entry-timestamp.ts";
 import type { ToolExecutionComponent } from "../../../src/modes/interactive/components/tool-execution.ts";
 import { InteractiveMode } from "../../../src/modes/interactive/interactive-mode.ts";
 import { initTheme } from "../../../src/modes/interactive/theme/theme.ts";
@@ -44,6 +45,7 @@ type RenderSessionContextThis = {
 	ui: TUI;
 	settingsManager: {
 		getShowImages(): boolean;
+		getShowTimestamps(): boolean;
 		getImageWidthCells(): number;
 		getShowCacheMissNotices(): boolean;
 	};
@@ -56,6 +58,10 @@ type RenderSessionContextThis = {
 	maybeShowAssistantDiagnostics(message: AssistantMessage): void;
 	addMessageToChat(message: AgentMessage, options?: { populateHistory?: boolean }): void;
 	renderSessionItems: RenderSessionItems;
+	configureEntryTimestamp: <T extends Component & { entryTimestamp: EntryTimestamp }>(
+		component: T,
+		message: AgentMessage,
+	) => T;
 };
 
 type RenderSessionEntries = (
@@ -78,6 +84,7 @@ function createFakeInteractiveModeThis(): RenderSessionContextThis {
 		ui: { requestRender: vi.fn() } as unknown as TUI,
 		settingsManager: {
 			getShowImages: () => false,
+			getShowTimestamps: () => false,
 			getImageWidthCells: () => 60,
 			getShowCacheMissNotices: () => false,
 		},
@@ -88,6 +95,10 @@ function createFakeInteractiveModeThis(): RenderSessionContextThis {
 		updateEditorBorderColor: vi.fn(),
 		getRegisteredToolDefinition: (_toolName: string) => undefined,
 		maybeShowAssistantDiagnostics: vi.fn(),
+		configureEntryTimestamp: Reflect.get(
+			InteractiveMode.prototype,
+			"configureEntryTimestamp",
+		) as RenderSessionContextThis["configureEntryTimestamp"],
 		renderSessionItems: (InteractiveMode.prototype as unknown as { renderSessionItems: RenderSessionItems })
 			.renderSessionItems,
 		addMessageToChat(message: AgentMessage) {

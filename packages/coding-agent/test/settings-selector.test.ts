@@ -63,6 +63,26 @@ describe("SettingsSelectorComponent", () => {
 		expect(onWheelScrollLinesChange.mock.calls.flat()).toEqual([10, "auto", 1]);
 	});
 
+	// nredd/pi#30: a project override wins even after the global toggle writes.
+	it("shows the resolved timestamp value after changing the toggle", () => {
+		const config = {
+			showTimestamps: false,
+			warnings: {},
+			defaultModel: "not set",
+			availableDefaultModels: [],
+			availableThinkingLevels: [],
+			modelThinkingLevels: {},
+			availableThemes: [],
+		} as unknown as SettingsConfig;
+		const onShowTimestampsChange = vi.fn(() => false);
+		const callbacks = { onShowTimestampsChange } as unknown as SettingsCallbacks;
+		const list = new SettingsSelectorComponent(config, callbacks).getSettingsList();
+		for (const character of "Show timestamps") list.handleInput(character);
+		list.handleInput("\r");
+		expect(onShowTimestampsChange).toHaveBeenCalledWith(true);
+		expect(stripAnsi(list.render(120).join("\n"))).toMatch(/Show timestamps\s+false/);
+	});
+
 	it("cycles through share destinations", () => {
 		const onSessionShareDestinationChange = vi.fn();
 		const config = {

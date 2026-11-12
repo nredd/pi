@@ -1334,6 +1334,7 @@ export class SessionManager {
 	 * @param content Message content (string or TextContent/ImageContent array)
 	 * @param display Whether to show in TUI (true = styled display, false = hidden)
 	 * @param details Optional extension-specific metadata (not sent to LLM)
+	 * @param timestamp Recorded message time, retained in the existing entry ISO field when valid
 	 * @returns Entry id
 	 */
 	appendCustomMessageEntry<T = unknown>(
@@ -1341,7 +1342,10 @@ export class SessionManager {
 		content: string | (TextContent | ImageContent)[],
 		display: boolean,
 		details?: T,
+		timestamp?: number,
 	): string {
+		const recorded = typeof timestamp === "number" && Number.isFinite(timestamp) ? new Date(timestamp) : undefined;
+		const recordedIso = recorded && Number.isFinite(recorded.getTime()) ? recorded.toISOString() : undefined;
 		const entry: CustomMessageEntry<T> = {
 			type: "custom_message",
 			customType,
@@ -1350,7 +1354,7 @@ export class SessionManager {
 			details,
 			id: generateId(this.byId),
 			parentId: this.leafId,
-			timestamp: new Date().toISOString(),
+			timestamp: recordedIso ?? new Date().toISOString(),
 		};
 		this._appendEntry(entry);
 		return entry.id;

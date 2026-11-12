@@ -163,8 +163,10 @@ describe("previous canonical user prompt", () => {
 		const id = manager.appendMessage(message);
 		identities.associate(manager.getEntries());
 		expect(identity.entryId).toBe(id);
-		expect(identities.get({ ...message }, id)).toBe(identity);
-		expect(identities.get({ ...message }, "other-id")).not.toBe(identity);
+		const entry = manager.getEntry(id)!;
+		expect(identity.entryTimestamp).toBe(entry.timestamp);
+		expect(identities.get({ ...message }, entry)).toBe(identity);
+		expect(identities.get({ ...message }, { ...entry, id: "other-id" })).not.toBe(identity);
 	});
 
 	it("discovers unbound/effective hotkeys, supports remap/disable, and leaves dialogs in control", async () => {

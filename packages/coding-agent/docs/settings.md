@@ -102,6 +102,7 @@ See [Compaction Reference](compaction.md) for trigger, summarization, and valida
 | `fullscreenWheelScrollLines` | `"auto"` \| number | `"auto"` | Lines per mouse-wheel event in fullscreen mode, from 1 to 100. `"auto"` moves one line per event in local macOS terminals, which already accelerate wheel and trackpad input; elsewhere, and over SSH, it speeds up fast wheel spins to at most 6 lines per event. Alt+wheel moves five times as far. |
 | `editorPaddingX` | number | `0` | Horizontal editor padding from 0 to 3 cells. |
 | `outputPad` | `0 \| 1` | `1` | Horizontal transcript padding for messages, tool output, `!` command output, and summary blocks. |
+| `showTimestamps` | boolean | `false` | Show recorded entry times as viewer-local `YYYY-MM-DD HH:mm:ss ±HH:MM` in transcript framing. |
 | `autocompleteMaxVisible` | number | `5` | Visible autocomplete entries, from 3 to 20. |
 | `showHardwareCursor` | boolean | `false` | Use the terminal cursor instead of Pi's drawn cursor. Pi still positions it for input methods. |
 | `terminal.showImages` | boolean | `true` | Display inline images when supported. |
@@ -115,6 +116,16 @@ See [Compaction Reference](compaction.md) for trigger, summarization, and valida
 | `images.blockImages` | boolean | `false` | Prevent images from being sent to models. |
 | `markdown.codeBlockIndent` | string | `"  "` | Prefix used to indent rendered code blocks. |
 | `markdown.mermaid` | `"off" \| "final" \| "streaming"` | `"streaming"` | Mermaid rendering mode. |
+
+Enable **Show timestamps** in `/settings`, or set `showTimestamps: true` and `/reload`.
+Project settings override the saved user preference; the toggle displays the resolved value.
+Each displayed entry gets at most one label in an existing rule or padding row. Labels that do
+not fit are omitted, never shortened. Missing or invalid recorded times stay unlabeled.
+Message timestamps take precedence over persisted entry ISO times. Tool labels use the owning
+assistant's timestamp (call-context time, not exact execution-start time); custom entries use
+recorded entry time. `!` command message timestamps currently describe completion. Rendering,
+resuming, forking, and cloning never invent or rewrite a time. Timestamps are decoration, not
+message content or copied source text.
 
 See [Themes](themes.md) and [Terminal Setup](terminal-setup.md) for format and platform details.
 

@@ -877,9 +877,11 @@ function findProjectedCutPoint(
 	};
 }
 
+/** Prepare a summary without cutting into an optional unsent-input suffix. */
 export function prepareCompaction(
 	pathEntries: SessionEntry[],
 	settings: CompactionSettings,
+	firstProtectedEntryId?: string,
 ): CompactionPreparation | undefined {
 	if (pathEntries.length > 0 && pathEntries[pathEntries.length - 1].type === "compaction") {
 		return undefined;
@@ -903,7 +905,22 @@ export function prepareCompaction(
 	}
 	const boundaryEnd = projectedEntries.length;
 	const tokensBefore = estimateProjectedContextTokens(projection, pathEntries).tokens;
-	const cutPoint = findProjectedCutPoint(projectedEntries, boundaryStart, boundaryEnd, settings.keepRecentTokens);
+	let cutPoint = findProjectedCutPoint(projectedEntries, boundaryStart, boundaryEnd, settings.keepRecentTokens);
+	const protectedIndex =
+		firstProtectedEntryId === undefined
+			? -1
+			: projectedEntries.findIndex((entry) => entry.sourceEntry.id === firstProtectedEntryId);
+	if (protectedIndex >= boundaryStart && cutPoint.firstKeptEntryIndex > protectedIndex) {
+		const startsTurn = isProjectedTurnStart(projectedEntries[protectedIndex]);
+		const turnStartIndex = startsTurn
+			? -1
+			: findProjectedTurnStartIndex(projectedEntries, protectedIndex, boundaryStart);
+		cutPoint = {
+			firstKeptEntryIndex: protectedIndex,
+			turnStartIndex,
+			isSplitTurn: !startsTurn && turnStartIndex !== -1,
+		};
+	}
 
 	const firstKeptEntry = projectedEntries[cutPoint.firstKeptEntryIndex]?.sourceEntry;
 	if (!firstKeptEntry?.id) return undefined;

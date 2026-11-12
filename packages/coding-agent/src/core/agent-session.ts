@@ -450,6 +450,10 @@ export class AgentSession {
 	private _overflowRecoveryAttempted = false;
 	/** Avoid repeating a no-progress threshold attempt on unchanged projected history. */
 	private _thresholdAttemptKey: string | undefined;
+	/** Persisted input is not summary material until an answering request dispatches it. */
+	private readonly _pendingInputEntryIds = new Set<string>();
+	/** Current answering request's snapshot, for custom streams that do not invoke provider gates. */
+	private _preparedInputEntryIds: readonly string[] = [];
 
 	// Branch summarization state
 	private _branchSummaryAbortController: AbortController | undefined = undefined;
@@ -918,6 +922,11 @@ export class AgentSession {
 		return this._nestedToolCalls.execute(parentToolCallId, name, args, options);
 	}
 
+	/** Release only the input captured by this request, not new messages admitted during dispatch. */
+	private _markInputDispatched(entryIds: readonly string[]): void {
+		for (const id of entryIds) this._pendingInputEntryIds.delete(id);
+	}
+
 	/** Whether `projection`, the current session projection, exceeds the compaction threshold of `model`. */
 	private _exceedsCompactionThreshold(model: Model<any>, projection: SessionProjection): boolean {
 		return shouldCompact(
@@ -969,8 +978,19 @@ export class AgentSession {
 			};
 			const routeContext = this._createModelRouteContext();
 			let { previous, context, projection } = await prepare();
-			const gateFor = (prepared: typeof previous) =>
-				withRequestGeneration(prepared?.beforeProviderRequest, routeContext.session);
+			const gateFor = (prepared: typeof previous) => {
+				const pendingInputIds = [...this._pendingInputEntryIds];
+				this._preparedInputEntryIds = pendingInputIds;
+				const gate = withRequestGeneration(prepared?.beforeProviderRequest, routeContext.session);
+				return async () => {
+					const recheck = await gate();
+					return () => {
+						recheck();
+						// Summary dispatch has its own gate and must not release the answering input batch.
+						this._markInputDispatched(pendingInputIds);
+					};
+				};
+			};
 			const model = previous?.model ?? this.agent.state.model;
 			const thinkingLevel = previous?.thinkingLevel ?? this.agent.state.thinkingLevel;
 			if (!isVirtualModel(model)) {
@@ -1323,6 +1343,17 @@ export class AgentSession {
 			}
 		}
 
+		// Custom SDK streams may bypass provider gates. An actual pending/successful assistant
+		// response proves dispatch too; synthetic pre-dispatch failures and aborts do not.
+		if (
+			event.type === "message_start" &&
+			event.message.role === "assistant" &&
+			event.message.stopReason !== "error" &&
+			event.message.stopReason !== "aborted"
+		) {
+			this._markInputDispatched(this._preparedInputEntryIds);
+		}
+
 		// Emit to extensions first, then notify public listeners.
 		await this._emitExtensionEvent(event);
 		this._emit(event.type === "agent_end" ? { ...event, willRetry: this._willRetryAfterAgentEnd(event) } : event);
@@ -1348,7 +1379,12 @@ export class AgentSession {
 				// Regular LLM message - persist as SessionMessageEntry
 				entryId = this.sessionManager.appendMessage(event.message);
 			}
-			if (entryId) this._entryIdsByMessage.set(event.message, entryId);
+			if (entryId) {
+				this._entryIdsByMessage.set(event.message, entryId);
+				if (event.message.role === "user" || event.message.role === "custom" || event.message.role === "system") {
+					this._pendingInputEntryIds.add(entryId);
+				}
+			}
 			// Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere
 
 			if (event.message.role === "assistant") {
@@ -2652,12 +2688,13 @@ export class AgentSession {
 	}
 
 	private _appendCustomMessage(appMessage: CustomMessage): void {
-		this.sessionManager.appendCustomMessageEntry(
+		const entryId = this.sessionManager.appendCustomMessageEntry(
 			appMessage.customType,
 			appMessage.content,
 			appMessage.display,
 			appMessage.details,
 		);
+		this._pendingInputEntryIds.add(entryId);
 		this._refreshFinalizedContext();
 		this._emit({ type: "message_start", message: appMessage });
 		this._emit({ type: "message_end", message: appMessage });
@@ -3544,7 +3581,12 @@ export class AgentSession {
 			if (reason === "threshold" && this._thresholdAttemptKey === attemptKey()) return false;
 			if (reason === "threshold") this._thresholdAttemptKey = attemptKey();
 			const pathEntries = this.sessionManager.getBranch();
-			const preparation = prepareCompaction(pathEntries, settings);
+			const projection = this.sessionManager.buildSessionProjection();
+			const pending = projection.entries.find(
+				(entry) => entry.messages.length > 0 && this._pendingInputEntryIds.has(entry.sourceEntry.id),
+			);
+			// Keep the whole pending suffix, while sizing retention against the full projection.
+			const preparation = prepareCompaction(pathEntries, settings, pending?.sourceEntry.id);
 			if (!preparation) {
 				const errorMessage =
 					"Auto-compaction cannot reduce this context with the configured keepRecentTokens. Compact manually, reduce retained history, or raise targetTokens; budgets were not changed.";

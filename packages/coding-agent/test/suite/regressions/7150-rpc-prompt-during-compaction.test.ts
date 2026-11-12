@@ -221,7 +221,15 @@ describe("issue #7150: RPC prompt during manual compaction", () => {
 		const scenario = await createScenario({ settings: { reserveTokens: 127_990 } });
 		const { harness } = scenario;
 		seedHistory(harness);
-		harness.setResponses([reply(scenario, "answer"), reply(scenario, "done")]);
+		// #751 checks first dispatch too. Enable only after dispatch to exercise post-run admission.
+		harness.session.setAutoCompactionEnabled(false);
+		harness.setResponses([
+			(context) => {
+				harness.session.setAutoCompactionEnabled(true);
+				return reply(scenario, "answer")(context);
+			},
+			reply(scenario, "done"),
+		]);
 
 		const prompt = harness.session.prompt("PROMPT");
 		await scenario.started.promise;
@@ -891,7 +899,15 @@ describe("issue #7150: RPC prompt during manual compaction", () => {
 		const scenario = await createScenario({ settings: { reserveTokens: 127_990 } });
 		const { harness } = scenario;
 		seedHistory(harness);
-		harness.setResponses([reply(scenario, "first response"), reply(scenario, "second response")]);
+		// #751 checks first dispatch too. Enable only after dispatch to exercise post-run admission.
+		harness.session.setAutoCompactionEnabled(false);
+		harness.setResponses([
+			(context) => {
+				harness.session.setAutoCompactionEnabled(true);
+				return reply(scenario, "first response")(context);
+			},
+			reply(scenario, "second response"),
+		]);
 
 		const firstPrompt = harness.session.prompt("FIRST");
 		await scenario.started.promise;

@@ -8,6 +8,7 @@ import lockfile from "proper-lockfile";
 import { CONFIG_DIR_NAME, getAgentDir } from "../config.ts";
 import { normalizePath, resolvePath } from "../utils/paths.ts";
 import { stripBom } from "../utils/text.ts";
+import { type CompactionTarget, validateCompactionTarget } from "./compaction/policy.ts";
 import { DEFAULT_HTTP_IDLE_TIMEOUT_MS, parseHttpIdleTimeoutMs } from "./http-dispatcher.ts";
 import { SETTINGS_DEFAULTS } from "./settings-defaults.ts";
 import type {
@@ -53,10 +54,11 @@ export type {
 /** Cache-warming profile. "idle" also warms between agent runs. */
 export const CACHE_WARMING_MODES = ["off", "streaming", "idle"] as const satisfies readonly CacheWarmingMode[];
 
-const DEFAULT_COMPACTION_TOKEN_SETTINGS: Required<CompactionModelOverride> = {
-	reserveTokens: SETTINGS_DEFAULTS.compaction.reserveTokens,
-	keepRecentTokens: SETTINGS_DEFAULTS.compaction.keepRecentTokens,
-};
+const DEFAULT_COMPACTION_TOKEN_SETTINGS: Required<Pick<CompactionModelOverride, "reserveTokens" | "keepRecentTokens">> =
+	{
+		reserveTokens: SETTINGS_DEFAULTS.compaction.reserveTokens,
+		keepRecentTokens: SETTINGS_DEFAULTS.compaction.keepRecentTokens,
+	};
 
 function isMergeableObject(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -831,7 +833,7 @@ export class SettingsManager {
 	}
 
 	private getCompactionTokenSetting(
-		field: keyof CompactionModelOverride,
+		field: "reserveTokens" | "keepRecentTokens",
 		model?: Pick<Model<string>, "provider" | "id">,
 	): number {
 		const compaction = this.settings.compaction;
@@ -866,13 +868,43 @@ export class SettingsManager {
 		return this.getCompactionTokenSetting("keepRecentTokens", model);
 	}
 
-	/** Resolve each token setting through model override, ordinary setting, then built-in default. */
-	getCompactionSettings(model?: Pick<Model<string>, "provider" | "id">): {
+	/** Validate the entire target map before lookup, including masked ordinary values. */
+	getCompactionTargetTokens(
+		selected?: Pick<Model<string>, "provider" | "id">,
+		physical?: Pick<Model<string>, "provider" | "id">,
+	): CompactionTarget {
+		const compaction = this.settings.compaction;
+		validateCompactionTarget(compaction?.targetTokens, "compaction.targetTokens");
+		const overrides = compaction?.modelOverrides;
+		if (overrides !== undefined && !isMergeableObject(overrides)) {
+			throw new Error("Invalid compaction.modelOverrides: expected an object.");
+		}
+		for (const [key, entry] of Object.entries(overrides ?? {})) {
+			if (!isMergeableObject(entry))
+				throw new Error(
+					`Invalid compaction.modelOverrides["${key}"] setting: ${String(entry)}. Expected an object.`,
+				);
+			validateCompactionTarget(entry.targetTokens, `compaction.modelOverrides["${key}"].targetTokens`);
+		}
+		const lookup = (model: typeof selected) =>
+			model ? overrides?.[`${model.provider}/${model.id}`]?.targetTokens : undefined;
+		return (
+			lookup(selected) ?? lookup(physical) ?? compaction?.targetTokens ?? SETTINGS_DEFAULTS.compaction.targetTokens
+		);
+	}
+
+	/** Reserve and retention use selection; targets may additionally use the physical route. */
+	getCompactionSettings(
+		model?: Pick<Model<string>, "provider" | "id">,
+		physical?: Pick<Model<string>, "provider" | "id">,
+	): {
+		targetTokens: CompactionTarget;
 		enabled: boolean;
 		reserveTokens: number;
 		keepRecentTokens: number;
 	} {
 		return {
+			targetTokens: this.getCompactionTargetTokens(model, physical),
 			enabled: this.getCompactionEnabled(),
 			reserveTokens: this.getCompactionReserveTokens(model),
 			keepRecentTokens: this.getCompactionKeepRecentTokens(model),

@@ -280,7 +280,8 @@ describe("shouldCompact", () => {
 		};
 
 		expect(shouldCompact(95000, 100000, settings)).toBe(true);
-		expect(shouldCompact(89000, 100000, settings)).toBe(false);
+		expect(shouldCompact(45000, 100000, settings)).toBe(false);
+		expect(shouldCompact(89000, 100000, { ...settings, targetTokens: "contextWindow" })).toBe(false);
 	});
 
 	it("should return false when disabled", () => {

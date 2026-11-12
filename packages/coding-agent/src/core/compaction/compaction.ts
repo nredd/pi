@@ -34,6 +34,7 @@ import {
 	sessionEntryToContextMessages,
 } from "../session-manager.ts";
 import { combineUsage } from "../usage-totals.ts";
+import { type CompactionTarget, resolveCompactionPolicy } from "./policy.ts";
 import {
 	computeFileLists,
 	createFileOps,
@@ -118,12 +119,14 @@ export interface CompactionResult<T = unknown> {
 // ============================================================================
 
 export interface CompactionSettings {
+	targetTokens?: CompactionTarget;
 	enabled: boolean;
 	reserveTokens: number;
 	keepRecentTokens: number;
 }
 
 export const DEFAULT_COMPACTION_SETTINGS: CompactionSettings = {
+	targetTokens: "auto",
 	enabled: true,
 	reserveTokens: 16384,
 	keepRecentTokens: 20000,
@@ -264,9 +267,14 @@ export function estimateProjectedContextTokens(
 /**
  * Check if compaction should trigger based on context usage.
  */
-export function shouldCompact(contextTokens: number, contextWindow: number, settings: CompactionSettings): boolean {
-	if (!settings.enabled) return false;
-	return contextTokens > contextWindow - settings.reserveTokens;
+export function shouldCompact(
+	contextTokens: number,
+	contextWindow: number,
+	settings: CompactionSettings,
+	maxInputTokens?: number,
+): boolean {
+	const policy = resolveCompactionPolicy(contextWindow, settings.reserveTokens, settings.targetTokens, maxInputTokens);
+	return settings.enabled && contextTokens > policy.threshold;
 }
 
 // ============================================================================

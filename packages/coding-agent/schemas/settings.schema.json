@@ -100,6 +100,24 @@
     "compaction": {
       "type": "object",
       "properties": {
+        "targetTokens": {
+          "anyOf": [
+            {
+              "type": "string",
+              "const": "auto"
+            },
+            {
+              "type": "string",
+              "const": "contextWindow"
+            },
+            {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          ],
+          "default": "auto"
+        },
         "enabled": {
           "type": "boolean",
           "default": true
@@ -122,6 +140,24 @@
             "^.*$": {
               "type": "object",
               "properties": {
+                "targetTokens": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "const": "auto"
+                    },
+                    {
+                      "type": "string",
+                      "const": "contextWindow"
+                    },
+                    {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 9007199254740991
+                    }
+                  ],
+                  "default": "auto"
+                },
                 "reserveTokens": {
                   "type": "integer",
                   "minimum": 0,

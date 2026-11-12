@@ -42,6 +42,7 @@ describe("AgentSession compaction model overrides", () => {
 				tools: [],
 				settings: {
 					compaction: {
+						targetTokens: "contextWindow",
 						enabled: path !== "manual",
 						reserveTokens: 10,
 						keepRecentTokens: 20000,
@@ -82,6 +83,7 @@ describe("AgentSession compaction model overrides", () => {
 
 			expect(preparations).toHaveLength(1);
 			expect(preparations[0]?.preparation.settings).toEqual({
+				targetTokens: "contextWindow",
 				enabled: path !== "manual",
 				reserveTokens: 2000,
 				keepRecentTokens: 150,
@@ -142,6 +144,7 @@ describe("AgentSession compaction model overrides", () => {
 			tools: [],
 			settings: {
 				compaction: {
+					targetTokens: "contextWindow",
 					reserveTokens: 10,
 					modelOverrides: { "faux/big": { reserveTokens: 8000, keepRecentTokens: 150 } },
 				},
@@ -172,6 +175,62 @@ describe("AgentSession compaction model overrides", () => {
 		expect(harness.settingsManager.getCompactionReserveTokens()).toBe(10);
 		await harness.session.setModel(harness.getModel("small")!);
 		expect(harness.settingsManager.getCompactionReserveTokens(harness.session.model)).toBe(10);
+	});
+
+	// Refs nredd/pi-harness#751: the default target changes timing, not summary output budgets.
+	it.each(["auto", "contextWindow", 1000] as const)(
+		"keeps summary budgets independent of target %s",
+		async (targetTokens) => {
+			const h = await createHarness({
+				models: [{ id: "faux-1", contextWindow: 100000, maxTokens: 3000 }],
+				tools: [],
+				settings: { compaction: { targetTokens, reserveTokens: 2000, keepRecentTokens: 150 } },
+			});
+			harnesses.push(h);
+			seedHistory(h, 60000);
+			const budgets: Array<number | undefined> = [];
+			h.setResponses([
+				...(targetTokens === "contextWindow"
+					? []
+					: [
+							(_ctx: unknown, options: { maxTokens?: number } | undefined) => {
+								budgets.push(options?.maxTokens);
+								return fauxAssistantMessage("checkpoint");
+							},
+						]),
+				fauxAssistantMessage("done"),
+			]);
+			await h.session.prompt("continue");
+			expect(budgets).toEqual(targetTokens === "contextWindow" ? [] : [1600]);
+			expect(h.settingsManager.getCompactionKeepRecentTokens()).toBe(150);
+		},
+	);
+
+	it("bounds unchanged no-progress history without shrinking retention", async () => {
+		const h = await createHarness({ settings: { compaction: { targetTokens: 100, keepRecentTokens: 20000 } } });
+		harnesses.push(h);
+		seedHistory(h, 2500);
+		const session = h.session as unknown as {
+			_runAutoCompaction(reason: "threshold", retry: boolean): Promise<boolean>;
+		};
+		await session._runAutoCompaction("threshold", false);
+		await session._runAutoCompaction("threshold", false);
+		expect(h.eventsOfType("compaction_end")).toHaveLength(1);
+		expect(h.eventsOfType("compaction_end")[0]?.errorMessage).toContain("budgets were not changed");
+		expect(h.settingsManager.getCompactionKeepRecentTokens()).toBe(20000);
+		expect(h.faux.state.callCount).toBe(0);
+	});
+
+	it("bounds summaries by their own physical hard input ceiling", async () => {
+		const h = await createHarness({
+			models: [{ id: "faux-1", inputLimits: { maxInputTokens: 100 } }],
+			settings: { compaction: { keepRecentTokens: 150, reserveTokens: 2000 } },
+		});
+		harnesses.push(h);
+		seedHistory(h, 2500);
+		await expect(h.session.compact()).rejects.toThrow("summarizer's hard input budget");
+		expect(h.faux.state.callCount).toBe(0);
+		expect(h.settingsManager.getCompactionReserveTokens()).toBe(2000);
 	});
 
 	it("captures model identity before awaiting summarization auth", async () => {

@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Optional `inputLimits.maxInputTokens` metadata records a verified hard input-token ceiling separately from context and output capacity. No inferred catalog limits are added.
+
 ### Changed
 
 - Changed the OpenAI-family Responses requests (OpenAI, Azure OpenAI, Codex) to default `reasoning.summary` to `detailed`. `auto` often returned only a bold headline. An explicit `reasoningSummary` still wins. A model or organization that rejects `detailed` needs `reasoningSummary: "auto"`.

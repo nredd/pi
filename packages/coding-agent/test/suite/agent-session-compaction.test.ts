@@ -465,7 +465,7 @@ describe("AgentSession compaction characterization", () => {
 		await harness.session.prompt("x".repeat(5000));
 
 		expect(harness.faux.state.callCount).toBe(2);
-		expect(harness.eventsOfType("compaction_end").at(-1)).toMatchObject({
+		expect(harness.eventsOfType("compaction_end").find((event) => event.reason === "overflow")).toMatchObject({
 			reason: "overflow",
 			aborted: false,
 			willRetry: true,
@@ -537,7 +537,12 @@ describe("AgentSession compaction characterization", () => {
 			await harness.session.prompt("run the large tool");
 
 			expect(order.slice(0, 2)).toEqual(["compaction", "provider"]);
-			expect(observedSettings[0]).toEqual({ enabled: true, reserveTokens: 400, keepRecentTokens: 1750 });
+			expect(observedSettings[0]).toEqual({
+				targetTokens: "auto",
+				enabled: true,
+				reserveTokens: 400,
+				keepRecentTokens: 1750,
+			});
 			expect(harness.eventsOfType("agent_start")).toHaveLength(agentStartsBefore + 1);
 			expect(harness.eventsOfType("compaction_start").at(-1)).toEqual({
 				type: "compaction_start",
@@ -831,7 +836,7 @@ describe("AgentSession compaction characterization", () => {
 	it("compacts successful overflow responses without retrying", async () => {
 		const harness = await createHarness({
 			settings: { compaction: { enabled: true, keepRecentTokens: 1, reserveTokens: 0 } },
-			models: [{ id: "faux-1", contextWindow: 1, maxTokens: 100 }],
+			models: [{ id: "faux-1", contextWindow: 2, maxTokens: 100 }],
 			extensionFactories: [
 				(pi) => {
 					pi.on("session_before_compact", async (event) => ({
@@ -918,11 +923,19 @@ describe("AgentSession compaction characterization", () => {
 			errorAssistant,
 		];
 
+		for (const message of harness.session.agent.state.messages) {
+			if (message.role === "user" || message.role === "assistant") harness.sessionManager.appendMessage(message);
+		}
 		const runAutoCompactionSpy = vi.spyOn(sessionInternals, "_runAutoCompaction").mockResolvedValue(false);
 
 		await sessionInternals._checkCompaction(errorAssistant);
 
-		expect(runAutoCompactionSpy).toHaveBeenCalledWith("threshold", false);
+		expect(runAutoCompactionSpy).toHaveBeenCalledWith(
+			"threshold",
+			false,
+			expect.objectContaining({ targetTokens: "auto" }),
+			harness.session.model,
+		);
 	});
 
 	it("does not trigger threshold compaction for error messages when no prior usage exists", async () => {

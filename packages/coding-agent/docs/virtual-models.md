@@ -26,7 +26,7 @@ Providers only receive physical models. Assistant messages name the physical mod
 
 In interactive mode, the footer shows the routed model next to the selection, for example `auto • high → gpt-5.6-luna • medium`. `/session` lists the cost for each physical model.
 
-Context usage uses the limits of the physical model that produced the latest response, even if that response came before switching to the virtual model. Without such a response, it uses the limits declared on the virtual model, if any. Compaction checks the same limits, and again the limits of the model each request is routed to. If that model's context window is too small for the conversation, Pi compacts before sending the request; the route stays as the router chose it.
+Context usage uses the limits of the physical model that produced the latest response, even if that response came before switching to the virtual model. Without such a response, it uses the limits declared on the virtual model, if any. Compaction checks the same limits, and again the limits of the model each request is routed to. Before dispatch, Pi also checks the physical model's operating target, even when physical models have equal hard windows. `compaction.targetTokens` resolves from the exact selected override, exact physical override, ordinary setting, then `"auto"`. Auto uses physical limits and the application fallback in [Compaction](compaction.md), not the virtual model's capacity. Reserve and retention retain selected-model semantics. The route stays as the router chose it, including when a separately routed summary runs during compaction.
 
 ## Register a virtual model
 

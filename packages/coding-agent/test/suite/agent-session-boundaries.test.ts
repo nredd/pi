@@ -1032,7 +1032,8 @@ describe("durable length recovery", () => {
 
 	it("keeps omissions and does not retry when recovery compaction fails", async () => {
 		const harness = await createHarness({
-			models: [{ id: "faux-1", contextWindow: 1000, maxTokens: 100 }],
+			// #751 validates summary input capacity before dispatch; leave room to reach the scripted failure.
+			models: [{ id: "faux-1", contextWindow: 8000, maxTokens: 100 }],
 			settings: {
 				compaction: { keepRecentTokens: 1, reserveTokens: 0 },
 				retry: { enabled: false, maxRetries: 0, baseDelayMs: 1 },

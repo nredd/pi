@@ -76,6 +76,14 @@ export const ModelImageInputLimitsSchema = Type.Object({
 });
 
 export const ModelInputLimitsSchema = Type.Object({
+	maxInputTokens: Type.Optional(
+		Type.Integer({
+			minimum: 1,
+			maximum: Number.MAX_SAFE_INTEGER,
+			description: "Verified hard input-token ceiling, independent of maximum output tokens.",
+		}),
+	),
+
 	maxRequestBytes: Type.Optional(
 		Type.Integer({ minimum: 1, description: "Maximum serialized provider request size in bytes." }),
 	),

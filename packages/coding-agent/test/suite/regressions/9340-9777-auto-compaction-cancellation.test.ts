@@ -62,8 +62,10 @@ describe("automatic compaction cancellation regressions", () => {
 		harness.setResponses([
 			fauxAssistantMessage("", { stopReason: "error", errorMessage: "Synthetic network failure" }),
 		]);
+		let startsAtAbort = 0;
 		harness.session.subscribe((event) => {
 			if (event.type === "message_end" && event.message.role === "assistant") {
+				startsAtAbort = harness.eventsOfType("compaction_start").length;
 				harness.session.abortCompaction();
 				void harness.session.abort();
 			}
@@ -71,7 +73,8 @@ describe("automatic compaction cancellation regressions", () => {
 
 		await harness.session.prompt("z".repeat(1000));
 
-		expect(harness.eventsOfType("compaction_start")).toHaveLength(0);
+		// #751 may compact before dispatch; abort must prevent any additional post-run attempt.
+		expect(harness.eventsOfType("compaction_start")).toHaveLength(startsAtAbort);
 	});
 
 	// Regression test for #9777.

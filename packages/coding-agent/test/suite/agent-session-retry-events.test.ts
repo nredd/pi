@@ -8,7 +8,7 @@ function normalizeEventOrder(events: Harness["events"]): string[] {
 	const normalized: string[] = [];
 	for (const event of events) {
 		const label =
-			event.type === "message_start" || event.type === "message_end"
+			event.type === "message_start" || event.type === "message_end" || event.type === "message_recorded"
 				? `${event.type}:${event.message.role}`
 				: event.type === "tool_execution_start" || event.type === "tool_execution_end"
 					? `${event.type}:${event.toolName}`
@@ -19,6 +19,16 @@ function normalizeEventOrder(events: Harness["events"]): string[] {
 		normalized.push(label);
 	}
 	return normalized;
+}
+
+/** Recorded notifications must pair the public message with its exact persisted entry. */
+function expectCanonicalRecords(harness: Harness): void {
+	for (const event of harness.eventsOfType("message_recorded")) {
+		const entry = harness.sessionManager.getEntry(event.entry.id);
+		if (entry?.type !== "message") throw new Error("Expected a canonical message entry");
+		expect(event.entry).toBe(entry);
+		expect(entry.message).toBe(event.message);
+	}
 }
 
 describe("AgentSession retry and event characterization", () => {
@@ -266,6 +276,7 @@ describe("AgentSession retry and event characterization", () => {
 		]);
 	});
 
+	// nredd/pi#30: recorded events follow public delivery and carry canonical persistence identity.
 	it("emits the expected event order for a single prompt", async () => {
 		const harness = await createHarness();
 		harnesses.push(harness);
@@ -278,17 +289,22 @@ describe("AgentSession retry and event characterization", () => {
 			"turn_start",
 			"message_start:system",
 			"message_end:system",
+			"message_recorded:system",
 			"message_start:user",
 			"message_end:user",
+			"message_recorded:user",
 			"message_start:assistant",
 			"message_update",
 			"message_end:assistant",
+			"message_recorded:assistant",
 			"turn_end",
 			"agent_end",
 			"agent_settled",
 		]);
+		expectCanonicalRecords(harness);
 	});
 
+	// nredd/pi#30: each assistant/result gets its own canonical record before the next turn.
 	it("emits the expected event order for a tool call turn", async () => {
 		const toolRuns: string[] = [];
 		const echoTool: AgentTool = {
@@ -317,24 +333,30 @@ describe("AgentSession retry and event characterization", () => {
 			"turn_start",
 			"message_start:system",
 			"message_end:system",
+			"message_recorded:system",
 			"message_start:user",
 			"message_end:user",
+			"message_recorded:user",
 			"message_start:assistant",
 			"message_update",
 			"message_end:assistant",
+			"message_recorded:assistant",
 			"tool_execution_start:echo",
 			"tool_execution_end:echo",
 			"message_start:toolResult",
 			"message_end:toolResult",
+			"message_recorded:toolResult",
 			"turn_end",
 			"turn_start",
 			"message_start:assistant",
 			"message_update",
 			"message_end:assistant",
+			"message_recorded:assistant",
 			"turn_end",
 			"agent_end",
 			"agent_settled",
 		]);
+		expectCanonicalRecords(harness);
 	});
 
 	it("emits streaming deltas for text, thinking, and tool calls in message_update events", async () => {

@@ -125,7 +125,8 @@ Message timestamps take precedence over persisted entry ISO times. Tool labels u
 assistant's timestamp (call-context time, not exact execution-start time); custom entries use
 recorded entry time. `!` command message timestamps currently describe completion. Rendering,
 resuming, forking, and cloning never invent or rewrite a time. Timestamps are decoration, not
-message content or copied source text.
+message content or copied source text. The offline terminal fixture and verification limits
+are recorded [here](timestamps-proof.md).
 
 See [Themes](themes.md) and [Terminal Setup](terminal-setup.md) for format and platform details.
 

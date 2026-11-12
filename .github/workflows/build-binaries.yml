@@ -88,6 +88,9 @@ jobs:
           cp packages/coding-agent/install-lock/package.json release-assets/pi-coding-agent-install-package.json
           cp packages/coding-agent/install-lock/package-lock.json release-assets/pi-coding-agent-install-package-lock.json
 
+          node scripts/binary-release-contract.mjs record packages/coding-agent/binaries \
+            "$(git rev-parse HEAD)" "$RELEASE_TAG" "$(bun --version)"
+          cp packages/coding-agent/binaries/BUILD-IDENTITY.json release-assets/
           cd packages/coding-agent/binaries
 
           binary_assets=(
@@ -117,8 +120,19 @@ jobs:
             pi-windows-arm64.zip
             pi-coding-agent-install-package.json
             pi-coding-agent-install-package-lock.json
+            BUILD-IDENTITY.json
           )
           sha256sum "${release_assets[@]}" > SHA256SUMS
+
+      - name: Preserve original build identity independently of draft assets
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: binary-build-identity
+          path: |
+            release-assets/BUILD-IDENTITY.json
+            release-assets/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Upload GitHub release payload
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -134,12 +148,22 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner:
-          - ubuntu-latest
-          - macos-latest
-          - windows-latest
+        include:
+          - runner: ubuntu-24.04
+            platform: linux-x64
+          - runner: ubuntu-24.04-arm
+            platform: linux-arm64
+          - runner: macos-15-intel
+            platform: darwin-x64
+          - runner: macos-14
+            platform: darwin-arm64
+          - runner: windows-2025
+            platform: windows-x64
+          - runner: windows-11-arm
+            platform: windows-arm64
     permissions:
       actions: read
+      contents: read
     env:
       RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
       SOURCE_REF: ${{ github.event.inputs.source_ref || github.event.inputs.tag || github.ref_name }}
@@ -149,6 +173,10 @@ jobs:
         with:
           ref: ${{ env.SOURCE_REF }}
           persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
 
       - name: Download binary archives
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -162,7 +190,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          runtime_platform="$(node -p '`${process.platform}-${process.arch}`')"
+          runtime_platform="$(node -p 'process.platform + "-" + process.arch')"
           case "${runtime_platform}" in
             darwin-arm64|darwin-x64|linux-arm64|linux-x64)
               platform="${runtime_platform}"
@@ -190,10 +218,12 @@ jobs:
 
           mkdir -p extracted
           if [[ "${archive}" == *.zip ]]; then
-            export ARCHIVE_PATH="$(cygpath -w "${archive}")"
-            export DESTINATION_PATH="$(cygpath -w extracted)"
+            ARCHIVE_PATH="$(cygpath -w "${archive}")"
+            DESTINATION_PATH="$(cygpath -w extracted)"
+            export ARCHIVE_PATH DESTINATION_PATH
+            # PowerShell expands these environment references, not Bash.
             powershell.exe -NoProfile -NonInteractive -Command \
-              'Expand-Archive -LiteralPath $env:ARCHIVE_PATH -DestinationPath $env:DESTINATION_PATH -Force'
+              "Expand-Archive -LiteralPath \$env:ARCHIVE_PATH -DestinationPath \$env:DESTINATION_PATH -Force"
           else
             tar -xf "${archive}" -C extracted
           fi
@@ -207,6 +237,20 @@ jobs:
           "${{ steps.binary.outputs.binary }}" --version
           node scripts/smoke-test-codemode-binary.mjs "${{ steps.binary.outputs.binary }}"
 
+      - name: Smoke-test real pi-memory on the archive's exact executable
+        shell: bash
+        env:
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          node scripts/smoke-test-memory-binary.mjs release-assets \
+            "$PLATFORM" "$(git rev-parse HEAD)" "$RELEASE_TAG" "smoke-$PLATFORM.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: binary-smoke-${{ matrix.platform }}
+          path: smoke-${{ matrix.platform }}.json
+          if-no-files-found: error
+          retention-days: 14
+
   stage-github-release:
     runs-on: ubuntu-latest
     needs:
@@ -218,7 +262,20 @@ jobs:
     env:
       GH_REPO: ${{ github.repository }}
       RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+      SOURCE_REF: ${{ github.event.inputs.source_ref || github.event.inputs.tag || github.ref_name }}
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SOURCE_REF }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: binary-smoke-*
+          merge-multiple: true
+          path: smoke-receipts
       - name: Download GitHub release payload
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
@@ -229,7 +286,13 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Notes are release text, not an attached asset in the publication allowlist.
+          mv release-assets/RELEASE_NOTES.md RELEASE_NOTES.md
+          node scripts/binary-release-contract.mjs collect release-assets \
+            "$(git rev-parse HEAD)" "$RELEASE_TAG" smoke-receipts
+          node scripts/binary-release-contract.mjs verify release-assets "$(git rev-parse HEAD)" "$RELEASE_TAG"
           cd release-assets
+          sha256sum BINARY-SMOKE.json >> SHA256SUMS
 
           VERSION="${RELEASE_TAG#v}"
           source_asset="pi-${VERSION}-source.tar.gz"
@@ -243,8 +306,9 @@ jobs:
             pi-windows-arm64.zip
             pi-coding-agent-install-package.json
             pi-coding-agent-install-package-lock.json
+            BUILD-IDENTITY.json
+            BINARY-SMOKE.json
             SHA256SUMS
-            RELEASE_NOTES.md
           )
 
           for asset in "${expected_assets[@]}"; do
@@ -273,6 +337,8 @@ jobs:
             pi-windows-arm64.zip
             pi-coding-agent-install-package.json
             pi-coding-agent-install-package-lock.json
+            BUILD-IDENTITY.json
+            BINARY-SMOKE.json
             SHA256SUMS
           )
 
@@ -289,7 +355,7 @@ jobs:
             --verify-tag \
             --draft \
             --title "${RELEASE_TAG}" \
-            --notes-file RELEASE_NOTES.md \
+            --notes-file ../RELEASE_NOTES.md \
             "${release_assets[@]}"
 
           expected_asset_names="$(printf '%s\n' "${release_assets[@]}" | sort)"
@@ -337,7 +403,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev fd-find ripgrep
-          sudo ln -s $(which fdfind) /usr/local/bin/fd
+          sudo ln -s "$(command -v fdfind)" /usr/local/bin/fd
 
       - name: Install dependencies
         run: npm ci --ignore-scripts
@@ -434,11 +500,29 @@ jobs:
       - publish-npm
       - announce-pi-dev-release
     permissions:
+      actions: read
       contents: write
     env:
       GH_REPO: ${{ github.repository }}
       RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+      SOURCE_REF: ${{ github.event.inputs.source_ref || github.event.inputs.tag || github.ref_name }}
     steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.SOURCE_REF }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: binary-build-identity
+          path: trusted-evidence
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: binary-smoke-*
+          merge-multiple: true
+          path: smoke-receipts
       - name: Publish staged GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -455,6 +539,23 @@ jobs:
             exit 1
           fi
 
+          # Validate the exact remote name set before downloading; never silently ignore extra assets.
+          gh release view "$RELEASE_TAG" --json assets \
+            --jq '[.assets[] | {id,name,size,digest,updatedAt}] | sort_by(.id)' > draft-asset-identity.json
+          node scripts/binary-release-contract.mjs assets draft-asset-identity.json "$RELEASE_TAG"
+          # Re-download the actual draft payload. Earlier smoke success cannot bless replaced assets.
+          gh release download "$RELEASE_TAG" --dir draft-assets
+          node scripts/binary-release-contract.mjs collect trusted-evidence \
+            "$(git rev-parse HEAD)" "$RELEASE_TAG" smoke-receipts
+          (cd trusted-evidence && sha256sum BINARY-SMOKE.json >> SHA256SUMS)
+          cmp trusted-evidence/SHA256SUMS draft-assets/SHA256SUMS
+          node scripts/binary-release-contract.mjs verify draft-assets "$(git rev-parse HEAD)" "$RELEASE_TAG" trusted-evidence
+          (cd draft-assets && sha256sum -c SHA256SUMS)
+          # Detect changes during validation. GitHub has no atomic compare-assets-and-publish API;
+          # contents writers must not mutate the draft while this workflow owns publication.
+          gh release view "$RELEASE_TAG" --json assets \
+            --jq '[.assets[] | {id,name,size,digest,updatedAt}] | sort_by(.id)' > final-asset-identity.json
+          cmp draft-asset-identity.json final-asset-identity.json
           gh release edit "${RELEASE_TAG}" --draft=false
 
   cleanup-draft-github-release:

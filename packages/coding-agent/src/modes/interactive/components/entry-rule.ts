@@ -1,4 +1,4 @@
-import { type Component, copyGutterEndMarker, visibleWidth } from "@earendil-works/pi-tui";
+import { type Component, copyGutterEndMarker, stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import { theme } from "../theme/theme.ts";
 import { EntryTimestamp } from "./entry-timestamp.ts";
 
@@ -31,7 +31,7 @@ export class Rule implements Component {
 					copyGutterEndMarker(),
 			];
 		}
-		return [theme.fg("borderMuted", this.glyph.repeat(Math.max(1, width)))];
+		return [theme.fg("borderMuted", this.glyph.repeat(Math.max(1, width))) + copyGutterEndMarker()];
 	}
 
 	invalidate(): void {}
@@ -43,6 +43,6 @@ export function entryRule(timestamp?: EntryTimestamp): Rule {
 
 /** True when a rendered row (ANSI stripped or not) is an entry rule. */
 export function isEntryRule(line: string): boolean {
-	const plain = line.replace(/\x1b\[[0-9;:]*m/g, "").trim();
+	const plain = stripTerminalSequences(line).trim();
 	return plain.length > 0 && [...plain].every((character) => character === ENTRY_RULE_GLYPH);
 }

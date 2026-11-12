@@ -4,12 +4,15 @@ import type { EntryRenderer } from "../../../core/extensions/types.ts";
 import type { CustomEntry } from "../../../core/session-manager.ts";
 import { theme } from "../theme/theme.ts";
 import { entryRule } from "./entry-rule.ts";
+import { EntryTimestamp } from "./entry-timestamp.ts";
 
 /**
  * Component that renders a custom session entry from extensions.
  * The host owns transcript spacing; renderer output should provide only its content.
  */
 export class CustomEntryComponent extends Container {
+	readonly entryTimestamp = new EntryTimestamp();
+	private readonly rule = entryRule();
 	private entry: CustomEntry<unknown>;
 	private renderer: EntryRenderer;
 	private customComponent?: Component;
@@ -19,6 +22,7 @@ export class CustomEntryComponent extends Container {
 	constructor(entry: CustomEntry<unknown>, renderer: EntryRenderer, outputPad = 1) {
 		super();
 		this.entry = entry;
+		this.entryTimestamp.setTime({ entryTimestamp: entry.timestamp });
 		this.renderer = renderer;
 		this.outputPad = outputPad;
 		this.rebuild();
@@ -45,6 +49,12 @@ export class CustomEntryComponent extends Container {
 		this.rebuild();
 	}
 
+	override render(width: number): string[] {
+		const lines = super.render(width);
+		if (lines.length > 1) lines[0] = this.rule.render(width, this.entryTimestamp)[0];
+		return lines;
+	}
+
 	private rebuild(): void {
 		this.clear();
 		this.customComponent = undefined;
@@ -64,7 +74,7 @@ export class CustomEntryComponent extends Container {
 		}
 
 		this.customComponent = component;
-		this.addChild(entryRule());
+		this.addChild(this.rule);
 		this.addChild(component);
 	}
 }

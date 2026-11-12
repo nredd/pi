@@ -6,6 +6,7 @@ import type { CustomMessage } from "../../../core/messages.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
 import { DisclosureGutter } from "./disclosure-gutter.ts";
 import { entryRule } from "./entry-rule.ts";
+import { EntryTimestamp } from "./entry-timestamp.ts";
 import { OneLineRow, renderedContentLines } from "./one-line.ts";
 
 /**
@@ -16,6 +17,8 @@ import { OneLineRow, renderedContentLines } from "./one-line.ts";
  * renderer's first line; a click or `ctrl+o` reveals the renderer's full output.
  */
 export class CustomMessageComponent extends Container {
+	readonly entryTimestamp = new EntryTimestamp();
+	private readonly rule = entryRule();
 	private message: CustomMessage<unknown>;
 	private customRenderer?: MessageRenderer;
 	private box: Box;
@@ -32,11 +35,12 @@ export class CustomMessageComponent extends Container {
 	) {
 		super();
 		this.message = message;
+		this.entryTimestamp.setTime({ messageTimestamp: message.timestamp });
 		this.customRenderer = customRenderer;
 		this.markdownTheme = markdownTheme;
 		this.outputPad = outputPad;
 
-		this.addChild(entryRule());
+		this.addChild(this.rule);
 
 		// Create box with purple background (used for default rendering)
 		this.box = new Box(1, 1, (t) => theme.bg("customMessageBg", t));
@@ -61,6 +65,12 @@ export class CustomMessageComponent extends Container {
 	override invalidate(): void {
 		super.invalidate();
 		this.rebuild();
+	}
+
+	override render(width: number): string[] {
+		const lines = super.render(width);
+		if (lines.length > 1) lines[0] = this.rule.render(width, this.entryTimestamp)[0];
+		return lines;
 	}
 
 	private rebuild(): void {

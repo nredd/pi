@@ -245,6 +245,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 	private activeSearch?: ActiveSearch;
 	private navigationTargets: readonly TranscriptNavigationTarget[] = [];
 	private navigationAnchor?: object;
+	private pendingTranscriptPosition?: { component: Component; offset: number };
 	private pressedUrl?: string;
 	private selectionDragged = false;
 	private mouseCapture?: TuiMouseDispatchTarget;
@@ -510,6 +511,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		this.previousScreenWidth = 0;
 		this.previousScreenHeight = 0;
 		this.currentLayout = undefined;
+		this.pendingTranscriptPosition = undefined;
 	}
 
 	scrollBy(lines: number): void {
@@ -540,22 +542,55 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 	resetTranscriptNavigation(): void {
 		this.navigationAnchor = undefined;
 		this.navigationTargets = [];
+		this.pendingTranscriptPosition = undefined;
 	}
 
-	private resolveNavigationTargets(layout: LayoutFrame): Array<TranscriptNavigationTarget & { row: number }> {
+	/** Root-layout geometry shared by canonical navigation and viewport preservation. */
+	private resolveTranscriptGeometry(layout: LayoutFrame): Map<Component, { row: number; height: number }> {
 		const scrollBox = getScrollViewBox(layout, layout.primaryScrollView ?? this.implicitScrollView);
 		const content = scrollBox?.children[0];
-		if (!content) return [];
-		const rows = new Map<Component, number>();
+		const geometry = new Map<Component, { row: number; height: number }>();
+		if (!content) return geometry;
 		const visit = (box: LayoutBox): void => {
-			if (box.rect.height > 0) rows.set(box.component, box.rect.y - content.rect.y);
+			if (box.rect.height > 0)
+				geometry.set(box.component, { row: box.rect.y - content.rect.y, height: box.rect.height });
 			for (const child of box.children) visit(child);
 		};
 		visit(content);
+		return geometry;
+	}
+
+	private resolveNavigationTargets(layout: LayoutFrame): Array<TranscriptNavigationTarget & { row: number }> {
+		const geometry = this.resolveTranscriptGeometry(layout);
 		return this.navigationTargets.flatMap((target) => {
-			const row = rows.get(target.component);
-			return row === undefined ? [] : [{ ...target, row }];
+			const position = geometry.get(target.component);
+			return position === undefined ? [] : [{ ...target, row: position.row }];
 		});
+	}
+
+	/** Preserve the visible native entry and intra-entry row across a host-owned framing change. */
+	preserveTranscriptPosition(): void {
+		this.pendingTranscriptPosition = this.captureTranscriptPosition();
+	}
+
+	private captureTranscriptPosition(): { component: Component; offset: number } | undefined {
+		if (!this.currentLayout || this.navigationAnchor || this.activeSearch) return undefined;
+		const scrollView = this.getPrimaryScrollView();
+		if (scrollView.isFollowingEnd) return undefined;
+		const top = scrollView.scrollTop;
+		const entry = [...this.resolveTranscriptGeometry(this.currentLayout)].findLast(
+			([, position]) => position.row <= top && top < position.row + position.height,
+		);
+		return entry ? { component: entry[0], offset: top - entry[1].row } : undefined;
+	}
+
+	private restoreTranscriptPosition(layout: LayoutFrame, anchor: { component: Component; offset: number }): boolean {
+		const position = this.resolveTranscriptGeometry(layout).get(anchor.component);
+		if (!position) return false;
+		const scrollView = layout.primaryScrollView ?? this.implicitScrollView;
+		const before = scrollView.scrollTop;
+		scrollView.scrollTo(position.row + Math.min(anchor.offset, position.height - 1), { disableFollow: true });
+		return scrollView.scrollTop !== before;
 	}
 
 	/** Move upward through canonical host targets without touching input, focus, or selection. */
@@ -1823,8 +1858,12 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		const width = Math.max(1, this.terminal.columns);
 		const height = Math.max(1, this.terminal.rows);
 		const root = this.layoutRoot ?? this.implicitScrollView;
+		const resized = width !== this.previousScreenWidth || height !== this.previousScreenHeight;
+		const position = this.pendingTranscriptPosition ?? (resized ? this.captureTranscriptPosition() : undefined);
+		this.pendingTranscriptPosition = undefined;
 		let nextLayout = renderLayoutFrame(root, width, height, () => this.requestRender());
-		if (this.refreshNavigationAnchor(nextLayout) || this.refreshSearch(nextLayout)) {
+		const moved = position !== undefined && this.restoreTranscriptPosition(nextLayout, position);
+		if (this.refreshNavigationAnchor(nextLayout) || this.refreshSearch(nextLayout) || moved) {
 			nextLayout = renderLayoutFrame(root, width, height, () => this.requestRender());
 		}
 		// Content-coordinate selections survive scrolling, but not a reflow or replacement of their rows.

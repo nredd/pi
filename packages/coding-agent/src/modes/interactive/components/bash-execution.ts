@@ -13,6 +13,7 @@ import { stripAnsi } from "../../../utils/ansi.ts";
 import { theme } from "../theme/theme.ts";
 import { DynamicBorder } from "./dynamic-border.ts";
 import { entryRule } from "./entry-rule.ts";
+import { EntryTimestamp } from "./entry-timestamp.ts";
 import { keyHint, keyText } from "./keybinding-hints.ts";
 import { truncateToVisualLines } from "./visual-truncate.ts";
 
@@ -20,6 +21,7 @@ import { truncateToVisualLines } from "./visual-truncate.ts";
 const PREVIEW_LINES = 20;
 
 export class BashExecutionComponent extends Container {
+	readonly entryTimestamp = new EntryTimestamp();
 	private command: string;
 	private outputLines: string[] = [];
 	private status: "running" | "complete" | "cancelled" | "error" = "running";
@@ -40,7 +42,7 @@ export class BashExecutionComponent extends Container {
 		this.outputPad = outputPad;
 		const borderColor = (str: string) => theme.fg(this.colorKey, str);
 
-		this.addChild(entryRule());
+		this.addChild(entryRule(this.entryTimestamp));
 
 		// Top border
 		this.addChild(new DynamicBorder(borderColor));

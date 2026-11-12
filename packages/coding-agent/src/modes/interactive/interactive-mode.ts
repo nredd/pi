@@ -149,6 +149,7 @@ import { DynamicBorder } from "./components/dynamic-border.ts";
 import { EarendilAnnouncementComponent } from "./components/earendil-announcement.ts";
 import { playArmin3d, playPiLogo3d } from "./components/easter-egg-3d.lazy.ts";
 import { entryRule, Rule, TURN_RULE_GLYPH } from "./components/entry-rule.ts";
+import { EntryTimestamp } from "./components/entry-timestamp.ts";
 import { ExtensionEditorComponent } from "./components/extension-editor.ts";
 import { ExtensionInputComponent } from "./components/extension-input.ts";
 import { ExtensionSelectorComponent } from "./components/extension-selector.ts";
@@ -526,6 +527,8 @@ export class InteractiveMode {
 
 	// Tool execution tracking: toolCallId -> component
 	private pendingTools = new Map<string, ToolExecutionComponent>();
+	/** The current tool batch's owning assistant, including providers that emit no content updates. */
+	private toolCallContext: AssistantMessage | undefined;
 
 	// Tool output expansion state
 	private toolOutputExpanded = false;
@@ -2108,6 +2111,7 @@ export class InteractiveMode {
 		this.footer.setAutoCompactEnabled(this.session.autoCompactionEnabled);
 		this.footerDataProvider.setCwd(this.sessionManager.getCwd());
 		this.hideThinkingBlock = this.settingsManager.getHideThinkingBlock();
+		this.updateTimestampVisibility();
 		this.outputPad = this.settingsManager.getOutputPad();
 		this.ui.setShowHardwareCursor(this.settingsManager.getShowHardwareCursor());
 		const clearOnShrink = this.settingsManager.getClearOnShrink();
@@ -3473,6 +3477,7 @@ export class InteractiveMode {
 		switch (event.type) {
 			case "agent_start":
 				this.pendingTools.clear();
+				this.toolCallContext = undefined;
 				// Restore main escape handler if retry handler is still active
 				// (retry success event fires later, but we need main handler now)
 				if (this.retryEscapeHandler) {
@@ -3545,6 +3550,11 @@ export class InteractiveMode {
 				}
 				break;
 
+			case "message_recorded":
+				this.transcriptIdentities.get(event.message, event.entry);
+				this.ui.requestRender();
+				break;
+
 			case "session_info_changed":
 				this.updateTerminalTitle();
 				this.footer.invalidate();
@@ -3574,6 +3584,7 @@ export class InteractiveMode {
 						this.getMarkdownTransformers(),
 					);
 					this.streamingMessage = event.message;
+					this.configureEntryTimestamp(this.streamingComponent, event.message);
 					this.chatContainer.addChild(this.streamingComponent);
 					this.streamingComponent.updateContent(this.streamingMessage, true);
 					this.ui.requestRender();
@@ -3583,6 +3594,7 @@ export class InteractiveMode {
 			case "message_update":
 				if (this.streamingComponent && event.message.role === "assistant") {
 					this.streamingMessage = event.message;
+					this.configureEntryTimestamp(this.streamingComponent, event.message);
 					this.streamingComponent.updateContent(this.streamingMessage, true);
 
 					for (const content of this.streamingMessage.content) {
@@ -3602,6 +3614,7 @@ export class InteractiveMode {
 									this.sessionManager.getCwd(),
 								);
 								component.setExpanded(this.toolOutputExpanded);
+								this.configureEntryTimestamp(component, this.streamingMessage);
 								this.chatContainer.addChild(component);
 								this.pendingTools.set(content.id, component);
 							} else {
@@ -3618,6 +3631,7 @@ export class InteractiveMode {
 
 			case "message_end":
 				if (event.message.role === "user") break;
+				if (event.message.role === "assistant") this.toolCallContext = event.message;
 				if (this.streamingComponent && event.message.role === "assistant") {
 					this.streamingMessage = event.message;
 					let errorMessage: string | undefined;
@@ -3628,6 +3642,10 @@ export class InteractiveMode {
 								? `Aborted after ${retryAttempt} retry attempt${retryAttempt > 1 ? "s" : ""}`
 								: "Operation aborted";
 						this.streamingMessage.errorMessage = errorMessage;
+					}
+					this.configureEntryTimestamp(this.streamingComponent, event.message);
+					for (const component of this.pendingTools.values()) {
+						this.configureEntryTimestamp(component, event.message);
 					}
 					this.streamingComponent.updateContent(this.streamingMessage, false);
 
@@ -3658,6 +3676,13 @@ export class InteractiveMode {
 				this.ui.requestRender();
 				break;
 
+			case "bash_execution_recorded":
+				if (this.bashComponent) {
+					this.configureEntryTimestamp(this.bashComponent, event.message);
+					this.ui.requestRender();
+				}
+				break;
+
 			case "bash_execution_update":
 				// The bash execution callback handles TUI output rendering.
 				break;
@@ -3681,6 +3706,7 @@ export class InteractiveMode {
 						this.sessionManager.getCwd(),
 					);
 					component.setExpanded(this.toolOutputExpanded);
+					if (this.toolCallContext) this.configureEntryTimestamp(component, this.toolCallContext);
 					this.chatContainer.addChild(component);
 					this.pendingTools.set(event.toolCallId, component);
 				}
@@ -3720,6 +3746,7 @@ export class InteractiveMode {
 					this.streamingMessage = undefined;
 				}
 				this.pendingTools.clear();
+				this.toolCallContext = undefined;
 
 				this.ui.requestRender();
 				break;
@@ -3772,11 +3799,7 @@ export class InteractiveMode {
 					// The latest compaction is prepended for model context; append it below at its chronological position.
 					this.renderSessionEntries(entries.slice(1));
 					this.addMessageToChat(
-						createCompactionSummaryMessage(
-							event.result.summary,
-							event.result.tokensBefore,
-							new Date().toISOString(),
-						),
+						createCompactionSummaryMessage(event.result.summary, event.result.tokensBefore, entries[0].timestamp),
 					);
 					if (event.result.usage) {
 						this.addCompactionCostNotice({
@@ -3920,6 +3943,7 @@ export class InteractiveMode {
 			return;
 		}
 		const component = new CustomEntryComponent(entry, renderer, this.outputPad);
+		this.configureEntryTimestamp(component, entry);
 		component.setExpanded(this.toolOutputExpanded);
 		if (!component.hasContent()) {
 			return;
@@ -3945,6 +3969,7 @@ export class InteractiveMode {
 					message.excludeFromContext,
 					this.outputPad,
 				);
+				this.configureEntryTimestamp(component, message);
 				if (message.output) {
 					component.appendOutput(message.output);
 				}
@@ -3967,12 +3992,13 @@ export class InteractiveMode {
 						this.outputPad,
 					);
 					component.setExpanded(this.toolOutputExpanded);
+					this.configureEntryTimestamp(component, message);
 					this.chatContainer.addChild(component);
 				}
 				break;
 			}
 			case "compactionSummary": {
-				this.chatContainer.addChild(entryRule());
+				this.chatContainer.addChild(this.configureEntryTimestamp(entryRule(), message));
 				const component = new CompactionSummaryMessageComponent(
 					message,
 					this.getMarkdownThemeWithSettings(),
@@ -3983,7 +4009,7 @@ export class InteractiveMode {
 				break;
 			}
 			case "branchSummary": {
-				this.chatContainer.addChild(entryRule());
+				this.chatContainer.addChild(this.configureEntryTimestamp(entryRule(), message));
 				const component = new BranchSummaryMessageComponent(
 					message,
 					this.getMarkdownThemeWithSettings(),
@@ -4017,6 +4043,7 @@ export class InteractiveMode {
 						this.outputPad,
 					);
 					component.setExpanded(this.toolOutputExpanded);
+					this.configureEntryTimestamp(component, message);
 					this.chatContainer.addChild(component);
 					// Render user message separately if present
 					if (skillBlock.userMessage) {
@@ -4036,6 +4063,7 @@ export class InteractiveMode {
 						this.outputPad,
 						this.getMarkdownTransformers(),
 					);
+					this.configureEntryTimestamp(userComponent, message);
 					this.chatContainer.addChild(userComponent);
 				}
 				if (textContent && options?.populateHistory) {
@@ -4059,6 +4087,7 @@ export class InteractiveMode {
 					this.outputPad,
 					this.getMarkdownTransformers(),
 				);
+				this.configureEntryTimestamp(assistantComponent, message);
 				this.chatContainer.addChild(assistantComponent);
 				break;
 			}
@@ -4124,6 +4153,7 @@ export class InteractiveMode {
 							this.sessionManager.getCwd(),
 						);
 						component.setExpanded(this.toolOutputExpanded);
+						this.configureEntryTimestamp(component, message);
 						this.chatContainer.addChild(component);
 
 						if (message.stopReason === "aborted" || message.stopReason === "error") {
@@ -4182,14 +4212,12 @@ export class InteractiveMode {
 		const mounted = new Set(this.chatContainer.children);
 		this.transcriptTargets = this.transcriptTargets.filter((target) => mounted.has(target.component));
 		if (this.renderer instanceof TuiAltScreen) this.renderer.setTranscriptNavigationTargets(this.transcriptTargets);
-		for (const entry of entries) {
-			if (entry.type === "message") this.transcriptIdentities.get(entry.message, entry.id);
-		}
 		const items = entries.flatMap((entry): RenderSessionItem[] => {
 			if (entry.type === "custom" || (entry.type === "usage" && entry.kind === "cache_warm")) {
 				return [entry];
 			}
 			const messages = sessionEntryToContextMessages(entry);
+			for (const message of messages) this.transcriptIdentities.get(message, entry);
 			if ((entry.type === "compaction" || entry.type === "branch_summary") && entry.usage && messages.length > 0) {
 				return [...messages, { type: "compaction_cost", kind: entry.type, usage: entry.usage }];
 			}
@@ -4999,6 +5027,32 @@ export class InteractiveMode {
 		this.ui.requestRender();
 	}
 
+	/** Configure framing without wrapping or replacing the native component. */
+	private configureEntryTimestamp<T extends Component & { entryTimestamp: EntryTimestamp }>(
+		component: T,
+		message: AgentMessage | Extract<SessionEntry, { type: "custom" }>,
+	): T {
+		component.entryTimestamp.setTime(
+			isCustomSessionEntry(message) ? { entryTimestamp: message.timestamp } : this.transcriptIdentities.get(message),
+		);
+		component.entryTimestamp.setEnabled(this.settingsManager.getShowTimestamps());
+		return component;
+	}
+
+	/** Update only framing state. Disclosure state, streamed content, and renderer caches stay intact. */
+	private updateTimestampVisibility(): void {
+		if (this.renderer instanceof TuiAltScreen) this.renderer.preserveTranscriptPosition();
+		const enabled = this.settingsManager.getShowTimestamps();
+		for (const container of [this.chatContainer, this.pendingMessagesContainer]) {
+			for (const child of container.children) {
+				if ("entryTimestamp" in child && child.entryTimestamp instanceof EntryTimestamp) {
+					child.entryTimestamp.setEnabled(enabled);
+				}
+			}
+		}
+		this.ui.requestRender();
+	}
+
 	private showSettingsSelector(): void {
 		this.showSelector((done) => {
 			let selector: SettingsSelectorComponent | undefined;
@@ -5029,6 +5083,7 @@ export class InteractiveMode {
 					terminalTheme: this.themeController.getTerminalTheme(),
 					availableThemes: getAvailableThemes(),
 					hideThinkingBlock: this.hideThinkingBlock,
+					showTimestamps: this.settingsManager.getShowTimestamps(),
 					mermaidRenderingMode: this.settingsManager.getMermaidRenderingMode(),
 					collapseChangelog: this.settingsManager.getCollapseChangelog(),
 					enableInstallTelemetry: this.settingsManager.getEnableInstallTelemetry(),
@@ -5133,6 +5188,11 @@ export class InteractiveMode {
 						this.hideThinkingBlock = hidden;
 						this.settingsManager.setHideThinkingBlock(hidden);
 						this.updateThinkingBlockVisibility();
+					},
+					onShowTimestampsChange: (shown) => {
+						this.settingsManager.setShowTimestamps(shown);
+						this.updateTimestampVisibility();
+						return this.settingsManager.getShowTimestamps();
 					},
 					onMermaidRenderingModeChange: (mode) => {
 						this.settingsManager.setMermaidRenderingMode(mode);

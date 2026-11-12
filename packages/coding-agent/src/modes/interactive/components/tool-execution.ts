@@ -21,6 +21,7 @@ import { ensurePngTranscoder } from "../../../utils/image-convert.ts";
 import { theme } from "../theme/theme.ts";
 import { DisclosureGutter } from "./disclosure-gutter.ts";
 import { entryRule } from "./entry-rule.ts";
+import { EntryTimestamp } from "./entry-timestamp.ts";
 import { keyHint } from "./keybinding-hints.ts";
 import { firstTextLine, lastTextLine, OneLineRow, renderedContentLines } from "./one-line.ts";
 
@@ -41,6 +42,7 @@ export interface ToolExecutionOptions {
 }
 
 export class ToolExecutionComponent extends Container {
+	readonly entryTimestamp = new EntryTimestamp();
 	private contentBox: Box;
 	private compactBox: Box;
 	private contentText: Text;
@@ -105,7 +107,7 @@ export class ToolExecutionComponent extends Container {
 		this.ui = ui;
 		this.cwd = cwd;
 
-		this.addChild(entryRule());
+		this.addChild(entryRule(this.entryTimestamp));
 
 		// Always create all shell variants. contentBox is used for default renderer-based composition.
 		// selfRenderContainer is used when the tool renders its own framing.
@@ -282,7 +284,7 @@ export class ToolExecutionComponent extends Container {
 
 			const lines: string[] = [];
 			if (contentLines.length > 0) {
-				lines.push(...entryRule().render(width));
+				lines.push(...entryRule(this.entryTimestamp).render(width));
 				lines.push(...contentLines);
 			}
 			for (let i = 0; i < this.imageComponents.length; i++) {

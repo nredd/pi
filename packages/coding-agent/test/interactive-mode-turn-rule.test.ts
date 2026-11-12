@@ -1,6 +1,7 @@
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import { Container, type TranscriptNavigationTarget } from "@earendil-works/pi-tui";
+import { type Component, Container, type TranscriptNavigationTarget } from "@earendil-works/pi-tui";
 import { describe, expect, test } from "vitest";
+import type { EntryTimestamp } from "../src/modes/interactive/components/entry-timestamp.ts";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
 import { getMarkdownTheme, initTheme } from "../src/modes/interactive/theme/theme.ts";
 import { TranscriptEntryIdentities } from "../src/modes/interactive/transcript-entries.ts";
@@ -11,6 +12,11 @@ type ChatContext = {
 	transcriptTargets: TranscriptNavigationTarget[];
 	chatContainer: Container;
 	outputPad: number;
+	settingsManager: { getShowTimestamps(): boolean };
+	configureEntryTimestamp: <T extends Component & { entryTimestamp: EntryTimestamp }>(
+		component: T,
+		message: AgentMessage,
+	) => T;
 	editor: { addToHistory?: (text: string) => void };
 	getUserMessageText: (message: AgentMessage) => string;
 	getMarkdownThemeWithSettings: () => ReturnType<typeof getMarkdownTheme>;
@@ -35,6 +41,11 @@ function createContext(): ChatContext {
 		transcriptIdentities: new TranscriptEntryIdentities(),
 		transcriptTargets: [],
 		outputPad: 1,
+		settingsManager: { getShowTimestamps: () => false },
+		configureEntryTimestamp: Reflect.get(
+			InteractiveMode.prototype,
+			"configureEntryTimestamp",
+		) as ChatContext["configureEntryTimestamp"],
 		editor: {},
 		getUserMessageText,
 		getMarkdownThemeWithSettings: () => getMarkdownTheme(),

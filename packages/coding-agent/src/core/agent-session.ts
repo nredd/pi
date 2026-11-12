@@ -213,6 +213,7 @@ export type AgentSessionEvent =
 	  }
 	| { type: "compaction_start"; reason: "manual" | "threshold" | "overflow" }
 	| { type: "entry_appended"; entry: SessionEntry }
+	| { type: "message_recorded"; message: AgentMessage; entry: SessionEntry }
 	| { type: "session_info_changed"; name: string | undefined }
 	| { type: "thinking_level_changed"; level: ThinkingLevel }
 	| {
@@ -239,6 +240,7 @@ export type AgentSessionEvent =
 			reason: "manual" | "threshold" | "overflow";
 	  }
 	| { type: "summarization_retry_finished" }
+	| { type: "bash_execution_recorded"; message: BashExecutionMessage }
 	| { type: "bash_execution_update"; id?: string; delta: string };
 
 /** Listener function for agent session events */
@@ -1381,6 +1383,7 @@ export class AgentSession {
 					event.message.content,
 					event.message.display,
 					event.message.details,
+					event.message.timestamp,
 				);
 			} else if (
 				event.message.role === "system" ||
@@ -1394,6 +1397,8 @@ export class AgentSession {
 			if (entryId) {
 				this._entryIdsByMessage.set(event.message, entryId);
 				this._trackPendingInput(entryId);
+				const entry = this.sessionManager.getEntry(entryId);
+				if (entry) this._emit({ type: "message_recorded", message: event.message, entry });
 			}
 			// Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere
 
@@ -2703,11 +2708,15 @@ export class AgentSession {
 			appMessage.content,
 			appMessage.display,
 			appMessage.details,
+			appMessage.timestamp,
 		);
+		this._entryIdsByMessage.set(appMessage, entryId);
 		this._trackPendingInput(entryId);
 		this._refreshFinalizedContext();
 		this._emit({ type: "message_start", message: appMessage });
 		this._emit({ type: "message_end", message: appMessage });
+		const entry = this.sessionManager.getEntry(entryId);
+		if (entry) this._emit({ type: "message_recorded", message: appMessage, entry });
 	}
 
 	/**
@@ -4664,6 +4673,8 @@ export class AgentSession {
 			this.sessionManager.appendMessage(bashMessage);
 			this._refreshFinalizedContext();
 		}
+		// The UI needs this exact recorded object even while persistence is deferred during a turn.
+		this._emit({ type: "bash_execution_recorded", message: bashMessage });
 	}
 
 	/**

@@ -18,7 +18,7 @@ it("carries official corrections and explicit unknowns into bundled shards and p
 		writeFileSync(
 			preload,
 			`globalThis.fetch = async (input) => {
-			if (String(input) === 'https://models.dev/api.json') return Response.json({anthropic:{models:{'claude-sonnet-4-5':{id:'claude-sonnet-4-5',name:'Public Sonnet',tool_call:true,cost:{input:999,output:999}}}},openai:{models:{'gpt-6.1-sol':{id:'gpt-6.1-sol',name:'Public Sol',tool_call:true,cost:{input:999,output:999}}}},'cloudflare-ai-gateway':{models:{'openai/gpt-4o':{id:'gpt-4o',name:'Public 4o',tool_call:true,cost:{input:999,output:999}},'openai/gpt-6.1-terra':{id:'gpt-6.1-terra',name:'Public Terra',tool_call:true,cost:{input:999,output:999}}}},'example-provider':{models:{}}});
+			if (String(input) === 'https://models.dev/api.json') return Response.json({anthropic:{models:{'claude-sonnet-4-5':{id:'claude-sonnet-4-5',name:'Public Sonnet',tool_call:true,cost:{input:999,output:999}}}},openai:{models:{'gpt-6.1-sol':{id:'gpt-6.1-sol',name:'Public Sol',tool_call:true,cost:{input:999,output:999}},'gpt-5.3-codex':{id:'gpt-5.3-codex',name:'Public Codex',tool_call:true,cost:{input:999,output:999}}}},'cloudflare-ai-gateway':{models:{'openai/gpt-4o':{id:'gpt-4o',name:'Public 4o',tool_call:true,cost:{input:999,output:999}},'openai/gpt-6.1-terra':{id:'gpt-6.1-terra',name:'Public Terra',tool_call:true,cost:{input:999,output:999}}}},'example-provider':{models:{}}});
 			if (String(input).includes('models.dev/models.json')) return Response.json({'typesafe/jev-latest':{id:'jev-latest',type:'decision',name:'Public Jev'}});
 			if (String(input).includes('openrouter.ai/api/v1/models')) return Response.json({data:[{id:'example/unknown',name:'Synthetic unknown',supported_parameters:['tools']}]});
 			throw new Error('Offline synthetic source unavailable');
@@ -48,6 +48,15 @@ it("carries official corrections and explicit unknowns into bundled shards and p
 			assessment: { status: "verified", checkedAt: "2026-11-12", unit: "usd-per-million-tokens" },
 		});
 		expect(shard["openai-responses"]["chat:gpt-6.1-sol"].cost).toEqual(cost);
+		// nredd/pi#54: the exact first-party selector survives both output paths.
+		const codex53 = legacy.openai["gpt-5.3-codex"].cost;
+		expect(codex53).toMatchObject({
+			input: 1.75,
+			output: 14,
+			cacheRead: 0.175,
+			assessment: { status: "verified", maxInputTokens: 272000, retiredOn: "2027-04-01" },
+		});
+		expect(shard["openai-responses"]["chat:gpt-5.3-codex"].cost).toEqual(codex53);
 		// nredd/pi#53: the public and bundled routes retain the bounded legacy contract.
 		const claude = legacy.anthropic["claude-sonnet-4-5"].cost;
 		expect(claude).toMatchObject({
@@ -99,6 +108,7 @@ it("carries official corrections and explicit unknowns into bundled shards and p
 		expect(hydrated.status, `${hydrated.stdout}\n${hydrated.stderr}`).toBe(0);
 		const hydratedShard = JSON.parse(readFileSync(join(isolated, "src/providers/data/openai.json"), "utf8"));
 		expect(hydratedShard["openai-responses"]["chat:gpt-6.1-sol"].cost).toEqual(cost);
+		expect(hydratedShard["openai-responses"]["chat:gpt-5.3-codex"].cost).toEqual(codex53);
 		const hydratedAnthropic = JSON.parse(readFileSync(join(isolated, "src/providers/data/anthropic.json"), "utf8"));
 		expect(hydratedAnthropic["anthropic-messages"]["chat:claude-sonnet-4-5"].cost).toEqual(claude);
 		const hydratedCodex = JSON.parse(readFileSync(join(isolated, "src/providers/data/openai-codex.json"), "utf8"));

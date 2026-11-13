@@ -76,6 +76,17 @@ Source follow-up, checked 2026-11-13:
   in that dated archive. This source change does not modify `.11`, publish a release,
   advance selected pins or activate a new catalogue.
 
+OpenAI Codex source follow-up, checked 2026-11-13:
+
+- The exact `openai/gpt-5.3-codex` Responses selector has input/output/read rates
+  `1.75/14/0.175` USD per million tokens in its [model card](https://developers.openai.com/api/docs/models/gpt-5.3-codex.md). Cache writes remain unavailable.
+- The deprecated model has maximum input `272000`, context `400000`, and output `128000` tokens.
+  The [deprecations schedule](https://developers.openai.com/api/docs/deprecations) lists retirement
+  on `2027-04-01`; estimates stop at the start of that UTC date. These are current-list-price
+  estimates, not proof of account availability or historical billing.
+- Other snapshot prices, Daybreak inheritance and Spark remain unknown. The frozen table above
+  remains the unchanged release baseline, not a claim of a published or activated catalogue.
+
 Claude source follow-up, checked 2026-11-13:
 
 - [Anthropic pricing](https://platform.claude.com/docs/en/about-claude/pricing) supplies

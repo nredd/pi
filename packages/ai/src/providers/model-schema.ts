@@ -51,6 +51,7 @@ export const PricingAssessmentSchema = Type.Union([
 		unit: Type.Literal("usd-per-million-tokens"),
 		conditions: Type.String({ minLength: 1 }),
 		unavailable: Type.Optional(Type.Array(Type.Enum(["input", "output", "cacheRead", "cacheWrite"]))),
+		maxInputTokens: Type.Optional(Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER })),
 		maxContextTokens: Type.Optional(Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER })),
 		maxOutputTokens: Type.Optional(Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER })),
 		retiredOn: Type.Optional(Type.String({ pattern: "^\\d{4}-\\d{2}-\\d{2}$" })),

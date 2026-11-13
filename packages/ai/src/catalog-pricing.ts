@@ -102,6 +102,61 @@ function verified(
 	};
 }
 
+// Rates and bounds are one contract so a dated alias cannot acquire only one of them.
+const HAIKU_45 = {
+	cost: { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25, cacheWrite1h: 2 },
+	maxContextTokens: 200000,
+	maxOutputTokens: 64000,
+};
+const OPUS_45 = {
+	cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25, cacheWrite1h: 10 },
+	maxContextTokens: 200000,
+	maxOutputTokens: 64000,
+};
+const SONNET_45 = {
+	cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75, cacheWrite1h: 6 },
+	maxContextTokens: 200000,
+	maxOutputTokens: 64000,
+	retiredOn: "2026-11-30",
+};
+const BOUNDED_ANTHROPIC: Record<
+	string,
+	{ cost: ModelCost; maxContextTokens: number; maxOutputTokens: number; retiredOn?: string }
+> = {
+	"claude-fable-5-2": {
+		cost: { input: 8, output: 40, cacheRead: 0.2, cacheWrite: 10, cacheWrite1h: 16 },
+		maxContextTokens: 1000000,
+		maxOutputTokens: 128000,
+	},
+	"claude-haiku-4-5": HAIKU_45,
+	"claude-haiku-4-5-20251001": HAIKU_45,
+	"claude-opus-4-5": OPUS_45,
+	"claude-opus-4-5-20251101": OPUS_45,
+	"claude-sonnet-4-5": SONNET_45,
+	"claude-sonnet-4-5-20250929": SONNET_45,
+};
+
+// Profile lists are taken from each model's AWS card, not a shared prefix rule.
+const BEDROCK_NOVA_RATES: Record<string, readonly [number, number, number]> = {};
+for (const [id, prefixes, input, read, output] of [
+	["amazon.nova-2-lite-v1:0", ["", "us.", "eu.", "jp.", "global."], 0.3, 0.075, 2.5],
+	["amazon.nova-lite-v1:0", ["", "us.", "ca.", "eu.", "apac."], 0.06, 0.015, 0.24],
+	["amazon.nova-micro-v1:0", ["", "us.", "eu."], 0.035, 0.00875, 0.14],
+	["amazon.nova-pro-v1:0", ["", "us.", "eu.", "apac."], 0.8, 0.2, 3.2],
+] as const) {
+	for (const prefix of prefixes) BEDROCK_NOVA_RATES[prefix + id] = [input, read, output];
+}
+const BEDROCK_OPENAI_RATES = {
+	"openai.gpt-6-astra": { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5, card: "gpt-6-astra" },
+	"openai.gpt-6.1-sol": { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5, card: "gpt-6-1-sol" },
+	"openai.gpt-6.1-terra": { input: 1, output: 5, cacheRead: 0.05, cacheWrite: 1.25, card: "gpt-6-1-terra" },
+};
+const BEDROCK_OPENAI_IDS = new Map(
+	Object.entries(BEDROCK_OPENAI_RATES).flatMap(([id, rates]) =>
+		[id, `us.${id}`, `global.${id}`].map((key) => [key, rates] as const),
+	),
+);
+
 /** Apply narrow official corrections before user overrides, never infer a provider from a model name. */
 export function catalogueCost(model: Pick<AnyModel, "provider" | "id" | "type" | "cost">): ModelCost {
 	const type = model.type ?? "chat";
@@ -127,20 +182,18 @@ export function catalogueCost(model: Pick<AnyModel, "provider" | "id" | "type" |
 	const xai =
 		type === "chat" && model.provider === "xai" && Object.hasOwn(xaiRates, model.id) ? xaiRates[model.id] : undefined;
 	const gemini = type === "chat" && model.provider === "google" && model.id === "gemini-3.5-flash-lite";
-	const boundedAnthropicContract =
+	const bedrockContract =
 		type === "chat" &&
-		model.provider === "anthropic" &&
-		[
-			"claude-fable-5-2",
-			"claude-haiku-4-5",
-			"claude-haiku-4-5-20251001",
-			"claude-opus-4-5",
-			"claude-opus-4-5-20251101",
-			"claude-sonnet-4-5",
-			"claude-sonnet-4-5-20250929",
-		].includes(model.id);
+		model.provider === "amazon-bedrock" &&
+		(Object.hasOwn(BEDROCK_NOVA_RATES, model.id) || BEDROCK_OPENAI_IDS.has(model.id));
+	const boundedAnthropicContract =
+		type === "chat" && model.provider === "anthropic" && Object.hasOwn(BOUNDED_ANTHROPIC, model.id)
+			? BOUNDED_ANTHROPIC[model.id]
+			: undefined;
 	const checkedAt =
-		codexTerra || boundedAnthropicContract || cerebras || xai || gemini ? "2026-11-13" : PRICING_CHECKED_AT;
+		codexTerra || bedrockContract || boundedAnthropicContract || cerebras || xai || gemini
+			? "2026-11-13"
+			: PRICING_CHECKED_AT;
 	const previous = model.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 	// A newer explicitly assessed catalog must not be frozen at this client's audit date.
 	if (
@@ -173,13 +226,6 @@ export function catalogueCost(model: Pick<AnyModel, "provider" | "id" | "type" |
 	}
 	if (type === "chat" && model.provider === "anthropic") {
 		const direct: Record<string, ModelCost> = {
-			"claude-fable-5-2": { input: 8, output: 40, cacheRead: 0.2, cacheWrite: 10, cacheWrite1h: 16 },
-			"claude-haiku-4-5": { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25, cacheWrite1h: 2 },
-			"claude-haiku-4-5-20251001": { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25, cacheWrite1h: 2 },
-			"claude-opus-4-5": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25, cacheWrite1h: 10 },
-			"claude-opus-4-5-20251101": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25, cacheWrite1h: 10 },
-			"claude-sonnet-4-5": { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75, cacheWrite1h: 6 },
-			"claude-sonnet-4-5-20250929": { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75, cacheWrite1h: 6 },
 			"claude-sonnet-5-5": { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5, cacheWrite1h: 4 },
 			"claude-opus-5-5": { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5, cacheWrite1h: 8 },
 			"claude-opus-5": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25, cacheWrite1h: 10 },
@@ -208,7 +254,7 @@ export function catalogueCost(model: Pick<AnyModel, "provider" | "id" | "type" |
 				],
 			},
 		};
-		const cost = Object.hasOwn(direct, model.id) ? direct[model.id] : undefined;
+		const cost = boundedAnthropicContract?.cost ?? (Object.hasOwn(direct, model.id) ? direct[model.id] : undefined);
 		if (cost) {
 			const assessed = verified(
 				cost,
@@ -218,20 +264,40 @@ export function catalogueCost(model: Pick<AnyModel, "provider" | "id" | "type" |
 				checkedAt,
 			);
 			if (boundedAnthropicContract && assessed.assessment?.status === "verified") {
-				const legacy = model.id !== "claude-fable-5-2";
+				const { maxContextTokens, maxOutputTokens, retiredOn } = boundedAnthropicContract;
 				assessed.assessment = {
 					...assessed.assessment,
-					maxContextTokens: legacy ? 200000 : 1000000,
-					maxOutputTokens: legacy ? 64000 : 128000,
-					...(model.id === "claude-sonnet-4-5" || model.id === "claude-sonnet-4-5-20250929"
-						? { retiredOn: "2026-11-30" }
-						: {}),
+					maxContextTokens,
+					maxOutputTokens,
+					...(retiredOn ? { retiredOn } : {}),
 				};
 			}
 			return assessed;
 		}
 	}
 	if (type === "chat" && model.provider === "amazon-bedrock") {
+		const novaRates = Object.hasOwn(BEDROCK_NOVA_RATES, model.id) ? BEDROCK_NOVA_RATES[model.id] : undefined;
+		if (novaRates) {
+			const [input, cacheRead, output] = novaRates;
+			return verified(
+				{ input, output, cacheRead, cacheWrite: previous.cacheWrite },
+				"https://aws.amazon.com/bedrock/pricing/",
+				"Standard/on-demand N. Virginia baseline, not actual routing or invoice. Explicit cache TTL 5m; write tariff unavailable. Implicit reuse is not a cache-read counter. Other service tiers excluded.",
+				["cacheWrite"],
+				checkedAt,
+			);
+		}
+		const openai = BEDROCK_OPENAI_IDS.get(model.id);
+		if (openai) {
+			const { card, ...rates } = openai;
+			return verified(
+				withOpenAiLongContextPricing(rates),
+				`https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-${card}.md`,
+				"Standard Global CRIS baseline, not actual regional/profile invoices; Geo and in-Region premiums excluded. Published writes are 30m, but the estimator cannot identify that exact TTL; writes unavailable. Ultrafast, Priority, Flex and Batch excluded.",
+				["cacheWrite"],
+				checkedAt,
+			);
+		}
 		// Normalize only AWS's public profile prefixes and exact physical IDs, never fuzzy aliases.
 		const id = model.id.replace(/^(global|us|eu|apac|au|jp|in|ca)\./, "");
 		// Independent AWS Global Cross-region Inference table, not direct Anthropic substitution.

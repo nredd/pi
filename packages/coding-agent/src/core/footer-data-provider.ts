@@ -1,5 +1,5 @@
 import { type ExecFileException, execFile, spawnSync } from "child_process";
-import { existsSync, type FSWatcher, readFileSync, type Stats, statSync, unwatchFile, watchFile } from "fs";
+import { existsSync, type FSWatcher, readFileSync, type Stats, stat, statSync, unwatchFile, watchFile } from "fs";
 import { dirname, join, resolve } from "path";
 import { closeWatcher, FS_WATCH_RETRY_DELAY_MS, watchWithErrorHandler } from "../utils/fs-watch.ts";
 
@@ -108,7 +108,7 @@ export class FooterDataProvider {
 	private headWatchFileListener: ((current: Stats, previous: Stats) => void) | null = null;
 	private reftableWatcher: FSWatcher | null = null;
 	private reftableTablesListWatcher: FSWatcher | null = null;
-	private reftableTablesListPath: string | null = null;
+	private reftablePollTimer: ReturnType<typeof setInterval> | null = null;
 	private branchChangeCallbacks = new Set<() => void>();
 	private availableProviderCount = 0;
 	private refreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -288,14 +288,49 @@ export class FooterDataProvider {
 		this.reftableWatcher = null;
 		closeWatcher(this.reftableTablesListWatcher);
 		this.reftableTablesListWatcher = null;
-		if (this.reftableTablesListPath) {
-			unwatchFile(this.reftableTablesListPath);
-			this.reftableTablesListPath = null;
+		if (this.reftablePollTimer) {
+			clearInterval(this.reftablePollTimer);
+			this.reftablePollTimer = null;
 		}
 		if (this.gitWatcherRetryTimer) {
 			clearTimeout(this.gitWatcherRetryTimer);
 			this.gitWatcherRetryTimer = null;
 		}
+	}
+
+	/** Keep a pre-mutation baseline; watchFile's asynchronous initial stat can miss the first update. */
+	private pollReftableTablesList(path: string): void {
+		let previous: Stats;
+		try {
+			previous = statSync(path);
+		} catch {
+			this.handleGitWatcherError();
+			return;
+		}
+
+		let inFlight = false;
+		const timer = setInterval(() => {
+			if (inFlight) return;
+			inFlight = true;
+			stat(path, (error, current) => {
+				inFlight = false;
+				// A late result must not refresh a disposed or retargeted provider.
+				if (this.disposed || this.reftablePollTimer !== timer) return;
+				if (error) {
+					this.handleGitWatcherError();
+					return;
+				}
+				if (
+					current.mtimeMs !== previous.mtimeMs ||
+					current.ctimeMs !== previous.ctimeMs ||
+					current.size !== previous.size
+				) {
+					this.scheduleRefresh();
+				}
+				previous = current;
+			});
+		}, 250);
+		this.reftablePollTimer = timer;
 	}
 
 	private scheduleGitWatcherRetry(): void {
@@ -366,7 +401,6 @@ export class FooterDataProvider {
 
 			const tablesListPath = join(reftableDir, "tables.list");
 			if (existsSync(tablesListPath)) {
-				this.reftableTablesListPath = tablesListPath;
 				this.reftableTablesListWatcher = watchWithErrorHandler(
 					tablesListPath,
 					() => {
@@ -377,15 +411,7 @@ export class FooterDataProvider {
 				if (!this.reftableTablesListWatcher) {
 					return;
 				}
-				watchFile(tablesListPath, { interval: 250 }, (current, previous) => {
-					if (
-						current.mtimeMs !== previous.mtimeMs ||
-						current.ctimeMs !== previous.ctimeMs ||
-						current.size !== previous.size
-					) {
-						this.scheduleRefresh();
-					}
-				});
+				this.pollReftableTablesList(tablesListPath);
 			}
 		}
 	}

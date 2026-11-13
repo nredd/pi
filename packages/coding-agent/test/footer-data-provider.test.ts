@@ -267,9 +267,8 @@ describe("FooterDataProvider reftable branch detection", () => {
 			await vi.advanceTimersByTimeAsync(2);
 			expect(vi.mocked(execFile)).toHaveBeenCalledTimes(1);
 			await vi.advanceTimersByTimeAsync(650);
-			// Under load a stray real watcher event from fixture setup can add one refresh here. The exact
-			// count at 501ms above is what proves the synthetic burst coalesced; this bound only stops
-			// the settle window from accumulating unbounded refreshes.
+			// Suspected (not instrumented): under load a real watcher event from fixture setup can add one
+			// refresh. The exact count at 501ms is the coalescing check; this is only a ceiling.
 			expect(vi.mocked(execFile).mock.calls.length).toBeLessThanOrEqual(2);
 		} finally {
 			provider.dispose();

@@ -357,8 +357,11 @@ test.each(["print", "rpc"] as const)(
 			expect(noticeTexts(harness.session).filter((text) => text.includes(MCP_TOOL))).toHaveLength(1);
 		} finally {
 			release.resolve();
-			await running;
-			harness.cleanup();
+			try {
+				await running;
+			} finally {
+				harness.cleanup();
+			}
 		}
 	},
 );
@@ -437,8 +440,11 @@ test("reload during preparation keeps late deferred tools pending for activation
 		expect(noticeTexts(harness.session).join("")).not.toContain(MCP_TOOL);
 	} finally {
 		release.resolve();
-		await running;
-		harness.cleanup();
+		try {
+			await running;
+		} finally {
+			harness.cleanup();
+		}
 	}
 });
 

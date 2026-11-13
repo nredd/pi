@@ -241,12 +241,14 @@ export function installValidated(root, source) {
 	// Both are `data.*` siblings (same filesystem, covered by .gitignore) so a crash leaves nothing git sees.
 	const staging = `${target}.restoring`;
 	const previous = `${target}.previous`;
+	const discard = `${target}.discard`;
 	// `previous` exists only while the new data is unvalidated, so after a crash it is the last good copy.
 	if (existsSync(previous)) {
 		rmSync(target, { recursive: true, force: true });
 		renameSync(previous, target);
 	}
 	rmSync(staging, { recursive: true, force: true });
+	rmSync(discard, { recursive: true, force: true });
 	mkdirSync(dirname(target), { recursive: true });
 	cpSync(source, staging, { recursive: true });
 	const hadPrevious = existsSync(target);
@@ -263,7 +265,11 @@ export function installValidated(root, source) {
 		if (hadPrevious) renameSync(previous, target);
 		throw new Error(`release model data rejected, previous data restored: ${invalid}`);
 	}
-	rmSync(previous, { recursive: true, force: true });
+	// Atomic rename first: a crash while deleting must never leave a partial `previous` that recovery trusts.
+	if (hadPrevious) {
+		renameSync(previous, discard);
+		rmSync(discard, { recursive: true, force: true });
+	}
 }
 
 function buildDaemon(root) {

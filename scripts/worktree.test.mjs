@@ -95,7 +95,7 @@ test("regenerated but valid model data does not block the gate", (t) => {
 	assert.equal(findProblems(root, strict).length, 1);
 });
 
-// Evidence (#87): `tsc --noEmit` passes on data that fails the validator, and base `check` never read model data.
+// #85, evidence: `tsc --noEmit` passes on data that fails the validator, and base `check` never read model data.
 test("invalid model data only warns in the gate, with the validator output and the right fix", (t) => {
 	const root = makeRepo(t);
 	makeReady(root);
@@ -200,12 +200,23 @@ test("installValidated discards a stale staging directory", (t) => {
 	assert.equal(existsSync(join(dataDir(root), "junk")), false);
 });
 
+test("installValidated discards a half-deleted previous only after the target is final", (t) => {
+	const root = makeRepo(t);
+	makeReady(root);
+	mkdirSync(`${dataDir(root)}.discard`);
+	writeFileSync(join(`${dataDir(root)}.discard`, "junk"), "x");
+	installValidated(root, validSource(t));
+	assert.equal(existsSync(`${dataDir(root)}.discard`), false);
+	assert.equal(readFileSync(join(dataDir(root), ".manifest.json"), "utf8"), '{"new":true}');
+});
+
 test("the swap directories are ignored by git", () => {
 	const ignored = (path) =>
 		spawnSync("git", ["check-ignore", "-q", path], { cwd: join(fileURLToPath(import.meta.url), "../..") }).status ===
 		0;
 	assert.ok(ignored("packages/ai/src/providers/data.previous/x"));
 	assert.ok(ignored("packages/ai/src/providers/data.restoring/x"));
+	assert.ok(ignored("packages/ai/src/providers/data.discard/x"));
 });
 
 test("reports an unset core.hooksPath", (t) => {

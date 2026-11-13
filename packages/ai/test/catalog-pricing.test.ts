@@ -141,6 +141,65 @@ describe("catalogue assessment", () => {
 		};
 		expect(catalogueCost(entry("openai-codex", "gpt-6.1-terra", "chat", future))).toBe(future);
 	});
+	// nredd/pi#53: exact first-party rates must not leak to partner providers.
+	it("assesses Fable 5.2 and fails closed on unsupported legacy envelopes", () => {
+		const cost = catalogueCost(entry("anthropic", "claude-fable-5-2"));
+		expect(cost).toMatchObject({
+			input: 8,
+			output: 40,
+			cacheRead: 0.2,
+			cacheWrite: 10,
+			cacheWrite1h: 16,
+			assessment: { status: "verified", checkedAt: "2026-11-13" },
+		});
+		expect(
+			estimateTokenCost(
+				{ cost },
+				{ input: 10, output: 20, cacheRead: 30, cacheWrite: 40, cacheWrite1h: 20, shortCacheWrites: true },
+			).cost?.total,
+		).toBeCloseTo(0.001406);
+		expect(estimateTokenCost({ cost }, { ...zero, cacheWrite: 1 }).reason).toContain("lifetime");
+		for (const [id, rates] of [
+			["claude-haiku-4-5", [1, 5, 0.1, 1.25, 2]],
+			["claude-haiku-4-5-20251001", [1, 5, 0.1, 1.25, 2]],
+			["claude-opus-4-5", [5, 25, 0.5, 6.25, 10]],
+			["claude-opus-4-5-20251101", [5, 25, 0.5, 6.25, 10]],
+			["claude-sonnet-4-5", [3, 15, 0.3, 3.75, 6]],
+			["claude-sonnet-4-5-20250929", [3, 15, 0.3, 3.75, 6]],
+		] as const) {
+			const legacy = catalogueCost(entry("anthropic", id));
+			expect([legacy.input, legacy.output, legacy.cacheRead, legacy.cacheWrite, legacy.cacheWrite1h]).toEqual(rates);
+			expect(
+				estimateTokenCost({ cost: legacy }, { ...zero, input: 136000, output: 64000 }, "2026-11-13").cost,
+			).not.toBeNull();
+			expect(
+				estimateTokenCost({ cost: legacy }, { ...zero, input: 136001, output: 64000 }, "2026-11-13").reason,
+			).toContain("context");
+			expect(estimateTokenCost({ cost: legacy }, { ...zero, output: 64001 }, "2026-11-13").reason).toContain(
+				"Output",
+			);
+		}
+		const retired = catalogueCost(entry("anthropic", "claude-sonnet-4-5"));
+		expect(estimateTokenCost({ cost: retired }, zero, "2026-11-29").cost).not.toBeNull();
+		expect(estimateTokenCost({ cost: retired }, zero, "2026-11-30").reason).toContain("retired");
+		expect(estimateTokenCost({ cost: retired }, zero, "2026-02-30").reason).toContain("date");
+		expect(estimateTokenCost({ cost: retired }, zero, "2026-11-12").reason).toContain("precedes");
+		const invalidLimit = { ...retired, assessment: { ...retired.assessment, maxContextTokens: 0 } } as ModelCost;
+		expect(estimateTokenCost({ cost: invalidLimit }, zero, "2026-11-13").reason).toContain("metadata");
+		const malformed = { ...retired, assessment: { ...retired.assessment, retiredOn: "2026-02-30" } } as ModelCost;
+		expect(estimateTokenCost({ cost: malformed }, zero, "2026-11-13").reason).toContain("metadata");
+		const newer = {
+			...retired,
+			input: 42,
+			assessment: { ...free.assessment, status: "verified", checkedAt: "2026-11-14" },
+		} as ModelCost;
+		expect(catalogueCost(entry("anthropic", "claude-sonnet-4-5", "chat", newer))).toBe(newer);
+		const original = { ...zero, cost: { ...zero, total: 123 } };
+		const snapshot = structuredClone(original);
+		estimateTokenCost({ cost }, original, "2026-11-13");
+		expect(original).toEqual(snapshot);
+		expect(catalogueCost(entry("example-provider", "claude-fable-5-2")).assessment?.status).toBe("unknown");
+	});
 	it("does not replace newer explicitly assessed prices", () => {
 		const cost: ModelCost = {
 			...sol,

@@ -102,8 +102,24 @@ function verified(
 	};
 }
 
-// Only these exact direct contracts have independently verified envelopes and lifecycle data.
-const ANTHROPIC_BOUNDED_CONTRACTS: Record<
+// Rates and bounds are one contract so a dated alias cannot acquire only one of them.
+const HAIKU_45 = {
+	cost: { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25, cacheWrite1h: 2 },
+	maxContextTokens: 200000,
+	maxOutputTokens: 64000,
+};
+const OPUS_45 = {
+	cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25, cacheWrite1h: 10 },
+	maxContextTokens: 200000,
+	maxOutputTokens: 64000,
+};
+const SONNET_45 = {
+	cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75, cacheWrite1h: 6 },
+	maxContextTokens: 200000,
+	maxOutputTokens: 64000,
+	retiredOn: "2026-11-30",
+};
+const BOUNDED_ANTHROPIC: Record<
 	string,
 	{ cost: ModelCost; maxContextTokens: number; maxOutputTokens: number; retiredOn?: string }
 > = {
@@ -112,38 +128,12 @@ const ANTHROPIC_BOUNDED_CONTRACTS: Record<
 		maxContextTokens: 1000000,
 		maxOutputTokens: 128000,
 	},
-	"claude-haiku-4-5": {
-		cost: { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25, cacheWrite1h: 2 },
-		maxContextTokens: 200000,
-		maxOutputTokens: 64000,
-	},
-	"claude-haiku-4-5-20251001": {
-		cost: { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25, cacheWrite1h: 2 },
-		maxContextTokens: 200000,
-		maxOutputTokens: 64000,
-	},
-	"claude-opus-4-5": {
-		cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25, cacheWrite1h: 10 },
-		maxContextTokens: 200000,
-		maxOutputTokens: 64000,
-	},
-	"claude-opus-4-5-20251101": {
-		cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25, cacheWrite1h: 10 },
-		maxContextTokens: 200000,
-		maxOutputTokens: 64000,
-	},
-	"claude-sonnet-4-5": {
-		cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75, cacheWrite1h: 6 },
-		maxContextTokens: 200000,
-		maxOutputTokens: 64000,
-		retiredOn: "2026-11-30",
-	},
-	"claude-sonnet-4-5-20250929": {
-		cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75, cacheWrite1h: 6 },
-		maxContextTokens: 200000,
-		maxOutputTokens: 64000,
-		retiredOn: "2026-11-30",
-	},
+	"claude-haiku-4-5": HAIKU_45,
+	"claude-haiku-4-5-20251001": HAIKU_45,
+	"claude-opus-4-5": OPUS_45,
+	"claude-opus-4-5-20251101": OPUS_45,
+	"claude-sonnet-4-5": SONNET_45,
+	"claude-sonnet-4-5-20250929": SONNET_45,
 };
 
 // Profile lists are taken from each model's AWS card, not a shared prefix rule.
@@ -176,8 +166,8 @@ export function catalogueCost(model: Pick<AnyModel, "provider" | "id" | "type" |
 		model.provider === "amazon-bedrock" &&
 		(Object.hasOwn(BEDROCK_NOVA_RATES, model.id) || BEDROCK_OPENAI_IDS.has(model.id));
 	const boundedAnthropicContract =
-		type === "chat" && model.provider === "anthropic" && Object.hasOwn(ANTHROPIC_BOUNDED_CONTRACTS, model.id)
-			? ANTHROPIC_BOUNDED_CONTRACTS[model.id]
+		type === "chat" && model.provider === "anthropic" && Object.hasOwn(BOUNDED_ANTHROPIC, model.id)
+			? BOUNDED_ANTHROPIC[model.id]
 			: undefined;
 	const checkedAt = codexTerra || bedrockContract || boundedAnthropicContract ? "2026-11-13" : PRICING_CHECKED_AT;
 	const previous = model.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
@@ -250,8 +240,13 @@ export function catalogueCost(model: Pick<AnyModel, "provider" | "id" | "type" |
 				checkedAt,
 			);
 			if (boundedAnthropicContract && assessed.assessment?.status === "verified") {
-				const { cost: _cost, ...contract } = boundedAnthropicContract;
-				assessed.assessment = { ...assessed.assessment, ...contract };
+				const { maxContextTokens, maxOutputTokens, retiredOn } = boundedAnthropicContract;
+				assessed.assessment = {
+					...assessed.assessment,
+					maxContextTokens,
+					maxOutputTokens,
+					...(retiredOn ? { retiredOn } : {}),
+				};
 			}
 			return assessed;
 		}

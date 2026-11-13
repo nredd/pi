@@ -76,7 +76,7 @@ test("invalid model data only warns in the gate, with the validator output and t
 	assert.match(warning, /Invalid generated model data:/);
 	assert.match(warning, /anthropic\.json problem 1\b/);
 	assert.doesNotMatch(warning, /problem 21\b/);
-	assert.match(warning, /npm run hydrate:model-data/);
+	assert.match(warning, /node scripts\/worktree\.mjs setup --force[\s\S]*npm run hydrate:model-data/);
 	assert.doesNotMatch(warning, /worktree:setup/);
 });
 
@@ -86,7 +86,7 @@ test("invalid model data blocks under --strict and never recommends worktree:set
 	writeFileSync(join(root, "packages/ai/src/providers/data/.manifest.json"), '{"invalid":true}');
 	const problems = findProblems(root, strict).join("\n");
 	assert.match(problems, /Invalid generated model data:/);
-	assert.match(problems, /npm run hydrate:model-data/);
+	assert.match(problems, /node scripts\/worktree\.mjs setup --force[\s\S]*npm run hydrate:model-data/);
 	assert.doesNotMatch(problems, /worktree:setup/);
 });
 

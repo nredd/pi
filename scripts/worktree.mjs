@@ -11,7 +11,7 @@
  * published `@earendil-works/pi-ai` release matching the repo version when none is present (the
  * source CI uses, never live provider data; `--force` reinstalls), and builds the pi-env daemon.
  * Like CI it does not gate on the release data: a validator failure (e.g. src ahead of the release)
- * only warns, with the `npm run hydrate:model-data` remedy, and never stops the daemon build.
+ * only warns, with the `setup --force` / `npm run hydrate:model-data` remedies, and never stops the daemon build.
  *
  * `core.hooksPath=.husky/_` is relative and shared by every worktree. Where `.husky/_` is missing
  * git runs no hook at all, so no hook can detect that. `check` is the guard: `npm run check` (the
@@ -55,7 +55,8 @@ function modelDataDir(root) {
 	return join(root, "packages/ai/src/providers/data");
 }
 
-const INVALID_DATA_HINT = "Run `npm run hydrate:model-data` (or `npm run build`) to regenerate it";
+const INVALID_DATA_HINT =
+	"Run `node scripts/worktree.mjs setup --force` (reinstalls the release data, like CI), or `npm run hydrate:model-data` (or `npm run build`) to regenerate it";
 const INVALID_OUTPUT_LINES = 20;
 
 /** Error text (validator output, bounded, plus the fix) when the model data fails the repo's own validator, else undefined. */

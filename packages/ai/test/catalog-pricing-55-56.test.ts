@@ -15,7 +15,7 @@ const entry = (provider: string, id: string, cost: ModelCost = zero, type: Model
 	cost,
 	type,
 });
-const raw: Record<string, Record<string, Record<string, unknown>>> = prices;
+const raw: Record<string, Record<string, { pricing: Record<string, unknown> }>> = prices;
 
 // nredd/pi#55/#56: these are advertised token baselines, never routed invoices or subscriptions.
 describe("exact feed token contracts", () => {
@@ -53,9 +53,7 @@ describe("exact feed token contracts", () => {
 			output: 0.24,
 			assessment: { status: "verified", unavailable: ["cacheRead", "cacheWrite"] },
 		});
-		expect(estimateTokenCost({ cost }, { ...zero, input: 1_000_000, output: 1_000_000 }).cost?.total).toBeCloseTo(
-			0.36,
-		);
+		expect(estimateTokenCost({ cost }, { ...zero, input: 1000, output: 1000 }).cost?.total).toBeCloseTo(0.00036);
 		for (const tokens of [
 			{ ...zero, cacheRead: 1 },
 			{ ...zero, cacheWrite: 1, shortCacheWrites: true },
@@ -105,16 +103,16 @@ describe("exact feed token contracts", () => {
 		expect(costRates(cost, 100001)).toMatchObject({ input: 3, output: 5, cacheWrite1h: 6 });
 	});
 	it("reuses catalogue normalization and source snake_case Gateway brackets", () => {
-		const source = prices.openrouter["anthropic/claude-haiku-5.5"];
+		const source = prices.openrouter["anthropic/claude-haiku-5.5"].pricing;
 		const catalog = buildOpenRouterCatalog(
 			[{ id: "anthropic/claude-haiku-5.5", name: "Public Haiku", supported_parameters: ["tools"], pricing: source }],
 			[],
 			[],
 		);
 		expect(catalog.chat[0].cost).toEqual(openRouterCost(source));
-		expect(getAiGatewayCost(prices["vercel-ai-gateway"]["openai/gpt-6.1-sol"]).tiers?.[0].inputTokensAbove).toBe(
-			272000,
-		);
+		expect(
+			getAiGatewayCost(prices["vercel-ai-gateway"]["openai/gpt-6.1-sol"].pricing).tiers?.[0].inputTokensAbove,
+		).toBe(272000);
 		const sparse = catalogueCost(entry("vercel-ai-gateway", "spacexai/grok-4.20-non-reasoning-beta"));
 		expect(costRates(sparse, 200000).cacheRead).toBe(0.2);
 		expect(costRates(sparse, 200001).cacheRead).toBe(0.4);
@@ -126,6 +124,14 @@ describe("exact feed token contracts", () => {
 			["vercel-ai-gateway", "deepseek/deepseek-v4-flash"],
 		] as const)
 			expect(catalogueCost(entry(provider, id)).assessment?.status).toBe("unknown");
+	});
+	it("uses the merged estimator's source context, output and evaluation-date guards", () => {
+		const cost = catalogueCost(entry("vercel-ai-gateway", "alibaba/qwen-3-14b"));
+		expect(cost.assessment).toMatchObject({ maxContextTokens: 40960, maxOutputTokens: 16384 });
+		expect(estimateTokenCost({ cost }, { ...zero, input: 40960 }, "2026-11-13").cost).not.toBeNull();
+		expect(estimateTokenCost({ cost }, { ...zero, input: 40961 }, "2026-11-13").reason).toContain("context");
+		expect(estimateTokenCost({ cost }, { ...zero, output: 16385 }, "2026-11-13").reason).toContain("Output");
+		expect(estimateTokenCost({ cost }, zero, "2026-11-12").reason).toContain("precedes");
 	});
 	it("rejects malformed raw rates, missing categories and unsupported conditions before normalization", () => {
 		const models = raw["vercel-ai-gateway"];
@@ -141,10 +147,10 @@ describe("exact feed token contracts", () => {
 				{ request: "0.01" },
 				{ input_tiers: [{ min: 0, max: 10, cost: "0.00000012" }] },
 			]) {
-				models["alibaba/qwen-3-14b"] = { ...original, ...change };
+				models["alibaba/qwen-3-14b"] = { ...original, pricing: { ...original.pricing, ...change } };
 				expect(catalogueCost(entry("vercel-ai-gateway", "alibaba/qwen-3-14b")).assessment?.status).toBe("unknown");
 			}
-			models["alibaba/qwen-3-14b"] = { input: "0", output: "0" };
+			models["alibaba/qwen-3-14b"] = { ...original, pricing: { input: "0", output: "0" } };
 			const freeCategories = catalogueCost(entry("vercel-ai-gateway", "alibaba/qwen-3-14b"));
 			expect(estimateTokenCost({ cost: freeCategories }, { ...zero, input: 1 }).cost?.total).toBe(0);
 			expect(estimateTokenCost({ cost: freeCategories }, { ...zero, cacheRead: 1 }).cost).toBeNull();
@@ -166,11 +172,11 @@ describe("exact feed token contracts", () => {
 			};
 			expect(catalogueCost(entry(provider, id, previous)).input).toBe(date.endsWith("14") ? 9 : 0.12);
 		}
-		const recorded: Usage = { ...zero, input: 1_000_000, totalTokens: 1_000_000, cost: { ...zero, total: 99 } };
+		const recorded: Usage = { ...zero, input: 1000, totalTokens: 1000, cost: { ...zero, total: 99 } };
 		const before = structuredClone(recorded);
-		expect(estimateTokenCost({ cost: assessed }, recorded).cost?.total).toBe(0.12);
+		expect(estimateTokenCost({ cost: assessed }, recorded).cost?.total).toBeCloseTo(0.00012);
 		expect(recorded).toEqual(before);
 		const request = structuredClone(recorded);
-		expect(calculateTokenCost(assessed, request).total).toBe(0.12);
+		expect(calculateTokenCost(assessed, request).total).toBeCloseTo(0.00012);
 	});
 });

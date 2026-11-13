@@ -19,14 +19,14 @@ it("retains exact feed assessments and unavailable categories through both gener
 			id,
 			name: id,
 			supported_parameters: ["tools"],
-			pricing: prices.openrouter[id as keyof typeof prices.openrouter],
+			pricing: prices.openrouter[id as keyof typeof prices.openrouter].pricing,
 		}));
 		const gateway = ["alibaba/qwen-3-14b", "openai/gpt-6.1-sol"].map((id) => ({
 			id,
 			name: id,
 			type: "language",
 			tags: ["tool-use"],
-			pricing: prices["vercel-ai-gateway"][id as keyof (typeof prices)["vercel-ai-gateway"]],
+			pricing: prices["vercel-ai-gateway"][id as keyof (typeof prices)["vercel-ai-gateway"]].pricing,
 		}));
 		const preload = join(root, "offline.mjs");
 		writeFileSync(

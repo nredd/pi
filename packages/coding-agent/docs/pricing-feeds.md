@@ -3,7 +3,7 @@ Published feed token baselines, checked 2026-11-13:
 - This is a partial delivery of #55 and #56, not whole-provider certification. The frozen
   116-assessment archive baseline in [the coverage table](pricing-coverage.md) is unchanged.
   Source review of 1,714 operations is not certification of their prices.
-- `packages/ai/src/catalog-feed-prices.json` retains source-shaped pricing for exact archived
+- `packages/ai/src/catalog-feed-prices.json` retains source-shaped pricing and request limits for exact archived
   chat identities intersected with the official feeds. OpenRouter entries must advertise a
   supported synchronous chat endpoint; a batches-only selector is not a synchronous chat
   contract. No new catalogue identities, generated shards or published assets are introduced.
@@ -22,6 +22,8 @@ Supported slices:
 - Exact matched synchronous chat fixed-token and request-wide prompt-tier contracts use the
   existing `catalogueCost` seam. Both generation modes and runtime projection use the same
   dated corrections before explicit user overrides. Newer assessed catalogues are preserved.
+  Exact feed-published context and output limits populate the existing assessment envelope;
+  the merged estimator rejects over-limit requests and evaluation before the check date.
 - The existing source normalizers now live in `catalog-pricing.ts`; their original provider
   and generator paths re-export them. This keeps the `models` entry point provider-free and
   within its existing import-graph budget, without copying conversion logic.

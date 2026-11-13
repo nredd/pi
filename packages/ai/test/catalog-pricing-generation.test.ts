@@ -18,7 +18,7 @@ it("carries official corrections and explicit unknowns into bundled shards and p
 		writeFileSync(
 			preload,
 			`globalThis.fetch = async (input) => {
-			if (String(input) === 'https://models.dev/api.json') return Response.json({openai:{models:{'gpt-6.1-sol':{id:'gpt-6.1-sol',name:'Public Sol',tool_call:true,cost:{input:999,output:999}}}},'cloudflare-ai-gateway':{models:{'openai/gpt-4o':{id:'gpt-4o',name:'Public 4o',tool_call:true,cost:{input:999,output:999}},'openai/gpt-6.1-terra':{id:'gpt-6.1-terra',name:'Public Terra',tool_call:true,cost:{input:999,output:999}}}},'example-provider':{models:{}}});
+			if (String(input) === 'https://models.dev/api.json') return Response.json({anthropic:{models:{'claude-sonnet-4-5':{id:'claude-sonnet-4-5',name:'Public Sonnet',tool_call:true,cost:{input:999,output:999}}}},openai:{models:{'gpt-6.1-sol':{id:'gpt-6.1-sol',name:'Public Sol',tool_call:true,cost:{input:999,output:999}}}},'cloudflare-ai-gateway':{models:{'openai/gpt-4o':{id:'gpt-4o',name:'Public 4o',tool_call:true,cost:{input:999,output:999}},'openai/gpt-6.1-terra':{id:'gpt-6.1-terra',name:'Public Terra',tool_call:true,cost:{input:999,output:999}}}},'example-provider':{models:{}}});
 			if (String(input).includes('models.dev/models.json')) return Response.json({'typesafe/jev-latest':{id:'jev-latest',type:'decision',name:'Public Jev'}});
 			if (String(input).includes('openrouter.ai/api/v1/models')) return Response.json({data:[{id:'example/unknown',name:'Synthetic unknown',supported_parameters:['tools']}]});
 			throw new Error('Offline synthetic source unavailable');
@@ -48,6 +48,18 @@ it("carries official corrections and explicit unknowns into bundled shards and p
 			assessment: { status: "verified", checkedAt: "2026-11-12", unit: "usd-per-million-tokens" },
 		});
 		expect(shard["openai-responses"]["chat:gpt-6.1-sol"].cost).toEqual(cost);
+		// nredd/pi#53: the public and bundled routes retain the bounded legacy contract.
+		const claude = legacy.anthropic["claude-sonnet-4-5"].cost;
+		expect(claude).toMatchObject({
+			input: 3,
+			output: 15,
+			cacheRead: 0.3,
+			cacheWrite: 3.75,
+			cacheWrite1h: 6,
+			assessment: { status: "verified", maxContextTokens: 200000, maxOutputTokens: 64000, retiredOn: "2026-11-30" },
+		});
+		const anthropic = JSON.parse(readFileSync(join(isolated, "src/providers/data/anthropic.json"), "utf8"));
+		expect(anthropic["anthropic-messages"]["chat:claude-sonnet-4-5"].cost).toEqual(claude);
 		// nredd/pi#52: the same exact Codex selector survives both release output paths.
 		const terra = legacy["openai-codex"]["gpt-6.1-terra"];
 		expect(terra).toMatchObject({
@@ -87,6 +99,8 @@ it("carries official corrections and explicit unknowns into bundled shards and p
 		expect(hydrated.status, `${hydrated.stdout}\n${hydrated.stderr}`).toBe(0);
 		const hydratedShard = JSON.parse(readFileSync(join(isolated, "src/providers/data/openai.json"), "utf8"));
 		expect(hydratedShard["openai-responses"]["chat:gpt-6.1-sol"].cost).toEqual(cost);
+		const hydratedAnthropic = JSON.parse(readFileSync(join(isolated, "src/providers/data/anthropic.json"), "utf8"));
+		expect(hydratedAnthropic["anthropic-messages"]["chat:claude-sonnet-4-5"].cost).toEqual(claude);
 		const hydratedCodex = JSON.parse(readFileSync(join(isolated, "src/providers/data/openai-codex.json"), "utf8"));
 		expect(hydratedCodex["openai-codex-responses"]["chat:gpt-6.1-terra"].cost).toEqual(terra.cost);
 		expect(JSON.parse(readFileSync(join(root, "catalog/models.json"), "utf8"))).toEqual(legacy);

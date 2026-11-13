@@ -1058,6 +1058,42 @@ describe("ExtensionRunner", () => {
 		});
 	});
 
+	describe("tool_not_found", () => {
+		it("returns the first non-empty message and skips empty and failing handlers", async () => {
+			const bodies = [
+				`pi.on("tool_not_found", async () => ({ message: "" }));`,
+				`pi.on("tool_not_found", async () => { throw new Error("boom"); });`,
+				`pi.on("tool_not_found", async (event) => ({ message: "custom " + event.toolName }));`,
+				`pi.on("tool_not_found", async () => ({ message: "too late" }));`,
+			];
+			bodies.forEach((body, i) => {
+				fs.writeFileSync(path.join(extensionsDir, `not-found-${i}.ts`), `export default function(pi) { ${body} }`);
+			});
+
+			const result = await discoverAndLoadExtensions([], tempDir, tempDir);
+			const runner = new ExtensionRunner(result.extensions, result.runtime, tempDir, sessionManager, modelRegistry);
+			const errors: string[] = [];
+			runner.onError((error) => errors.push(error.event));
+
+			const message = await runner.emitToolNotFound({
+				type: "tool_not_found",
+				toolName: "ghost",
+				toolCallId: "call-1",
+			});
+
+			expect(message).toBe("custom ghost");
+			expect(errors).toEqual(["tool_not_found"]);
+		});
+
+		it("returns undefined when no handler supplies a message", async () => {
+			const result = await discoverAndLoadExtensions([], tempDir, tempDir);
+			const runner = new ExtensionRunner(result.extensions, result.runtime, tempDir, sessionManager, modelRegistry);
+			expect(
+				await runner.emitToolNotFound({ type: "tool_not_found", toolName: "ghost", toolCallId: "call-1" }),
+			).toBeUndefined();
+		});
+	});
+
 	describe("tool_result chaining", () => {
 		it("chains content modifications across handlers", async () => {
 			const extCode1 = `

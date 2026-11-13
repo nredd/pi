@@ -31,6 +31,7 @@ import {
 	type PrepareNextTurnContext,
 	runToolCall,
 	type ThinkingLevel,
+	type ToolNotFoundContext,
 } from "@earendil-works/pi-agent-core";
 import { contentText, getCurrentSystemMessage, retryDelayMs } from "@earendil-works/pi-ai";
 import type {
@@ -818,6 +819,7 @@ export class AgentSession {
 	private _installAgentToolHooks(): void {
 		this.agent.beforeToolCall = (context) => this._beforeToolCall(context);
 		this.agent.afterToolCall = (context) => this._afterToolCall(context);
+		this.agent.getToolNotFoundMessage = (context) => this._toolNotFoundMessage(context);
 	}
 
 	/** `tool_call` handlers. `parentToolCallId` is set for calls another tool made. */
@@ -844,6 +846,23 @@ export class AgentSession {
 			}
 			throw new Error(`Extension failed, blocking execution: ${String(err)}`);
 		}
+	}
+
+	/** `tool_not_found` handlers. `parentToolCallId` is set for calls another tool made. */
+	private async _toolNotFoundMessage(
+		{ toolCall }: ToolNotFoundContext,
+		parentToolCallId?: string,
+	): Promise<string | undefined> {
+		const runner = this._extensionRunner;
+		if (!runner.hasHandlers("tool_not_found")) {
+			return undefined;
+		}
+		return runner.emitToolNotFound({
+			type: "tool_not_found",
+			toolName: toolCall.name,
+			toolCallId: toolCall.id,
+			...(parentToolCallId ? { parentToolCallId } : {}),
+		});
 	}
 
 	/** `tool_result` handlers and image normalization. `parentToolCallId` is set for calls another tool made. */
@@ -917,6 +936,7 @@ export class AgentSession {
 					context: { messages: this.agent.state.messages, tools: this.agent.state.tools },
 					beforeToolCall: (context) => this._beforeToolCall(context, parentId),
 					afterToolCall: (context) => this._afterToolCall(context, parentId),
+					getToolNotFoundMessage: (context) => this._toolNotFoundMessage(context, parentId),
 					signal,
 					onUpdate,
 				});

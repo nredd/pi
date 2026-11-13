@@ -1,5 +1,6 @@
 import {
 	type AnyModel,
+	catalogueCost,
 	getModelType,
 	isModelType,
 	type ModelsStoreEntry,
@@ -32,7 +33,7 @@ function isSupportedModelType(model: { type?: unknown }): boolean {
 function mergeModels<TModel extends AnyModel>(baseline: readonly TModel[], dynamic: readonly TModel[]): TModel[] {
 	const merged = new Map<string, TModel>();
 	for (const model of [...baseline, ...dynamic]) merged.set(`${getModelType(model)}\0${model.id}`, model);
-	return [...merged.values()];
+	return [...merged.values()].map((model) => ({ ...model, cost: catalogueCost(model) }));
 }
 
 function parseCatalog(providerId: string, value: unknown): AnyModel[] {
@@ -200,7 +201,11 @@ export function withPersonalizedCatalog(
 ): Provider {
 	let personalModels: readonly AnyModel[] = [];
 	const builtinModels = (): readonly AnyModel[] => provider.getAllModels?.() ?? provider.getModels();
-	const getAllModels = (): readonly AnyModel[] => (personalModels.length > 0 ? personalModels : builtinModels());
+	const getAllModels = (): readonly AnyModel[] =>
+		(personalModels.length > 0 ? personalModels : builtinModels()).map((model) => ({
+			...model,
+			cost: catalogueCost(model),
+		}));
 
 	return {
 		...provider,

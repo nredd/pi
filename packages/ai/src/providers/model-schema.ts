@@ -26,7 +26,13 @@ const ModelCostRatesProperties = {
 	input: Type.Number({ description: "Input cost in USD per million tokens." }),
 	output: Type.Number({ description: "Output cost in USD per million tokens." }),
 	cacheRead: Type.Number({ description: "Cache-read cost in USD per million tokens." }),
-	cacheWrite: Type.Number({ description: "Cache-write cost in USD per million tokens." }),
+	cacheWrite: Type.Number({ description: "Short-retention cache-write cost in USD per million tokens." }),
+	cacheWrite1h: Type.Optional(
+		Type.Number({ minimum: 0, description: "Explicit one-hour cache-write USD per million tokens." }),
+	),
+	cacheWrite12h: Type.Optional(
+		Type.Number({ minimum: 0, description: "Explicit twelve-hour cache-write USD per million tokens." }),
+	),
 };
 
 export const ModelCostRatesSchema = Type.Object(ModelCostRatesProperties);
@@ -36,8 +42,21 @@ export const ModelCostTierSchema = Type.Object({
 	}),
 	...ModelCostRatesProperties,
 });
+export const PricingAssessmentSchema = Type.Union([
+	Type.Object({ status: Type.Literal("unknown"), reason: Type.String({ minLength: 1 }) }),
+	Type.Object({
+		status: Type.Enum(["verified", "free"]),
+		source: Type.String({ minLength: 1 }),
+		checkedAt: Type.String({ pattern: "^\\d{4}-\\d{2}-\\d{2}$" }),
+		unit: Type.Literal("usd-per-million-tokens"),
+		conditions: Type.String({ minLength: 1 }),
+		unavailable: Type.Optional(Type.Array(Type.Enum(["input", "output", "cacheRead", "cacheWrite"]))),
+	}),
+]);
+
 export const ModelCostSchema = Type.Object({
 	...ModelCostRatesProperties,
+	assessment: Type.Optional(PricingAssessmentSchema),
 	tiers: Type.Optional(
 		Type.Array(ModelCostTierSchema, {
 			description: "Request-wide pricing tiers. The highest matching input threshold applies to the full request.",

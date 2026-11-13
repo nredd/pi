@@ -83,15 +83,65 @@ function emitReftableChange(provider: FooterDataProvider): void {
 	reftableWatcher?.emit("change", "change", "tables.list");
 }
 
-async function waitFor(condition: () => boolean, timeoutMs = 3000): Promise<void> {
+async function waitFor(
+	condition: () => boolean,
+	timeoutMs = 3000,
+	diagnostics?: () => Record<string, unknown>,
+): Promise<void> {
 	const startedAt = Date.now();
+	let lastCheckedAt = startedAt;
+	let maxCheckGapMs = 0;
+	let checks = 0;
 	while (!condition()) {
-		if (Date.now() - startedAt > timeoutMs) {
-			throw new Error("Timed out waiting for condition");
+		const now = Date.now();
+		checks++;
+		maxCheckGapMs = Math.max(maxCheckGapMs, now - lastCheckedAt);
+		lastCheckedAt = now;
+		if (now - startedAt > timeoutMs) {
+			const detail = diagnostics
+				? `: ${JSON.stringify({ timeoutMs, elapsedMs: now - startedAt, checks, maxCheckGapMs, ...diagnostics() })}`
+				: "";
+			throw new Error(`Timed out waiting for condition${detail}`);
 		}
 		await new Promise((resolve) => setTimeout(resolve, 10));
 	}
 }
+
+describe("footer wait failure diagnostics", () => {
+	// #69: distinguish a missing refresh from an exact-count observation miss, not a root-cause regression.
+	it.each([
+		{ execFileCalls: 0, cachedBranch: "main", branchChangeCalls: 0 },
+		{ execFileCalls: 2, cachedBranch: "foo", branchChangeCalls: 1 },
+	])("preserves the exact-count deadline for $execFileCalls calls", async (snapshot) => {
+		vi.useFakeTimers();
+		try {
+			const diagnostics = vi.fn(() => snapshot);
+			const waiting = waitFor(() => snapshot.execFileCalls === 1, 10_000, diagnostics);
+			const rejected = expect(waiting).rejects.toThrow(
+				`Timed out waiting for condition: ${JSON.stringify({
+					timeoutMs: 10_000,
+					elapsedMs: 10_010,
+					checks: 1002,
+					maxCheckGapMs: 10,
+					...snapshot,
+				})}`,
+			);
+			await vi.advanceTimersByTimeAsync(10_000);
+			expect(diagnostics).not.toHaveBeenCalled();
+			await vi.advanceTimersByTimeAsync(10);
+			await rejected;
+			expect(diagnostics).toHaveBeenCalledTimes(1);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it("does not collect diagnostics on success", async () => {
+		const diagnostics = vi.fn(() => ({}));
+		await waitFor(() => true, 10_000, diagnostics);
+		expect(diagnostics).not.toHaveBeenCalled();
+	});
+});
 
 describe("FooterDataProvider reftable branch detection", () => {
 	let originalCwd: string;
@@ -236,9 +286,30 @@ describe("FooterDataProvider reftable branch detection", () => {
 			provider.onBranchChange(onBranchChange);
 
 			writeFileSync(join(reftableDir, "tables.list"), "1\n");
-			// Real fs watcher events can arrive late under full-suite load.
-			await waitFor(() => vi.mocked(execFile).mock.calls.length === 1, 10_000);
-			await waitFor(() => provider.getGitBranch() === "foo", 10_000);
+			// #69: capture the next natural failure without assuming why the historical wait timed out.
+			const diagnostics = () => ({
+				execFileCalls: vi.mocked(execFile).mock.calls.length,
+				cachedBranch: provider.getGitBranch(),
+				branchChangeCalls: onBranchChange.mock.calls.length,
+				nativeCallbackTiming: "unknown",
+				pollBaselineTiming: "unknown",
+			});
+			await waitFor(
+				() => vi.mocked(execFile).mock.calls.length === 1,
+				10_000,
+				() => ({
+					phase: "async git call count === 1",
+					...diagnostics(),
+				}),
+			);
+			await waitFor(
+				() => provider.getGitBranch() === "foo",
+				10_000,
+				() => ({
+					phase: "cached branch === foo",
+					...diagnostics(),
+				}),
+			);
 
 			expect(vi.mocked(execFile)).toHaveBeenCalledTimes(1);
 			expect(provider.getGitBranch()).toBe("foo");

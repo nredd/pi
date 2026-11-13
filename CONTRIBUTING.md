@@ -66,6 +66,9 @@ npm run check
 
 Both must pass.
 
+For the footer reftable filesystem test's timeout fields and limitations, see
+[Failure diagnostics](docs/test-failure-diagnostics.md).
+
 Do not edit `CHANGELOG.md`. Changelog entries are added by maintainers.
 
 If you are adding a new provider to `packages/ai`, see `AGENTS.md` for required tests.

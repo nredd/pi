@@ -244,9 +244,20 @@ if (dirname(configOutput) !== dirname(bedrockLoaderOutput)) {
 
 const metafiles = [mainResult.metafile, lazyResult.metafile, codemodeWorkerResult.metafile];
 validateExternalImports(metafiles);
+// The tiny producer is required by the launcher only when explicitly enabled. Its global
+// state is shared with the SDK chunks, so bootstrap and later phases use one clock/sequence.
+await build({
+	...commonBuildOptions(),
+	entryPoints: [join(codingAgentDistDir, "core/startup-trace.js")],
+	outfile: join(bundleDir, "startup-trace.cjs"),
+	format: "cjs",
+	banner: undefined,
+	splitting: false,
+});
 const cliLauncher = `#!/usr/bin/env node
 import { createRequire, enableCompileCache } from "node:module";
 
+if (process.env.PI_STARTUP_TRACE_FD !== undefined) createRequire(import.meta.url)("./startup-trace.cjs").beginBootstrap();
 enableCompileCache();
 createRequire(import.meta.url)("./cli-runtime.js");
 `;

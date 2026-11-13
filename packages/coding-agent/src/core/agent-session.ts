@@ -142,6 +142,7 @@ import {
 } from "./settings-manager.ts";
 import type { SlashCommandInfo } from "./slash-commands.ts";
 import { BUILTIN_PATH_PREFIX, createSyntheticSourceInfo, isSyntheticPath, type SourceInfo } from "./source-info.ts";
+import { markStartup, traceStartup } from "./startup-trace.ts";
 import {
 	buildSystemPrompt,
 	buildSystemPromptSections,
@@ -2500,7 +2501,9 @@ export class AgentSession {
 		const ctx = this._extensionRunner.createCommandContext();
 
 		try {
-			await command.handler(args, ctx);
+			await traceStartup("command.extension.dispatch", async () => {
+				await command.handler(args, ctx);
+			});
 			return true;
 		} catch (err) {
 			// Emit error via extension runner
@@ -3831,6 +3834,7 @@ export class AgentSession {
 		await this._emitSessionStart(this._sessionStartEvent, generation);
 		this._extensionRunner.reportUnhandledMcpServers();
 		await this.extendResourcesFromExtensions(this._sessionStartEvent.reason === "reload" ? "reload" : "startup");
+		markStartup("session.bind.ready");
 	}
 
 	/**
@@ -3854,7 +3858,9 @@ export class AgentSession {
 			// Like a handler, `before` cannot wait on the window it runs inside.
 			await this._inSessionStartHandler.run(true, async () => await before?.());
 			emitted = true;
-			await this._inSessionStartHandler.run(true, async () => await this._extensionRunner.emit(event));
+			await traceStartup("session.handlers", () =>
+				this._inSessionStartHandler.run(true, async () => await this._extensionRunner.emit(event)),
+			);
 		} catch (error) {
 			if (emitted && isExtensionStartupError(error)) failure = error;
 			throw error;

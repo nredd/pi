@@ -317,6 +317,7 @@ export class TuiMainScreen extends TuiBase implements TUI {
 			this.previousKittyImageIds = this.collectKittyImageIds(newLines);
 			this.previousWidth = width;
 			this.previousHeight = height;
+			this.reportFrameCommit(newLines);
 		};
 
 		const redrawLogDirectory = process.env.PI_TUI_DEBUG_REDRAW === "1" ? this.logDirectory : undefined;
@@ -597,6 +598,7 @@ export class TuiMainScreen extends TuiBase implements TUI {
 		}
 
 		output.flush();
+		this.reportFrameCommit(newLines);
 
 		// Track cursor position for next render
 		// cursorRow tracks end of content (for viewport calculation)

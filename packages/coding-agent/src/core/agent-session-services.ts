@@ -14,6 +14,7 @@ import {
 import { type CreateAgentSessionOptions, type CreateAgentSessionResult, createAgentSession } from "./sdk.ts";
 import type { SessionManager } from "./session-manager.ts";
 import { SettingsManager } from "./settings-manager.ts";
+import { markStartup, traceStartup } from "./startup-trace.ts";
 
 /**
  * Non-fatal issues collected while creating services or sessions.
@@ -137,13 +138,16 @@ export async function createAgentSessionServices(
 ): Promise<AgentSessionServices> {
 	const cwd = resolvePath(options.cwd);
 	const agentDir = options.agentDir ? resolvePath(options.agentDir) : getAgentDir();
+	if (options.modelRuntime) markStartup("model.catalog.initial", "skipped");
 	const modelRuntime =
 		options.modelRuntime ??
-		(await ModelRuntime.create({
-			authPath: join(agentDir, "auth.json"),
-			modelsPath: join(agentDir, "models.json"),
-			signal: options.modelRuntimeSignal,
-		}));
+		(await traceStartup("model.catalog.initial", () =>
+			ModelRuntime.create({
+				authPath: join(agentDir, "auth.json"),
+				modelsPath: join(agentDir, "models.json"),
+				signal: options.modelRuntimeSignal,
+			}),
+		));
 	const settingsManager = options.settingsManager ?? SettingsManager.create(cwd, agentDir);
 	const resourceLoader = new DefaultResourceLoader({
 		...(options.resourceLoaderOptions ?? {}),
@@ -155,43 +159,45 @@ export async function createAgentSessionServices(
 
 	const diagnostics: AgentSessionRuntimeDiagnostic[] = [];
 	const extensionsResult = resourceLoader.getExtensions();
-	for (const { name, config, extensionPath } of extensionsResult.runtime.pendingProviderRegistrations) {
-		try {
-			modelRuntime.registerProvider(name, config);
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			diagnostics.push({
-				type: "error",
-				message: `Extension "${extensionPath}" error: ${message}`,
-			});
+	await traceStartup("model.registration", async () => {
+		for (const { name, config, extensionPath } of extensionsResult.runtime.pendingProviderRegistrations) {
+			try {
+				modelRuntime.registerProvider(name, config);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				diagnostics.push({
+					type: "error",
+					message: `Extension "${extensionPath}" error: ${message}`,
+				});
+			}
 		}
-	}
-	extensionsResult.runtime.pendingProviderRegistrations = [];
-	for (const { provider, extensionPath } of extensionsResult.runtime.pendingNativeProviderRegistrations) {
-		try {
-			modelRuntime.registerNativeProvider(provider);
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			diagnostics.push({
-				type: "error",
-				message: `Extension "${extensionPath}" error: ${message}`,
-			});
+		extensionsResult.runtime.pendingProviderRegistrations = [];
+		for (const { provider, extensionPath } of extensionsResult.runtime.pendingNativeProviderRegistrations) {
+			try {
+				modelRuntime.registerNativeProvider(provider);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				diagnostics.push({
+					type: "error",
+					message: `Extension "${extensionPath}" error: ${message}`,
+				});
+			}
 		}
-	}
-	extensionsResult.runtime.pendingNativeProviderRegistrations = [];
-	for (const { definition, extensionPath } of extensionsResult.runtime.pendingVirtualModelRegistrations) {
-		try {
-			modelRuntime.registerVirtualModel(definition);
-		} catch (error) {
-			const message = error instanceof Error ? error.message : String(error);
-			diagnostics.push({
-				type: "error",
-				message: `Extension "${extensionPath}" error: ${message}`,
-			});
+		extensionsResult.runtime.pendingNativeProviderRegistrations = [];
+		for (const { definition, extensionPath } of extensionsResult.runtime.pendingVirtualModelRegistrations) {
+			try {
+				modelRuntime.registerVirtualModel(definition);
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				diagnostics.push({
+					type: "error",
+					message: `Extension "${extensionPath}" error: ${message}`,
+				});
+			}
 		}
-	}
-	extensionsResult.runtime.pendingVirtualModelRegistrations = [];
-	await modelRuntime.refresh({ allowNetwork: false });
+		extensionsResult.runtime.pendingVirtualModelRegistrations = [];
+	});
+	await traceStartup("model.refresh.offline", () => modelRuntime.refresh({ allowNetwork: false }));
 	diagnostics.push(...applyExtensionFlagValues(resourceLoader, options.extensionFlagValues));
 
 	return {

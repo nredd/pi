@@ -554,6 +554,8 @@ export interface TUI extends Component {
 	children: Component[];
 	terminal: Terminal;
 	onDebug?: () => void;
+	/** First complete nonblank logical frame written, not physical display acknowledgement. */
+	onFirstCommit?: () => void;
 	readonly fullRedraws: number;
 	addChild(component: Component): void;
 	removeChild(component: Component): void;
@@ -601,6 +603,20 @@ export abstract class TuiBase extends Container implements TUI {
 
 	/** Global callback for debug key (Shift+Ctrl+D). Called before input is forwarded to focused component. */
 	public onDebug?: () => void;
+	public onFirstCommit?: () => void;
+	private firstCommitReported = false;
+
+	/** Called only after all writes for a logical frame have succeeded. */
+	protected reportFrameCommit(lines: string[]): void {
+		if (
+			!this.onFirstCommit ||
+			this.firstCommitReported ||
+			!lines.some((line) => stripTerminalSequences(line).trim().length > 0)
+		)
+			return;
+		this.firstCommitReported = true;
+		this.onFirstCommit();
+	}
 	private renderRequested = false;
 	private immediateRenderScheduled = false;
 	private renderTimer: NodeJS.Timeout | undefined;

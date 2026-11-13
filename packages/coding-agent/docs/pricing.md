@@ -51,7 +51,7 @@ Source audit, checked 2026-11-12:
   the other assessed 4.6+ models do not acquire an old 200K premium. Dated or unmapped
   aliases are not automatically certified by matching their names.
 - Official Gemini table [here](https://ai.google.dev/gemini-api/docs/pricing): direct
-  `gemini-2.5-pro` uses $1.25/$10/$0.125 through 200K input and $2.50/$15/$0.25 above
+  `gemini-2.5-pro` (2026-11-12 audit) uses $1.25/$10/$0.125 through 200K input and $2.50/$15/$0.25 above
   it (input/output/read). Storage at $4.50 per million tokens/hour is outside token value.
   Google reroutes this alias to `gemini-3.8-flash` billing on 2026-12-01, so its assessment
   carries `retiredOn: 2026-12-01`: priced through 2026-11-30, unpriced from that date. The

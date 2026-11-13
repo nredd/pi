@@ -157,8 +157,25 @@ const BEDROCK_OPENAI_IDS = new Map(
 	),
 );
 
+const GEMINI_25_PRO_REROUTE_DATE = "2026-12-01";
+
 /** Apply narrow official corrections before user overrides, never infer a provider from a model name. */
 export function catalogueCost(model: Pick<AnyModel, "provider" | "id" | "type" | "cost">): ModelCost {
+	const cost = catalogueCostUnbounded(model);
+	if (
+		(model.type ?? "chat") !== "chat" ||
+		model.provider !== "google" ||
+		model.id !== "gemini-2.5-pro" ||
+		cost.assessment?.status !== "verified"
+	)
+		return cost;
+	// Google reroutes this alias on this date; bound whatever verified row survives, including newer catalog rows.
+	const { retiredOn } = cost.assessment;
+	if (retiredOn !== undefined && retiredOn <= GEMINI_25_PRO_REROUTE_DATE) return cost;
+	return { ...cost, assessment: { ...cost.assessment, retiredOn: GEMINI_25_PRO_REROUTE_DATE } };
+}
+
+function catalogueCostUnbounded(model: Pick<AnyModel, "provider" | "id" | "type" | "cost">): ModelCost {
 	const type = model.type ?? "chat";
 	const codexTerra = type === "chat" && model.provider === "openai-codex" && model.id === "gpt-6.1-terra";
 	const cerebrasRates: Record<string, { input: number; output: number; source: string }> = {
@@ -192,7 +209,7 @@ export function catalogueCost(model: Pick<AnyModel, "provider" | "id" | "type" |
 			? BOUNDED_ANTHROPIC[model.id]
 			: undefined;
 	const checkedAt =
-		codexTerra || bedrockContract || boundedAnthropicContract || cerebras || xai || gemini || gemini25Pro
+		codexTerra || bedrockContract || boundedAnthropicContract || cerebras || xai || gemini
 			? "2026-11-13"
 			: PRICING_CHECKED_AT;
 	const previous = model.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
@@ -390,7 +407,7 @@ export function catalogueCost(model: Pick<AnyModel, "provider" | "id" | "type" |
 		);
 	}
 	if (gemini25Pro) {
-		const assessed = verified(
+		return verified(
 			{
 				input: 1.25,
 				output: 10,
@@ -403,9 +420,6 @@ export function catalogueCost(model: Pick<AnyModel, "provider" | "id" | "type" |
 			["cacheWrite"],
 			checkedAt,
 		);
-		if (assessed.assessment?.status === "verified")
-			assessed.assessment = { ...assessed.assessment, retiredOn: "2026-12-01" };
-		return assessed;
 	}
 	return {
 		...previous,

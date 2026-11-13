@@ -40,6 +40,13 @@
 - For ad-hoc scripts, `write` them to a temp file (e.g. `/tmp`), run, edit if needed, remove when done. Don't embed multi-line scripts in `bash` commands.
 - Never commit unless the user asks.
 
+## Fresh Worktrees
+
+- Run `npm run worktree:setup` once in every new `git worktree`, before anything else. It is idempotent and does: `npm ci --ignore-scripts --prefer-offline`, the husky shim (`.husky/_`), the model data of the published `@earendil-works/pi-ai@<version>` release (same source as CI, never live data), and `npm run build:daemon` for `packages/env`. Use `--skip-daemon` via `node scripts/worktree.mjs setup --skip-daemon` without a Rust toolchain.
+- Never borrow or symlink `node_modules`, `packages/ai/src/providers/data`, or `.husky/_` from another worktree.
+- `core.hooksPath=.husky/_` is relative and shared. Where `.husky/_` is missing, git runs NO hook and cannot warn. `npm run check` (and `npm run worktree:check`) fails loudly in that case, so run `npm run check` before committing.
+- Run Vitest from the package directory, not the repo root (root runs stale `dist`).
+
 ## Dependency and Install Security
 
 - Treat npm dep and lockfile changes as reviewed code. Direct registry deps, including internal workspace deps, stay pinned to exact versions.

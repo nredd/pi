@@ -102,6 +102,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution guidelines and [AGENTS.m
 ## Development
 
 ```bash
+npm run worktree:setup # Fresh checkout or worktree: deps, husky shim, release model data, pi-env daemon (idempotent)
 npm install --ignore-scripts  # Install all dependencies without running lifecycle scripts
 npm run build         # Refresh model data, then build all packages
 npm run build:offline # Rebuild using existing model data without network access

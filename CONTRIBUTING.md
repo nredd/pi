@@ -57,6 +57,8 @@ If you send a large volume of issues through automation, your GitHub account wil
 
 Do not open a PR unless you have already been approved by a maintainer using `lgtm` in the command position described above.
 
+Fresh clone or `git worktree add`: run `npm run worktree:setup` first. It installs from the lockfile, installs the husky shim, restores the model data of the matching published release, and builds the `pi-env` daemon. `npm run check` fails with instructions when a worktree has not been set up, because git silently skips the pre-commit hook when `.husky/_` is missing.
+
 Before submitting a PR:
 
 ```bash

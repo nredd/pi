@@ -10,6 +10,10 @@
 
 - Changed the OpenAI-family Responses requests (OpenAI, Azure OpenAI, Codex) to default `reasoning.summary` to `detailed`. `auto` often returned only a bold headline. An explicit `reasoningSummary` still wins. A model or organization that rejects `detailed` needs `reasoningSummary: "auto"`.
 
+### Fixed
+
+- Reject completed OpenAI-family Responses snapshots containing assistant output without a matching finalized stream item, instead of silently returning an empty or partial successful message ([#45](https://github.com/nredd/pi/issues/45)).
+
 ## [1.3.0] - 2026-10-15
 
 ### Breaking Changes

@@ -153,6 +153,16 @@ Pi can compact and retry after recognized context-overflow errors. If the servic
 
 Do not rewrite rate limits or transient provider failures as context overflow. Those failures use Pi’s normal retry behavior instead.
 
+OpenAI-family Responses streams must finalize each assistant output item with
+`response.output_item.done`. A completed terminal snapshot containing a message, reasoning,
+function call, or custom tool call without that matching finalized item fails with
+`OpenAI Responses terminal output was not finalized by output_item.done`. Pi does not
+reconstruct or execute terminal-only calls. Earlier `added`/delta events are optional when
+`output_item.done` provides the complete item. Empty completions remain valid, incomplete
+responses retain their truncation/error semantics, and terminal reasoning-signature backfill
+still works for finalized reasoning items. This validation is shared by OpenAI, Azure OpenAI,
+and Codex Responses transports; it does not add retries or task-continuation policy.
+
 ## Test the integration
 
 Test at least:

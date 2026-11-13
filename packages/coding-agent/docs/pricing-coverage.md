@@ -61,6 +61,11 @@ Public catalogue coverage, checked 2026-11-12:
 
 Source follow-up, checked 2026-11-13:
 
+- Exact `cerebras/gpt-oss-120b` and `cerebras/qwen-3.8-27b`, four direct
+  `xai/grok-4.{7,6,5,3}` IDs, and `google/gemini-3.5-flash-lite` have narrow
+  token-price assessments. Cache-write tariffs remain unavailable. These partial additions
+  do not certify the rest of their families or change the frozen table above.
+
 - The exact `openai-codex/gpt-6.1-terra` selector is now assessed as API-equivalent,
   using the [public Codex guide](https://developers.openai.com/codex/models),
   [exact API model card](https://developers.openai.com/api/docs/models/gpt-6.1-terra.md)

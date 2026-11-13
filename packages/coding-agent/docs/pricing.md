@@ -51,9 +51,13 @@ Source audit, checked 2026-11-12:
   the other assessed 4.6+ models do not acquire an old 200K premium. Dated or unmapped
   aliases are not automatically certified by matching their names.
 - Official Gemini table [here](https://ai.google.dev/gemini-api/docs/pricing): direct
-  `gemini-2.5-pro` uses $1.25/$10/$0.125 through 200K input and $2.50/$15/$0.25 above
+  `gemini-2.5-pro` (2026-11-12 audit) uses $1.25/$10/$0.125 through 200K input and $2.50/$15/$0.25 above
   it (input/output/read). Storage at $4.50 per million tokens/hour is outside token value.
-  Its published future reroute is not applied as if it already happened.
+  Google reroutes this alias to `gemini-3.8-flash` billing on 2026-12-01, so its assessment
+  carries `retiredOn: 2026-12-01`: priced through 2026-11-30, unpriced from that date. The
+  rerouted contract is not assessed here and `estimateTokenCost` never prices the old rates past
+  the date. Request-time `cost` arithmetic still uses the numeric rates; tracked in
+  [nredd/pi#83](https://github.com/nredd/pi/issues/83).
 - Official AWS pricing [here](https://aws.amazon.com/bedrock/pricing/) supplies a chosen
   published baseline, not an account-specific invoice. AWS has no universal default region.
   This estimate uses the **Global Cross-region Inference**, **US East (N. Virginia)** selector,
@@ -94,6 +98,22 @@ Source audit, checked 2026-11-12:
   explicitly unverified unless an assessment is supplied. This is NOT a completed official
   price verification for every provider. Public source-feed numbers alone are not certified
   here; outstanding official-source verification is visible as unknown coverage.
+
+Additional exact contracts, checked 2026-11-13:
+
+- Cerebras Developer shared `gpt-oss-120b` and `qwen-3.8-27b` price cached input at
+  the full input rate. Cache-write token tariffs are not established; trial credits and
+  dedicated pricing are excluded. Model cards and caching terms are linked in the assessments.
+- xAI Standard global `grok-4.7`, `grok-4.6`, `grok-4.5` and `grok-4.3` double
+  input, cached input and output rates for the whole request at 200000 prompt tokens.
+  Batch, Priority, regional uplift, product-only Fast, cache writes and non-token charges
+  are excluded. See the [official table](https://docs.x.ai/developers/pricing).
+- Google paid Standard `gemini-3.5-flash-lite` prices text input, output and cached-read
+  tokens at $0.30/$2.50/$0.03 per million. Image and audio output and tool charges have
+  separate units and are not distinguished by these counters. Cache storage is $1 per million token-hours, not a cache-write
+  token tariff; tools and other non-token fees are excluded. No Vertex parity is assumed.
+  `gemini-2.5-flash` and other date-dependent contracts, aliases and unverified IDs remain
+  unassessed; the only assessed alias is `gemini-2.5-pro`, bounded at its reroute date.
 
 Generation and precedence:
 

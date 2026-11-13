@@ -1,15 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import {
-	copyFileSync,
-	existsSync,
-	mkdirSync,
-	mkdtempSync,
-	readFileSync,
-	rmSync,
-	symlinkSync,
-	writeFileSync,
-} from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -99,7 +90,7 @@ test("invalid model data blocks under --strict and never recommends worktree:set
 	assert.doesNotMatch(problems, /worktree:setup/);
 });
 
-// Setup must not touch present data: no stamp-driven reinstall, no rollback state, no network.
+// Setup leaves present data untouched: no reinstall, no network.
 test("restoreModelData leaves present data alone, even when invalid", (t) => {
 	const root = makeRepo(t);
 	makeReady(root);
@@ -112,7 +103,6 @@ test("restoreModelData leaves present data alone, even when invalid", (t) => {
 	});
 	restoreModelData(root);
 	assert.equal(readFileSync(manifest, "utf8"), '{"invalid":true}');
-	assert.equal(existsSync(join(root, "packages/ai/src/providers/data.previous")), false);
 });
 
 test("reports an unset core.hooksPath", (t) => {

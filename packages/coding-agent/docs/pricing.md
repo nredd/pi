@@ -80,6 +80,10 @@ Source audit, checked 2026-11-12:
   price verification for every provider. Public source-feed numbers alone are not certified
   here; outstanding official-source verification is visible as unknown coverage.
 
+- Exact OpenRouter and AI Gateway published token-baseline slices checked 2026-11-13,
+  source hashes, cache-lifetime exclusions and remaining unknown dimensions are documented
+  [here](pricing-feeds.md). They do not certify either complete provider catalogue.
+
 Generation and precedence:
 
 - Both bundled shards and the existing JSON catalogue outputs receive an assessment for

@@ -98,6 +98,13 @@ Source audit, checked 2026-11-12:
 - Exact OpenRouter and AI Gateway published token-baseline slices checked 2026-11-13,
   source hashes, cache-lifetime exclusions and remaining unknown dimensions are documented
   [here](pricing-feeds.md). They do not certify either complete provider catalogue.
+- AI Gateway `-batch` IDs select the asynchronous Batch API, and synchronous requests do not
+  accept them ([docs](https://vercel.com/docs/ai-gateway/models-and-providers/batch-processing.md)).
+  They stay unknown: no batch rate schedule is admitted, and the default Standard rates are
+  not assigned to them.
+- Provider rate strings are plain decimal or scientific notation (`0.0000001`, `1e-7`) or
+  finite non-negative numbers. Anything else, including radix literals such as `0x10`, is
+  malformed: compatibility arithmetic falls back to 0 and the feed is never certified.
 
 Generation and precedence:
 
@@ -108,6 +115,11 @@ Generation and precedence:
 - Runtime remote and personalized catalogues apply the same narrow official corrections
   after restoring or fetching data, before user configuration. A newer explicitly assessed
   catalogue is not frozen at this client's checked date. Unknown entries remain unknown.
+- A live OpenRouter `GET /models/user` price is the key's own rate, not a stale catalogue row.
+  It is stored with `assessment: {status: "unknown", origin: "provider-live"}`, including
+  after an offline restore, and catalogue corrections keep it even for an id in the archived
+  feed. It is therefore billed by `calculateCost` but never certified by `estimateTokenCost`.
+  Static built-in and pi.dev rows carry no such mark and are still corrected to the feed.
   Pricing projection preserves stable model identities across repeated reads without
   mutating source entries; in-place metadata and price updates are still observed.
 - Explicit `models.json` cost overrides are topmost. An override without its own assessment

@@ -43,7 +43,16 @@ export const ModelCostTierSchema = Type.Object({
 	...ModelCostRatesProperties,
 });
 export const PricingAssessmentSchema = Type.Union([
-	Type.Object({ status: Type.Literal("unknown"), reason: Type.String({ minLength: 1 }) }),
+	Type.Object({
+		status: Type.Literal("unknown"),
+		reason: Type.String({ minLength: 1 }),
+		origin: Type.Optional(
+			Type.Literal("provider-live", {
+				description:
+					"The rates came from the provider's own live response for the caller's credential, not a static catalogue row. Catalogue corrections keep them.",
+			}),
+		),
+	}),
 	Type.Object({
 		status: Type.Enum(["verified", "free"]),
 		source: Type.String({ minLength: 1 }),

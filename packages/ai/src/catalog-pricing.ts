@@ -243,10 +243,25 @@ export function getAiGatewayCost(pricing: AiGatewayPricing | undefined): ModelCo
 	return tiers.length > 0 ? { ...base, tiers } : base;
 }
 
+// Plain decimal or scientific notation only. `Number()` also reads "0x10", "0b10" and "0o10" as
+// 16, 2 and 8, which would turn a malformed rate into a real price.
+const DECIMAL_RATE = /^(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
+
+/** The one rate parser: a finite non-negative number, or undefined for anything else. */
+function parseRate(value: unknown): number | undefined {
+	const parsed =
+		typeof value === "number"
+			? value
+			: typeof value === "string" && DECIMAL_RATE.test(value.trim())
+				? Number(value)
+				: NaN;
+	return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
 /** Strict source conversion; compatibility zeros never establish category availability. */
 function perMillion(value: string | number | undefined, fallback = 0): number {
-	const parsed = typeof value === "number" ? value : value?.trim() ? Number(value) : NaN;
-	return Number.isFinite(parsed) && parsed >= 0 ? Number((parsed * 1_000_000).toFixed(6)) : fallback;
+	const parsed = parseRate(value);
+	return parsed === undefined ? fallback : Number((parsed * 1_000_000).toFixed(6));
 }
 
 /** Assess only exact archived operation identities, using the existing source normalizers. */
@@ -258,6 +273,12 @@ function feedCost(
 ): ModelCost {
 	const prices: Record<string, Record<string, unknown>> = feedPrices[provider];
 	const unknown = (reason: string): ModelCost => ({ ...previous, assessment: { status: "unknown", reason } });
+	// Gateway `-batch` IDs are async Batch API selectors; synchronous requests do not accept them. No
+	// batch rate schedule is admitted, so the default Standard rates must not certify them.
+	if (provider === "vercel-ai-gateway" && id.endsWith("-batch"))
+		return unknown(
+			"AI Gateway -batch IDs are asynchronous Batch API selectors, not a synchronous default/Standard token contract.",
+		);
 	const key = `${type}:${id}`;
 	if (!Object.hasOwn(prices, key))
 		return unknown(
@@ -275,10 +296,7 @@ function feedCost(
 	const fields = openRouter
 		? ["prompt", "completion", "input_cache_read", "input_cache_write"]
 		: ["input", "output", "input_cache_read", "input_cache_write"];
-	const valid = (value: unknown): boolean =>
-		(typeof value === "number" || (typeof value === "string" && value.trim() !== "")) &&
-		Number.isFinite(Number(value)) &&
-		Number(value) >= 0;
+	const valid = (value: unknown): boolean => parseRate(value) !== undefined;
 	const allowed = openRouter
 		? [...fields, "input_cache_write_1h", "overrides", "web_search"]
 		: [...fields, ...fields.map((field) => `${field}_tiers`), "regional", "fast", "service_tiers", "web_search"];
@@ -335,7 +353,7 @@ function feedCost(
 			if (
 				next !== Infinity ||
 				((brackets[0].min ?? 0) === 0 &&
-					Number(brackets[0].cost) !== Number(pricing[field as keyof AiGatewayPricing]))
+					parseRate(brackets[0].cost) !== parseRate(pricing[field as keyof AiGatewayPricing]))
 			)
 				return unknown("AI Gateway brackets do not cover the advertised base contract.");
 		}
@@ -436,6 +454,8 @@ export function catalogueCost(model: Pick<AnyModel, "provider" | "id" | "type" |
 			? BOUNDED_ANTHROPIC[model.id]
 			: undefined;
 	const previous = model.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+	// A price the provider reported live for the caller's credential is not a stale catalogue row.
+	if (previous.assessment?.status === "unknown" && previous.assessment.origin === "provider-live") return previous;
 	const feed =
 		(type === "chat" || type === "classifier") &&
 		(model.provider === "openrouter" || model.provider === "vercel-ai-gateway")

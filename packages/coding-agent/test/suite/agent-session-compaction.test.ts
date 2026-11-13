@@ -1044,10 +1044,20 @@ describe("AgentSession compaction characterization", () => {
 			}
 		});
 
-		async function runPrompt(contextWindow: number): Promise<{ harness: Harness; usage: number }> {
+		// One fixed-length dir per test: cwd lands in the system prompt, so a
+		// random-length harness cwd would drift faux usage between runs.
+		function createSessionDir(): string {
 			const sessionDir = mkdtempSync(join(tmpdir(), "pi-compaction-boundary-"));
 			sessionDirs.push(sessionDir);
+			return sessionDir;
+		}
+
+		async function runPrompt(
+			contextWindow: number,
+			sessionDir: string,
+		): Promise<{ harness: Harness; usage: number }> {
 			const harness = await createHarness({
+				cwd: sessionDir,
 				models: [{ id: "faux-1", contextWindow, maxTokens: 100 }],
 				settings: {
 					compaction: {
@@ -1072,14 +1082,15 @@ describe("AgentSession compaction characterization", () => {
 
 		it("compacts only when usage exceeds contextWindow - reserveTokens", async () => {
 			// Measure usage from a first run: core may rewrite scripted faux usage.
-			const { usage } = await runPrompt(1_000_000);
+			const sessionDir = createSessionDir();
+			const { usage } = await runPrompt(1_000_000, sessionDir);
 			expect(usage).toBeGreaterThan(0);
 
-			const atThreshold = await runPrompt(usage + reserveTokens);
+			const atThreshold = await runPrompt(usage + reserveTokens, sessionDir);
 			expect(atThreshold.usage).toBe(usage);
 			expect(atThreshold.harness.eventsOfType("compaction_start")).toEqual([]);
 
-			const overThreshold = await runPrompt(usage + reserveTokens - 1);
+			const overThreshold = await runPrompt(usage + reserveTokens - 1, sessionDir);
 			expect(overThreshold.usage).toBe(usage);
 			expect(overThreshold.harness.eventsOfType("compaction_start")).toEqual([
 				{ type: "compaction_start", reason: "threshold" },

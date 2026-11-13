@@ -20,6 +20,8 @@ not overlap. Sampling errors close the watchers and use the existing five-second
 
 A refresh that starts (from the native watcher or the poll) also adopts the current `tables.list`
 metadata as the poll baseline, so one mutation spawns one git process instead of one per observer.
+This costs one more synchronous `stat` per refresh. A poll sample issued before the refresh but
+delivered after it can still cause one spurious extra refresh (never a missed one).
 
 Instrumenting the debounce test in `footer-data-provider.test.ts` over 40 runs showed the extra
 refresh that once forced a `<=2` ceiling came from late *native* events (`headWatcher` on the

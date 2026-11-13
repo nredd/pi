@@ -104,6 +104,7 @@ describe("reftable poll lifecycle", () => {
 		expect(notify).toHaveBeenCalledTimes(1);
 	});
 
+	// #69: one reftable mutation must spawn one git process.
 	it("refreshes the poll baseline when a watcher-triggered refresh starts, so one mutation spawns one git process", async () => {
 		const cwd = repo("first");
 		const footer = provider(cwd);

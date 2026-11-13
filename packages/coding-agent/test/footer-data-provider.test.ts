@@ -85,8 +85,8 @@ function emitReftableChange(provider: FooterDataProvider): void {
 
 /**
  * Close the real native watchers; their listeners stay attached, so `emit` still drives them.
- * #69 instrumentation (40 runs): fixture setup writes surface as late native `headWatcher` and
- * `reftableWatcher` events during the fake-timer window and add one refresh. The stat poll never fired.
+ * Late native events from fixture setup otherwise add a refresh inside the fake-timer window (#69, see
+ * docs/test-failure-diagnostics.md).
  */
 function silenceNativeWatchers(provider: FooterDataProvider): void {
 	const watchers = provider as unknown as Record<

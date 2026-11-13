@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const sampling = vi.hoisted(() => ({
 	callbacks: [] as Array<(error: NodeJS.ErrnoException | null, stats: Stats) => void>,
 	baselineError: false,
+	watchers: [] as Array<{ path: string; listener: () => void }>,
 }));
 vi.mock("fs", async (importOriginal) => {
 	const original = await importOriginal<typeof FS>();
@@ -24,7 +25,10 @@ vi.mock("fs", async (importOriginal) => {
 });
 vi.mock("../src/utils/fs-watch.ts", () => ({
 	FS_WATCH_RETRY_DELAY_MS: 5000,
-	watchWithErrorHandler: vi.fn(() => ({ close: vi.fn() })),
+	watchWithErrorHandler: vi.fn((path: string, listener: () => void) => {
+		sampling.watchers.push({ path, listener });
+		return { close: vi.fn() };
+	}),
 	closeWatcher: (watcher: { close(): void } | null) => watcher?.close(),
 }));
 vi.mock("child_process", () => ({
@@ -66,6 +70,7 @@ describe("reftable poll lifecycle", () => {
 		vi.clearAllMocks();
 		sampling.callbacks.length = 0;
 		sampling.baselineError = false;
+		sampling.watchers.length = 0;
 		root = mkdtempSync(join(tmpdir(), "footer-poll-"));
 	});
 	afterEach(() => {
@@ -92,11 +97,35 @@ describe("reftable poll lifecycle", () => {
 		expect(execFile).toHaveBeenCalledTimes(1);
 		expect(footer.getGitBranch()).toBe("foo");
 		expect(notify).toHaveBeenCalledTimes(1);
-		// Return the same metadata as the preceding changed sample.
-		sample(cwd, true);
+		// The refresh adopted current metadata as the baseline; the same metadata again is not a change.
+		sample(cwd);
 		await vi.advanceTimersByTimeAsync(1000);
 		expect(execFile).toHaveBeenCalledTimes(1);
 		expect(notify).toHaveBeenCalledTimes(1);
+	});
+
+	// #69: one reftable mutation must spawn one git process.
+	it("refreshes the poll baseline when a watcher-triggered refresh starts, so one mutation spawns one git process", async () => {
+		const cwd = repo("first");
+		const footer = provider(cwd);
+		const tables = join(cwd, ".git", "reftable", "tables.list");
+		const watcher = sampling.watchers.find(({ path }) => path.endsWith("tables.list"));
+		expect(watcher).toBeDefined();
+		writeFileSync(tables, "01\n");
+		watcher?.listener();
+		await vi.advanceTimersByTimeAsync(500);
+		expect(execFile).toHaveBeenCalledTimes(1);
+		expect(footer.getGitBranch()).toBe("foo");
+		// The poll's first sample sees the same mutation the native watcher already handled.
+		await vi.advanceTimersByTimeAsync(250);
+		sample(cwd);
+		await vi.advanceTimersByTimeAsync(1000);
+		expect(execFile).toHaveBeenCalledTimes(1);
+		// A later mutation is still detected.
+		writeFileSync(tables, "012\n");
+		sample(cwd);
+		await vi.advanceTimersByTimeAsync(500);
+		expect(execFile).toHaveBeenCalledTimes(2);
 	});
 
 	it.each(["ENOENT", "EACCES"])("retries a %s sample error after exactly five seconds", async (code) => {

@@ -2218,6 +2218,50 @@ describe("runToolCall", () => {
 		expect(hookCalls).toEqual(["before a", "after a", "before c", "before e", "after e"]);
 	});
 
+	it("lets getToolNotFoundMessage replace the not-found text and falls back to the default", async () => {
+		const defaultText =
+			"Tool missing is not available in this request: it is not active (deferred tools must be loaded first), not registered, or excluded by the active profile";
+		const run = async (getToolNotFoundMessage: () => Promise<string | undefined>) => {
+			const outcome = await runToolCall(call("m", "missing", {}), {
+				tools: [echo],
+				assistantMessage,
+				context: { messages: [] },
+				beforeToolCall: async () => {
+					throw new Error("beforeToolCall must not run for unknown tools");
+				},
+				getToolNotFoundMessage,
+			});
+			expect(outcome.isError).toBe(true);
+			return outcome.result.content;
+		};
+
+		expect(await run(async () => "deferred: call search_tools")).toEqual([
+			{ type: "text", text: "deferred: call search_tools" },
+		]);
+		expect(await run(async () => undefined)).toEqual([{ type: "text", text: defaultText }]);
+		expect(await run(async () => "")).toEqual([{ type: "text", text: defaultText }]);
+		expect(
+			await run(async () => {
+				throw new Error("boom");
+			}),
+		).toEqual([{ type: "text", text: defaultText }]);
+	});
+
+	it("passes the tool call, assistant message and context to getToolNotFoundMessage", async () => {
+		const context = { messages: [] };
+		let received: unknown;
+		await runToolCall(call("m", "missing", { a: 1 }), {
+			tools: [echo],
+			assistantMessage,
+			context,
+			getToolNotFoundMessage: async (ctx) => {
+				received = ctx;
+				return undefined;
+			},
+		});
+		expect(received).toEqual({ assistantMessage, toolCall: call("m", "missing", { a: 1 }), context });
+	});
+
 	it("lets afterToolCall replace structured content and drops it when only content is replaced", async () => {
 		const redacted = [{ type: "text" as const, text: "redacted" }];
 		const results = [

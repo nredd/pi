@@ -695,8 +695,8 @@ type ExecutedToolCallOutcome = {
 
 type FinalizedToolCallOutcome = AgentToolCallOutcome;
 
-/** The `beforeToolCall` and `afterToolCall` hooks of {@link AgentLoopConfig}. */
-export type ToolCallHooks = Pick<AgentLoopConfig, "beforeToolCall" | "afterToolCall">;
+/** The `beforeToolCall`, `afterToolCall` and `getToolNotFoundMessage` hooks of {@link AgentLoopConfig}. */
+export type ToolCallHooks = Pick<AgentLoopConfig, "beforeToolCall" | "afterToolCall" | "getToolNotFoundMessage">;
 
 type ToolUpdateSink = (partialResult: AgentToolResult<any>) => Promise<void> | void;
 
@@ -720,6 +720,24 @@ function prepareToolCallArguments(tool: AgentTool<any>, toolCall: AgentToolCall)
 	};
 }
 
+/** The `getToolNotFoundMessage` text, or `undefined` to keep the default (no hook, empty text, or a throwing hook). */
+async function customToolNotFoundMessage(
+	context: AgentContext,
+	assistantMessage: AssistantMessage,
+	toolCall: AgentToolCall,
+	config: ToolCallHooks,
+	signal: AbortSignal | undefined,
+): Promise<string | undefined> {
+	if (!config.getToolNotFoundMessage) {
+		return undefined;
+	}
+	try {
+		return (await config.getToolNotFoundMessage({ assistantMessage, toolCall, context }, signal)) || undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 async function prepareToolCall(
 	currentContext: AgentContext,
 	assistantMessage: AssistantMessage,
@@ -730,13 +748,10 @@ async function prepareToolCall(
 ): Promise<PreparedToolCall | ImmediateToolCallOutcome> {
 	const tool = tools.find((t) => t.name === toolCall.name);
 	if (!tool) {
-		return {
-			kind: "immediate",
-			result: createErrorToolResult(
-				`Tool ${toolCall.name} is not available in this request: it is not active (deferred tools must be loaded first), not registered, or excluded by the active profile`,
-			),
-			isError: true,
-		};
+		const message =
+			(await customToolNotFoundMessage(currentContext, assistantMessage, toolCall, config, signal)) ??
+			`Tool ${toolCall.name} is not available in this request: it is not active (deferred tools must be loaded first), not registered, or excluded by the active profile`;
+		return { kind: "immediate", result: createErrorToolResult(message), isError: true };
 	}
 
 	try {

@@ -83,6 +83,21 @@ function emitReftableChange(provider: FooterDataProvider): void {
 	reftableWatcher?.emit("change", "change", "tables.list");
 }
 
+/**
+ * Close the real native watchers; their listeners stay attached, so `emit` still drives them.
+ * Late native events from fixture setup otherwise add a refresh inside the fake-timer window (#69, see
+ * docs/test-failure-diagnostics.md).
+ */
+function silenceNativeWatchers(provider: FooterDataProvider): void {
+	const watchers = provider as unknown as Record<
+		"headWatcher" | "reftableWatcher" | "reftableTablesListWatcher",
+		FSWatcher | null
+	>;
+	for (const watcher of [watchers.headWatcher, watchers.reftableWatcher, watchers.reftableTablesListWatcher]) {
+		watcher?.close();
+	}
+}
+
 async function waitFor(
 	condition: () => boolean,
 	timeoutMs = 3000,
@@ -230,6 +245,7 @@ describe("FooterDataProvider reftable branch detection", () => {
 		process.chdir(worktreeDir);
 
 		const provider = new FooterDataProvider(worktreeDir);
+		silenceNativeWatchers(provider);
 		try {
 			expect(provider.getGitBranch()).toBe("main");
 			vi.mocked(spawnSync).mockClear();
@@ -255,6 +271,7 @@ describe("FooterDataProvider reftable branch detection", () => {
 		process.chdir(worktreeDir);
 
 		const provider = new FooterDataProvider(worktreeDir);
+		silenceNativeWatchers(provider);
 		try {
 			expect(provider.getGitBranch()).toBe("main");
 			vi.mocked(execFile).mockClear();
@@ -267,6 +284,7 @@ describe("FooterDataProvider reftable branch detection", () => {
 			await vi.advanceTimersByTimeAsync(2);
 			expect(vi.mocked(execFile)).toHaveBeenCalledTimes(1);
 			await vi.advanceTimersByTimeAsync(650);
+			// No trailing refresh: a burst coalesced into the armed timer must not leave a pending one behind.
 			expect(vi.mocked(execFile)).toHaveBeenCalledTimes(1);
 		} finally {
 			provider.dispose();

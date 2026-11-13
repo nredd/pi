@@ -1212,6 +1212,16 @@ interface ToolCallEventBase {
 	parentToolCallId?: string;
 }
 
+/** Fired when the model calls a tool that is not available, before any `tool_call` handler (which never runs). */
+export interface ToolNotFoundEvent {
+	type: "tool_not_found";
+	/** The unavailable tool name the model called. */
+	toolName: string;
+	toolCallId: string;
+	/** Set when another tool (for example a codemode script) issued this call. */
+	parentToolCallId?: string;
+}
+
 export interface BashToolCallEvent extends ToolCallEventBase {
 	toolName: "bash";
 	input: BashToolInput;
@@ -1444,6 +1454,7 @@ export type ExtensionEvent =
 	| UserBashEvent
 	| InputEvent
 	| ToolCallEvent
+	| ToolNotFoundEvent
 	| ToolResultEvent;
 
 // ============================================================================
@@ -1470,6 +1481,11 @@ export interface ToolCallEventResult {
 	 * Early termination only happens when every finalized tool result in the batch sets this to true.
 	 */
 	terminate?: boolean;
+}
+
+export interface ToolNotFoundEventResult {
+	/** Replaces the default error text the model sees. The first handler to return non-empty text wins. */
+	message?: string;
 }
 
 /** Result from user_bash event handler */
@@ -1669,6 +1685,7 @@ export interface ExtensionAPI {
 	on(event: "model_select", handler: ExtensionHandler<ModelSelectEvent>): () => void;
 	on(event: "thinking_level_select", handler: ExtensionHandler<ThinkingLevelSelectEvent>): () => void;
 	on(event: "tool_call", handler: ExtensionHandler<ToolCallEvent, ToolCallEventResult>): () => void;
+	on(event: "tool_not_found", handler: ExtensionHandler<ToolNotFoundEvent, ToolNotFoundEventResult>): () => void;
 	on(event: "tool_result", handler: ExtensionHandler<ToolResultEvent, ToolResultEventResult>): () => void;
 	on(event: "user_bash", handler: ExtensionHandler<UserBashEvent, UserBashEventResult>): () => void;
 	on(event: "input", handler: ExtensionHandler<InputEvent, InputEventResult>): () => void;

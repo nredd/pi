@@ -157,10 +157,49 @@ const BEDROCK_OPENAI_IDS = new Map(
 	),
 );
 
+const GEMINI_25_PRO_REROUTE_DATE = "2026-12-01";
+
 /** Apply narrow official corrections before user overrides, never infer a provider from a model name. */
 export function catalogueCost(model: Pick<AnyModel, "provider" | "id" | "type" | "cost">): ModelCost {
+	const cost = catalogueCostUnbounded(model);
+	if (
+		(model.type ?? "chat") !== "chat" ||
+		model.provider !== "google" ||
+		model.id !== "gemini-2.5-pro" ||
+		cost.assessment?.status !== "verified"
+	)
+		return cost;
+	// Google reroutes this alias on this date; bound whatever verified row survives, including newer catalog rows.
+	const { retiredOn } = cost.assessment;
+	if (retiredOn !== undefined && retiredOn <= GEMINI_25_PRO_REROUTE_DATE) return cost;
+	return { ...cost, assessment: { ...cost.assessment, retiredOn: GEMINI_25_PRO_REROUTE_DATE } };
+}
+
+function catalogueCostUnbounded(model: Pick<AnyModel, "provider" | "id" | "type" | "cost">): ModelCost {
 	const type = model.type ?? "chat";
 	const codexTerra = type === "chat" && model.provider === "openai-codex" && model.id === "gpt-6.1-terra";
+	const cerebrasRates: Record<string, { input: number; output: number; source: string }> = {
+		"gpt-oss-120b": { input: 0.35, output: 0.75, source: "https://inference-docs.cerebras.ai/models/openai-oss.md" },
+		"qwen-3.8-27b": {
+			input: 0.99,
+			output: 1.49,
+			source: "https://inference-docs.cerebras.ai/models/qwen-3.8-27b.md",
+		},
+	};
+	const xaiRates: Record<string, ModelCost> = {
+		"grok-4.7": { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 },
+		"grok-4.6": { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 },
+		"grok-4.5": { input: 2, output: 6, cacheRead: 0.3, cacheWrite: 0 },
+		"grok-4.3": { input: 1.25, output: 2.5, cacheRead: 0.2, cacheWrite: 0 },
+	};
+	const cerebras =
+		type === "chat" && model.provider === "cerebras" && Object.hasOwn(cerebrasRates, model.id)
+			? cerebrasRates[model.id]
+			: undefined;
+	const xai =
+		type === "chat" && model.provider === "xai" && Object.hasOwn(xaiRates, model.id) ? xaiRates[model.id] : undefined;
+	const gemini = type === "chat" && model.provider === "google" && model.id === "gemini-3.5-flash-lite";
+	const gemini25Pro = type === "chat" && model.provider === "google" && model.id === "gemini-2.5-pro";
 	const bedrockContract =
 		type === "chat" &&
 		model.provider === "amazon-bedrock" &&
@@ -169,7 +208,10 @@ export function catalogueCost(model: Pick<AnyModel, "provider" | "id" | "type" |
 		type === "chat" && model.provider === "anthropic" && Object.hasOwn(BOUNDED_ANTHROPIC, model.id)
 			? BOUNDED_ANTHROPIC[model.id]
 			: undefined;
-	const checkedAt = codexTerra || bedrockContract || boundedAnthropicContract ? "2026-11-13" : PRICING_CHECKED_AT;
+	const checkedAt =
+		codexTerra || bedrockContract || boundedAnthropicContract || cerebras || xai || gemini
+			? "2026-11-13"
+			: PRICING_CHECKED_AT;
 	const previous = model.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 	// A newer explicitly assessed catalog must not be frozen at this client's audit date.
 	if (
@@ -269,8 +311,8 @@ export function catalogueCost(model: Pick<AnyModel, "provider" | "id" | "type" |
 			return verified(
 				withOpenAiLongContextPricing(rates),
 				`https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-${card}.md`,
-				"Standard Global CRIS baseline, not actual regional/profile invoices; Geo and in-Region premiums excluded. Published writes are 30m, but the estimator cannot identify that exact TTL; writes unavailable. Ultrafast, Priority, Flex and Batch excluded.",
-				["cacheWrite"],
+				"Standard Global CRIS baseline, not actual regional/profile invoices; Geo and in-Region premiums excluded. Writes are the published 30m rate, the only supported explicit TTL (also per the AWS prompt-caching guide, https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html); callers must state short writes, 1h/12h writes are unpriced. Ultrafast, Priority, Flex and Batch excluded.",
+				[],
 				checkedAt,
 			);
 		}
@@ -328,7 +370,43 @@ export function catalogueCost(model: Pick<AnyModel, "provider" | "id" | "type" |
 				"Published baseline: USD per 1M tokens, Standard/on-demand, Global Cross-region Inference table, US East (N. Virginia) selector. All listed profile IDs are normalized to this baseline, NOT actual regional/profile invoice prices. 5m/1h writes; Batch, Flex, Priority, Reserved, discounts and regional uplifts excluded.",
 			);
 	}
-	if (type === "chat" && model.provider === "google" && model.id === "gemini-2.5-pro") {
+	if (cerebras)
+		return verified(
+			{ input: cerebras.input, output: cerebras.output, cacheRead: cerebras.input, cacheWrite: 0 },
+			cerebras.source,
+			"Developer shared inference; cached input is billed at the full input rate (https://inference-docs.cerebras.ai/capabilities/prompt-caching.md). Dedicated pricing and promotional credits excluded; no separate cache-write tariff established.",
+			["cacheWrite"],
+			checkedAt,
+		);
+	if (xai)
+		return verified(
+			{
+				...xai,
+				tiers: [
+					{
+						inputTokensAbove: 199999,
+						input: xai.input * 2,
+						output: xai.output * 2,
+						cacheRead: xai.cacheRead * 2,
+						cacheWrite: 0,
+					},
+				],
+			},
+			"https://docs.x.ai/developers/pricing",
+			"Standard global token rates; 200000 or more prompt tokens doubles all rates for the whole request. Batch, Priority, regional, product-only Fast and non-token charges excluded; cache writes unavailable.",
+			["cacheWrite"],
+			checkedAt,
+		);
+	if (gemini) {
+		return verified(
+			{ input: 0.3, output: 2.5, cacheRead: 0.03, cacheWrite: 0 },
+			GOOGLE_SOURCE,
+			"Paid Standard; text input, output and cached-read token rates only. Image and audio output and tool charges have separate units and are not distinguished by these counters. Cache storage is $1 per million token-hours, not a token-write price; tools and other non-token charges excluded. No Vertex substitution.",
+			["cacheWrite"],
+			checkedAt,
+		);
+	}
+	if (gemini25Pro) {
 		return verified(
 			{
 				input: 1.25,
@@ -338,8 +416,9 @@ export function catalogueCost(model: Pick<AnyModel, "provider" | "id" | "type" |
 				tiers: [{ inputTokensAbove: 200000, input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 }],
 			},
 			GOOGLE_SOURCE,
-			"Paid Standard token charges only; cache storage at USD 4.50 per million tokens/hour is excluded. No Vertex substitution.",
+			"Paid Standard token charges only; cache storage at USD 4.50 per million tokens/hour is excluded. Google reroutes this alias to gemini-3.8-flash from 2026-12-01, so these rates are bounded before that date and the rerouted contract is not assessed. No Vertex substitution.",
 			["cacheWrite"],
+			checkedAt,
 		);
 	}
 	return {

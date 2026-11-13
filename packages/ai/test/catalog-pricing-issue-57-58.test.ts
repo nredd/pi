@@ -67,7 +67,7 @@ describe("Bedrock OpenAI Global CRIS", () => {
 				cacheRead: read,
 				output,
 				cacheWrite: write,
-				assessment: { unavailable: ["cacheWrite"] },
+				assessment: { status: "verified", unavailable: [] },
 			});
 			for (const extra of [0, 1]) {
 				const count = { ...tokens, input: tokens.input + extra };
@@ -78,8 +78,21 @@ describe("Bedrock OpenAI Global CRIS", () => {
 					1e6;
 				expect(estimateTokenCost({ cost }, count).cost?.total).toBeCloseTo(expected);
 			}
-			for (const extra of [{}, { shortCacheWrites: true }, { cacheWrite1h: 1 }, { cacheWrite12h: 1 }])
+			// 30m is the only explicit TTL: priced when the caller states short writes, never inferred.
+			for (const extra of [{}, { cacheWrite1h: 1 }, { cacheWrite12h: 1 }])
 				expect(estimateTokenCost({ cost }, { ...tokens, cacheWrite: 1, ...extra }).cost).toBeNull();
+			// Writes count toward the request-wide boundary: exactly 272000 total is Standard, one more crosses.
+			for (const extra of [0, 1]) {
+				const count = { ...tokens, input: tokens.input - 1000 + extra, cacheWrite: 1000, shortCacheWrites: true };
+				const tier = extra ? 2 : 1;
+				const expected =
+					((100000 - 1000 + extra) * input * tier +
+						172000 * read * tier +
+						10000 * output * (extra ? 1.5 : 1) +
+						1000 * write * tier) /
+					1e6;
+				expect(estimateTokenCost({ cost }, count).cost?.total).toBeCloseTo(expected, 9);
+			}
 		}
 		expect(catalogueCost(entry(`eu.${id}`)).assessment?.status).toBe("unknown");
 	});

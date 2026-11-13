@@ -40,15 +40,15 @@ it("carries official corrections and explicit unknowns into bundled shards and p
 		const shard = JSON.parse(readFileSync(join(isolated, "src/providers/data/openai.json"), "utf8"));
 		// nredd/pi#57 and #58: both Bedrock contracts reach generated and hydrated output.
 		const bedrock = legacy["amazon-bedrock"];
-		for (const [id, input, read, output] of [
-			["amazon.nova-lite-v1:0", 0.06, 0.015, 0.24],
-			["openai.gpt-6.1-terra", 1, 0.05, 5],
+		for (const [id, input, read, output, unavailable] of [
+			["amazon.nova-lite-v1:0", 0.06, 0.015, 0.24, ["cacheWrite"]],
+			["openai.gpt-6.1-terra", 1, 0.05, 5, []],
 		] as const) {
 			expect(structuredClone(bedrock[id].cost)).toMatchObject({
 				input,
 				cacheRead: read,
 				output,
-				assessment: { unavailable: ["cacheWrite"] },
+				assessment: { unavailable },
 			});
 			const data = JSON.parse(readFileSync(join(isolated, "src/providers/data/amazon-bedrock.json"), "utf8"));
 			expect(data["bedrock-converse-stream"][`chat:${id}`].cost).toEqual(bedrock[id].cost);

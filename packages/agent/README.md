@@ -119,6 +119,8 @@ The `beforeToolCall` hook runs after `tool_execution_start` and validated argume
 
 Tools, blocked `beforeToolCall` results, and `afterToolCall` overrides can return `terminate: true` to hint that the automatic follow-up LLM call should be skipped. The loop only stops early when every finalized tool result in that batch sets `terminate: true`. Mixed batches continue normally.
 
+The optional `getToolNotFoundMessage({ toolCall, assistantMessage, context }, signal)` hook runs instead when the model calls a tool that is not available, since `beforeToolCall` never runs for it. Return text to replace the error message the model sees; return `undefined` or an empty string (or throw) to keep the default `Tool <name> is not available in this request: ...` text. It is also an `Agent` option and property, and applies to `runToolCall()`.
+
 When you use the `Agent` class, assistant `message_end` processing is treated as a barrier before tool preflight begins. That means `beforeToolCall` sees agent state that already includes the assistant message that requested the tool call.
 
 ### Request preparation and turn finalization
@@ -515,7 +517,7 @@ Return `terminate: true` from `execute()`, a blocked `beforeToolCall`, or `after
 
 ### MCP and Codemode
 
-`@earendil-works/pi-mcp` connects to MCP servers and `@earendil-works/pi-codemode` runs model-written JavaScript that calls tools. [examples/mcp-codemode](examples/mcp-codemode) wraps both as `AgentTool`s: one tool per MCP tool, and a `codemode` tool whose scripts call the agent's tools through `runToolCall()`, so `beforeToolCall` and `afterToolCall` apply to those calls too.
+`@earendil-works/pi-mcp` connects to MCP servers and `@earendil-works/pi-codemode` runs model-written JavaScript that calls tools. [examples/mcp-codemode](examples/mcp-codemode) wraps both as `AgentTool`s: one tool per MCP tool, and a `codemode` tool whose scripts call the agent's tools through `runToolCall()`, so `beforeToolCall`, `afterToolCall` and `getToolNotFoundMessage` apply to those calls too.
 
 ## Proxy Usage
 

@@ -181,6 +181,8 @@ export type {
 	ToolLoadout,
 	ToolLoadoutChanges,
 	ToolNamespace,
+	ToolNotFoundEvent,
+	ToolNotFoundEventResult,
 	ToolRendererResolver,
 	ToolRenderers,
 	ToolRenderResultOptions,

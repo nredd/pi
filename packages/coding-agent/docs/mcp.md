@@ -249,7 +249,7 @@ Reading and listing resources is retried once after a transient HTTP error (408,
 
 ## Permissions
 
-Every MCP call passes through Pi's tool pipeline. Extension `tool_call` and `tool_result` handlers, including permission gates, therefore apply to MCP tools. Calls made from codemode scripts carry the codemode call ID as `parentToolCallId`.
+Every MCP call passes through Pi's tool pipeline. Extension `tool_call` and `tool_result` handlers, including permission gates, therefore apply to MCP tools, and `tool_not_found` handlers apply to calls naming an unavailable tool. Calls made from codemode scripts carry the codemode call ID as `parentToolCallId`.
 
 `pi.getAllTools()` reports the annotations declared by each server: `readOnlyHint`, `destructiveHint`, `idempotentHint`, and `openWorldHint`. Permission extensions can use these hints to decide which calls require confirmation (see [Tool exposure](extensions.md#tool-exposure)). Resource tools are marked read-only.
 

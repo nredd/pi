@@ -182,6 +182,7 @@ export function catalogueCost(model: Pick<AnyModel, "provider" | "id" | "type" |
 	const xai =
 		type === "chat" && model.provider === "xai" && Object.hasOwn(xaiRates, model.id) ? xaiRates[model.id] : undefined;
 	const gemini = type === "chat" && model.provider === "google" && model.id === "gemini-3.5-flash-lite";
+	const gemini25Pro = type === "chat" && model.provider === "google" && model.id === "gemini-2.5-pro";
 	const bedrockContract =
 		type === "chat" &&
 		model.provider === "amazon-bedrock" &&
@@ -191,7 +192,7 @@ export function catalogueCost(model: Pick<AnyModel, "provider" | "id" | "type" |
 			? BOUNDED_ANTHROPIC[model.id]
 			: undefined;
 	const checkedAt =
-		codexTerra || bedrockContract || boundedAnthropicContract || cerebras || xai || gemini
+		codexTerra || bedrockContract || boundedAnthropicContract || cerebras || xai || gemini || gemini25Pro
 			? "2026-11-13"
 			: PRICING_CHECKED_AT;
 	const previous = model.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
@@ -383,12 +384,12 @@ export function catalogueCost(model: Pick<AnyModel, "provider" | "id" | "type" |
 		return verified(
 			{ input: 0.3, output: 2.5, cacheRead: 0.03, cacheWrite: 0 },
 			GOOGLE_SOURCE,
-			"Paid Standard; text input, output and cached-read token rates only. Audio input and image and audio output carry separate units and are excluded. Cache storage is $1 per million token-hours, not a token-write price; tools and other non-token charges excluded. No Vertex substitution.",
+			"Paid Standard; text input, output and cached-read token rates only. Image and audio output and tool charges have separate units and are not distinguished by these counters. Cache storage is $1 per million token-hours, not a token-write price; tools and other non-token charges excluded. No Vertex substitution.",
 			["cacheWrite"],
 			checkedAt,
 		);
 	}
-	if (type === "chat" && model.provider === "google" && model.id === "gemini-2.5-pro") {
+	if (gemini25Pro) {
 		const assessed = verified(
 			{
 				input: 1.25,
@@ -400,6 +401,7 @@ export function catalogueCost(model: Pick<AnyModel, "provider" | "id" | "type" |
 			GOOGLE_SOURCE,
 			"Paid Standard token charges only; cache storage at USD 4.50 per million tokens/hour is excluded. Google reroutes this alias to gemini-3.8-flash from 2026-12-01, so these rates are bounded before that date and the rerouted contract is not assessed. No Vertex substitution.",
 			["cacheWrite"],
+			checkedAt,
 		);
 		if (assessed.assessment?.status === "verified")
 			assessed.assessment = { ...assessed.assessment, retiredOn: "2026-12-01" };

@@ -253,6 +253,25 @@ describe("catalogue assessment", () => {
 		expect(estimateTokenCost({ cost }, tokens, "2027-01-01").cost).toBeNull();
 		expect(catalogueCost(entry("google", "gemini-2.5-flash")).assessment?.status).toBe("unknown");
 	});
+	it("replaces a same-day gemini-2.5-pro row that lacks the reroute bound", () => {
+		const stale = {
+			input: 1.25,
+			output: 10,
+			cacheRead: 0.125,
+			cacheWrite: 0,
+			assessment: {
+				status: "verified" as const,
+				checkedAt: "2026-11-13",
+				source: "x",
+				unit: "usd-per-million-tokens" as const,
+				conditions: "x",
+			},
+		};
+		const cost = catalogueCost({ ...entry("google", "gemini-2.5-pro"), cost: stale });
+		expect(cost.assessment).toMatchObject({ retiredOn: "2026-12-01", checkedAt: "2026-11-13" });
+		const tokens = { input: 100000, output: 100000, cacheRead: 0, cacheWrite: 0 };
+		expect(estimateTokenCost({ cost }, tokens, "2026-12-05").cost).toBeNull();
+	});
 	it("validates explicit lifetime prices and assessment schemas", () => {
 		const schema = Compile(ModelCostSchema);
 		for (const cost of [sol, free, catalogueCost(entry())]) expect(schema.Check(cost)).toBe(true);

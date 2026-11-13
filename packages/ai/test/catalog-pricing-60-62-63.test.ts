@@ -63,8 +63,8 @@ it("prices only paid Standard Gemini token categories", () => {
 	expect(estimateTokenCost({ cost }, { ...zero, cacheWrite: 1, cacheWrite1h: 1 }).cost).toBeNull();
 	const conditions = (cost.assessment as { conditions: string }).conditions;
 	expect(conditions).toContain("text input");
-	expect(conditions).toContain("Audio input");
-	expect(conditions).toContain("image and audio output");
+	expect(conditions).not.toContain("Audio input");
+	expect(conditions).toContain("Image and audio output and tool charges have separate units");
 	expect(conditions).not.toMatch(/text, image, video and audio/);
 });
 

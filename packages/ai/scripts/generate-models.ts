@@ -3,6 +3,13 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "fs";
 import { dirname, join, resolve } from "path";
 import { fileURLToPath } from "url";
+import {
+	catalogueCost,
+	OPENAI_LONG_CONTEXT_INPUT_THRESHOLD,
+	OPENAI_LONG_CONTEXT_PRICING_MODEL_IDS,
+	OPENAI_STANDARD_COSTS,
+	withOpenAiLongContextPricing,
+} from "../src/catalog-pricing.ts";
 import { getEffortThinkingLevelMap, type ModelsDevReasoningOption } from "./models-dev-reasoning-options.ts";
 import { type AiGatewayPricing, getAiGatewayCost } from "./ai-gateway-pricing.ts";
 import { buildOpenRouterCatalog, type OpenRouterCatalog, type OpenRouterModelListItem } from "./openrouter-catalog.ts";
@@ -399,23 +406,9 @@ const OPENAI_CODEX_ADDITIONAL_TOOLS_MODEL_IDS = new Set([
 // OpenAI documents configuration_update for the GPT-6 family.
 // https://developers.openai.com/api/docs/guides/reasoning
 const OPENAI_MID_CONVO_EFFORT_MODEL_IDS = new Set(["gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol"]);
-const OPENAI_LONG_CONTEXT_INPUT_THRESHOLD = 272000;
 const OPENAI_SHORT_CONTEXT_CAPPED_MODEL_IDS = new Set([
 	"gpt-5.4",
 	"gpt-5.5",
-	"gpt-5.6-sol",
-	"gpt-5.6-terra",
-	"gpt-5.6-luna",
-	"gpt-6-astra",
-	"gpt-6-sol",
-	"gpt-6-luna",
-	"gpt-6.1-sol",
-]);
-const OPENAI_LONG_CONTEXT_PRICING_MODEL_IDS = new Set([
-	"gpt-5.4",
-	"gpt-5.4-pro",
-	"gpt-5.5",
-	"gpt-5.5-pro",
 	"gpt-5.6-sol",
 	"gpt-5.6-terra",
 	"gpt-5.6-luna",
@@ -434,34 +427,6 @@ const DEFAULT_IMAGE_RESIZE = {
 	maxBytes: 4.5 * 1024 * 1024,
 	jpegQuality: 80,
 } as const;
-
-function withOpenAiLongContextPricing(cost: Model<Api>["cost"]): Model<Api>["cost"] {
-	return {
-		...cost,
-		tiers: [
-			{
-				inputTokensAbove: OPENAI_LONG_CONTEXT_INPUT_THRESHOLD,
-				input: roundCost(cost.input * 2),
-				output: roundCost(cost.output * 1.5),
-				cacheRead: roundCost(cost.cacheRead * 2),
-				cacheWrite: roundCost(cost.cacheWrite * 2),
-			},
-		],
-	};
-}
-
-// Keep current OpenAI prices authoritative until models.dev and passthrough
-// catalogs catch up.
-// https://developers.openai.com/api/docs/pricing
-const OPENAI_STANDARD_COSTS: Record<string, ModelCost> = {
-	"gpt-5.6-luna": { input: 0.2, output: 1.2, cacheRead: 0.02, cacheWrite: 0.25 },
-	"gpt-5.6-sol": { input: 4, output: 20, cacheRead: 0.4, cacheWrite: 5 },
-	"gpt-5.6-terra": { input: 2, output: 12, cacheRead: 0.2, cacheWrite: 2.5 },
-	"gpt-6-astra": { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5 },
-	"gpt-6-luna": { input: 0.1, output: 0.5, cacheRead: 0.01, cacheWrite: 0.125 },
-	"gpt-6-sol": { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
-	"gpt-6.1-sol": { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 },
-};
 
 const OPENAI_RESPONSES_NONE_REASONING_MODELS = new Set([
 	"gpt-5.1",
@@ -2876,7 +2841,10 @@ async function generateModels() {
 		// Cloudflare AI Gateway passes OpenAI usage through at OpenAI list prices.
 		if (candidate.provider === "cloudflare-ai-gateway") {
 			const standardCost = OPENAI_STANDARD_COSTS[candidate.id];
-			if (standardCost) candidate.cost = withOpenAiLongContextPricing(standardCost);
+			if (standardCost)
+				candidate.cost = OPENAI_LONG_CONTEXT_PRICING_MODEL_IDS.has(candidate.id)
+					? withOpenAiLongContextPricing(standardCost)
+					: standardCost;
 		}
 		// models.dev reports gpt-5-pro output as 272000 (a duplicate of the input sub-limit);
 		// the actual max output is 128000. Also propagates to the derived Azure clone.
@@ -3458,6 +3426,11 @@ async function generateModels() {
 			...Object.values(jsonImageProviders[providerId]),
 			...Object.values(jsonClassifierProviders[providerId]),
 		];
+	}
+
+	// Assess every operation, including non-token models, before either release output path.
+	for (const models of Object.values(jsonAllProviders)) {
+		for (const model of models) model.cost = catalogueCost(model);
 	}
 
 	const serializeJson = (value: unknown) => `${JSON.stringify(value, null, generatorOptions.pretty ? 2 : undefined)}\n`;

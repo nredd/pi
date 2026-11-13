@@ -1,5 +1,6 @@
 import {
 	type AnyModel,
+	catalogueCost,
 	getModelType,
 	isModelType,
 	type ModelsStoreEntry,
@@ -29,10 +30,27 @@ function isSupportedModelType(model: { type?: unknown }): boolean {
 	);
 }
 
+const pricingProjections = new WeakMap<AnyModel, AnyModel>();
+
+/** Preserve the catalogue's model identity while applying pricing without mutating source entries. */
+function assessModel<TModel extends AnyModel>(model: TModel): TModel {
+	const cost = catalogueCost(model);
+	const previous = pricingProjections.get(model) as TModel | undefined;
+	if (!previous) {
+		const projected = { ...model, cost };
+		pricingProjections.set(model, projected);
+		return projected;
+	}
+	// Providers may update metadata in place. Keep changes and removals visible, but never cache prices.
+	for (const key of Object.keys(previous)) if (!Object.hasOwn(model, key)) Reflect.deleteProperty(previous, key);
+	Object.assign(previous, model, { cost });
+	return previous;
+}
+
 function mergeModels<TModel extends AnyModel>(baseline: readonly TModel[], dynamic: readonly TModel[]): TModel[] {
 	const merged = new Map<string, TModel>();
 	for (const model of [...baseline, ...dynamic]) merged.set(`${getModelType(model)}\0${model.id}`, model);
-	return [...merged.values()];
+	return [...merged.values()].map(assessModel);
 }
 
 function parseCatalog(providerId: string, value: unknown): AnyModel[] {
@@ -200,7 +218,8 @@ export function withPersonalizedCatalog(
 ): Provider {
 	let personalModels: readonly AnyModel[] = [];
 	const builtinModels = (): readonly AnyModel[] => provider.getAllModels?.() ?? provider.getModels();
-	const getAllModels = (): readonly AnyModel[] => (personalModels.length > 0 ? personalModels : builtinModels());
+	const getAllModels = (): readonly AnyModel[] =>
+		(personalModels.length > 0 ? personalModels : builtinModels()).map(assessModel);
 
 	return {
 		...provider,

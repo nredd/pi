@@ -192,7 +192,13 @@ function applyModelOverride(model: Model<Api>, override: ModelsJsonModelOverride
 					output: override.cost.output ?? model.cost.output,
 					cacheRead: override.cost.cacheRead ?? model.cost.cacheRead,
 					cacheWrite: override.cost.cacheWrite ?? model.cost.cacheWrite,
+					cacheWrite1h: override.cost.cacheWrite1h ?? model.cost.cacheWrite1h,
+					cacheWrite12h: override.cost.cacheWrite12h ?? model.cost.cacheWrite12h,
 					tiers: override.cost.tiers ?? model.cost.tiers,
+					assessment: override.cost.assessment ?? {
+						status: "unknown",
+						reason: "Explicit cost override has no pricing assessment.",
+					},
 				}
 			: model.cost,
 		promptCache: override.promptCache ? { ...model.promptCache, ...override.promptCache } : model.promptCache,

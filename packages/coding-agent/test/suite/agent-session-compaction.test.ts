@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { AgentMessage, AgentTool } from "@earendil-works/pi-agent-core";
 import {
 	type AssistantMessage,
@@ -13,6 +16,7 @@ import {
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { estimateTokens } from "../../src/core/compaction/index.ts";
+import { SessionManager } from "../../src/core/session-manager.ts";
 import { createHarness, getUserTexts, type Harness } from "./harness.ts";
 
 type SessionWithCompactionInternals = {
@@ -1027,5 +1031,59 @@ describe("AgentSession compaction characterization", () => {
 
 		expect(belowThresholdSpy).not.toHaveBeenCalled();
 		expect(disabledSpy).not.toHaveBeenCalled();
+	});
+
+	// #80: the boundary is `contextTokens > contextWindow - reserveTokens`, not `>=`
+	describe("threshold boundary", () => {
+		const reserveTokens = 400;
+		const sessionDirs: string[] = [];
+
+		afterEach(() => {
+			while (sessionDirs.length > 0) {
+				rmSync(sessionDirs.pop() as string, { recursive: true, force: true });
+			}
+		});
+
+		async function runPrompt(contextWindow: number): Promise<{ harness: Harness; usage: number }> {
+			const sessionDir = mkdtempSync(join(tmpdir(), "pi-compaction-boundary-"));
+			sessionDirs.push(sessionDir);
+			const harness = await createHarness({
+				models: [{ id: "faux-1", contextWindow, maxTokens: 100 }],
+				settings: {
+					compaction: {
+						enabled: true,
+						reserveTokens,
+						keepRecentTokens: 1,
+						targetTokens: "contextWindow",
+					},
+				},
+				sessionManager: SessionManager.create(sessionDir, sessionDir),
+			});
+			harnesses.push(harness);
+			harness.setResponses([fauxAssistantMessage("boundary response"), fauxAssistantMessage("summary response")]);
+			await harness.session.prompt("fill the context");
+			// Read the prompt's own response from events: compaction rewrites session.messages.
+			const assistant = harness
+				.eventsOfType("message_end")
+				.find((event) => event.message.role === "assistant")?.message;
+			if (assistant?.role !== "assistant") throw new Error("expected an assistant message");
+			return { harness, usage: assistant.usage.totalTokens };
+		}
+
+		it("compacts only when usage exceeds contextWindow - reserveTokens", async () => {
+			// Measure usage from a first run: core may rewrite scripted faux usage.
+			const { usage } = await runPrompt(1_000_000);
+			expect(usage).toBeGreaterThan(0);
+
+			const atThreshold = await runPrompt(usage + reserveTokens);
+			expect(atThreshold.usage).toBe(usage);
+			expect(atThreshold.harness.eventsOfType("compaction_start")).toEqual([]);
+
+			const overThreshold = await runPrompt(usage + reserveTokens - 1);
+			expect(overThreshold.usage).toBe(usage);
+			expect(overThreshold.harness.eventsOfType("compaction_start")).toEqual([
+				{ type: "compaction_start", reason: "threshold" },
+			]);
+		});
 	});
 });

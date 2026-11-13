@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import prices from "../src/catalog-feed-prices.json" with { type: "json" };
-import { catalogueCost, estimateTokenCost, getAiGatewayCost, openRouterCost } from "../src/catalog-pricing.ts";
+import {
+	catalogueCost,
+	estimateTokenCost,
+	getAiGatewayCost,
+	getAiGatewayEvaluationCost,
+	openRouterCost,
+} from "../src/catalog-pricing.ts";
 import type { RefreshModelsContext } from "../src/models.ts";
 import { personalizeOpenRouterCatalog } from "../src/providers/openrouter.ts";
 import type { AnyModel, Model, ModelCost } from "../src/types.ts";
@@ -89,9 +95,36 @@ describe("rate parsing accepts only decimal and scientific notation", () => {
 		expect(getAiGatewayCost({ input: value, output: "0.000001" }).input).toBe(0);
 	});
 
-	it.each(RADIX)("getAiGatewayCost bracket %s falls back to 0 like any malformed rate", (value) => {
+	it.each(RADIX)("getAiGatewayCost bracket %s keeps the tier's base rate like OpenRouter", (value) => {
 		const cost = getAiGatewayCost({ input: "0.000001", input_tiers: [{ min: 1000, cost: value }] });
-		expect(cost.tiers?.[0].input).toBe(0);
+		expect(cost.tiers?.[0].input).toBe(1);
+	});
+
+	it.each(["abc", "-1", ""])("getAiGatewayCost bracket %j keeps the tier's base rate", (value) => {
+		const cost = getAiGatewayCost({ input: "0.000001", input_tiers: [{ min: 1000, cost: value }] });
+		expect(cost.tiers?.[0].input).toBe(1);
+	});
+
+	it.each([
+		["1abc", "-1"],
+		["0x10", "Infinity"],
+		["", "junk"],
+	])("getAiGatewayEvaluationCost input %j output %j falls back to 0", (input, output) => {
+		expect(getAiGatewayEvaluationCost({ input, output })).toEqual({
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+		});
+	});
+
+	it("getAiGatewayEvaluationCost converts valid rates per million and never invents cache rates", () => {
+		expect(getAiGatewayEvaluationCost({ input: "1e-7", output: "0.000002" })).toEqual({
+			input: 0.1,
+			output: 2,
+			cacheRead: 0,
+			cacheWrite: 0,
+		});
 	});
 
 	it.each(RADIX)("OpenRouter feed prompt %s is never certified", (value) => {
@@ -252,5 +285,31 @@ describe("live OpenRouter key prices", () => {
 		} finally {
 			globalThis.fetch = original;
 		}
+	});
+});
+
+// A self-declared `origin` is not proof of a live price: only the OpenRouter personalization path sets it.
+describe("provider-live origin is OpenRouter-only", () => {
+	const claimed = (): ModelCost => ({
+		...legacy,
+		assessment: { status: "unknown", reason: "x", origin: "provider-live" },
+	});
+
+	it("still corrects a non-OpenRouter row that carries the mark", () => {
+		const cost = catalogueCost({
+			provider: "vercel-ai-gateway",
+			id: "anthropic/claude-opus-4.5",
+			type: "chat",
+			cost: claimed(),
+		});
+		expect(cost.assessment?.status).toBe("verified");
+		expect([cost.input, cost.output]).toEqual([5, 25]);
+	});
+
+	it("keeps an OpenRouter row that carries the mark", () => {
+		const previous = claimed();
+		expect(catalogueCost({ provider: "openrouter", id: "synthetic/not-in-feed", type: "chat", cost: previous })).toBe(
+			previous,
+		);
 	});
 });

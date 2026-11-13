@@ -104,7 +104,9 @@ Source audit, checked 2026-11-12:
   not assigned to them.
 - Provider rate strings are plain decimal or scientific notation (`0.0000001`, `1e-7`) or
   finite non-negative numbers. Anything else, including radix literals such as `0x10`, is
-  malformed: compatibility arithmetic falls back to 0 and the feed is never certified.
+  malformed: compatibility arithmetic falls back to 0 and the feed is never certified. A
+  malformed AI Gateway bracket rate keeps the tier's base rate, as for OpenRouter overrides.
+  AI Gateway evaluation (classifier) rates use the same parser.
 
 Generation and precedence:
 
@@ -119,7 +121,8 @@ Generation and precedence:
   It is stored with `assessment: {status: "unknown", origin: "provider-live"}`, including
   after an offline restore, and catalogue corrections keep it even for an id in the archived
   feed. It is therefore billed by `calculateCost` but never certified by `estimateTokenCost`.
-  Static built-in and pi.dev rows carry no such mark and are still corrected to the feed.
+  Only OpenRouter rows are honoured, and the mark is stripped from fetched pi.dev rows, so a
+  built-in, pi.dev or non-OpenRouter row that claims it is still corrected to the feed.
   Pricing projection preserves stable model identities across repeated reads without
   mutating source entries; in-place metadata and price updates are still observed.
 - Explicit `models.json` cost overrides are topmost. An override without its own assessment

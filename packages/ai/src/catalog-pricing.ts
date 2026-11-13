@@ -235,12 +235,17 @@ export function getAiGatewayCost(pricing: AiGatewayPricing | undefined): ModelCo
 				const bracket = pricing?.[field.tiers]?.find(
 					(candidate) => (candidate.min ?? 0) <= start && (candidate.max === undefined || start < candidate.max),
 				);
-				if (bracket?.cost !== undefined) tier[field.rate] = perMillion(bracket.cost);
+				if (bracket?.cost !== undefined) tier[field.rate] = perMillion(bracket.cost, tier[field.rate]);
 			}
 			return tier;
 		});
 
 	return tiers.length > 0 ? { ...base, tiers } : base;
+}
+
+/** Classifier (evaluation) rates: input and output only, through the shared strict rate parser. */
+export function getAiGatewayEvaluationCost(pricing: Pick<AiGatewayPricing, "input" | "output"> | undefined): ModelCost {
+	return { input: perMillion(pricing?.input), output: perMillion(pricing?.output), cacheRead: 0, cacheWrite: 0 };
 }
 
 // Plain decimal or scientific notation only. `Number()` also reads "0x10", "0b10" and "0o10" as
@@ -454,8 +459,15 @@ export function catalogueCost(model: Pick<AnyModel, "provider" | "id" | "type" |
 			? BOUNDED_ANTHROPIC[model.id]
 			: undefined;
 	const previous = model.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
-	// A price the provider reported live for the caller's credential is not a stale catalogue row.
-	if (previous.assessment?.status === "unknown" && previous.assessment.origin === "provider-live") return previous;
+	// A price OpenRouter reported live for the caller's credential is not a stale catalogue row. Only that
+	// provider's personalization sets the mark, so a self-declared one on any other row is ignored.
+	if (
+		model.provider === "openrouter" &&
+		previous.assessment?.status === "unknown" &&
+		previous.assessment.origin === "provider-live"
+	) {
+		return previous;
+	}
 	const feed =
 		(type === "chat" || type === "classifier") &&
 		(model.provider === "openrouter" || model.provider === "vercel-ai-gateway")

@@ -65,7 +65,17 @@ function parseCatalog(providerId: string, value: unknown): AnyModel[] {
 	return entries
 		.filter((entry): entry is Record<string, unknown> => typeof entry === "object" && entry !== null && "id" in entry)
 		.filter(isSupportedModelType)
-		.map((model) => ({ ...model, provider: providerId }) as AnyModel);
+		.map((model) => ({ ...withoutLiveOrigin(model), provider: providerId }) as AnyModel);
+}
+
+/** pi.dev rows are catalogue data: a `provider-live` mark is only ever set locally by OpenRouter personalization. */
+function withoutLiveOrigin(model: Record<string, unknown>): Record<string, unknown> {
+	const { cost } = model;
+	if (typeof cost !== "object" || cost === null || !("assessment" in cost)) return model;
+	const { assessment } = cost;
+	if (typeof assessment !== "object" || assessment === null || !("origin" in assessment)) return model;
+	const { origin: _origin, ...rest } = assessment;
+	return { ...model, cost: { ...cost, assessment: rest } };
 }
 
 /** Read a successful pi.dev catalog response. A missing or invalid Last-Modified header is 0. */

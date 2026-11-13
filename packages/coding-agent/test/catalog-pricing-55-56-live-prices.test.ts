@@ -176,6 +176,36 @@ describe("live OpenRouter key prices", () => {
 		}
 	});
 
+	it("strips a provider-live mark from a pi.dev row, which is still corrected to the feed", async () => {
+		const marked = {
+			...legacy(FEED_ID),
+			cost: {
+				input: 999,
+				output: 999,
+				cacheRead: 0,
+				cacheWrite: 0,
+				assessment: { status: "unknown", reason: "x", origin: "provider-live" },
+			},
+		};
+		vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+			Response.json({ models: [marked] }, { headers: { "last-modified": new Date(2e12).toUTCString() } }),
+		);
+		const provider = withRemoteCatalog(baseProvider([]), CATALOG_BASE, 1);
+		await provider.refreshModels?.({
+			credential: { type: "api_key", key: SYNTHETIC_KEY },
+			allowNetwork: true,
+			force: true,
+			signal: new AbortController().signal,
+			publish: async (publication) => {
+				publication.update?.();
+				return true;
+			},
+		});
+		const model = byId(provider, FEED_ID);
+		expect(model?.cost.input).toBe(0.1);
+		expect(model?.cost.assessment?.status).toBe("verified");
+	});
+
 	it("loses to a topmost models.json user override", async () => {
 		const home = await mkdtemp(join(tmpdir(), "live-price-"));
 		try {

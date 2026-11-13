@@ -16,6 +16,7 @@
  * pre-commit gate) runs it first and fails loudly.
  */
 
+import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -29,17 +30,13 @@ const MODEL_DATA_STAMP = "pi-model-data-release";
 /** Repository root of the checkout (or worktree) this script belongs to. */
 export const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
-function readJson(path) {
-	return JSON.parse(readFileSync(path, "utf8"));
-}
-
 function git(root, args) {
 	return execFileSync("git", ["-C", root, ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
 }
 
 /** Release version whose published model data this checkout is pinned to (same as CI). */
 export function releaseVersion(root) {
-	return readJson(join(root, "packages/coding-agent/package.json")).version;
+	return JSON.parse(readFileSync(join(root, "packages/coding-agent/package.json"), "utf8")).version;
 }
 
 /** Per-worktree file recording which release the hydrated model data came from. */
@@ -49,6 +46,18 @@ export function modelDataStampPath(root) {
 
 function modelDataDir(root) {
 	return join(root, "packages/ai/src/providers/data");
+}
+
+/** Stamp content: the release plus the digest of the restored manifest, so later regeneration invalidates it. */
+function expectedStamp(root) {
+	const manifest = join(modelDataDir(root), ".manifest.json");
+	const digest = existsSync(manifest) ? createHash("sha256").update(readFileSync(manifest)).digest("hex") : "missing";
+	return `${releaseVersion(root)} ${digest}`;
+}
+
+function stampIsCurrent(root) {
+	const stamp = modelDataStampPath(root);
+	return existsSync(stamp) && readFileSync(stamp, "utf8").trim() === expectedStamp(root);
 }
 
 /** Directory git will run hooks from for this worktree, or undefined when unset. */
@@ -80,23 +89,18 @@ export function findProblems(root) {
 	else if (lstatSync(modules).isSymbolicLink()) problems.push("node_modules is a symlink (borrowed from another checkout)");
 	else if (!existsSync(join(modules, "@biomejs/wasm-nodejs"))) problems.push("node_modules lacks @biomejs/wasm-nodejs");
 
-	const stamp = modelDataStampPath(root);
-	const expected = releaseVersion(root);
 	if (!existsSync(modelDataDir(root))) problems.push("packages/ai/src/providers/data is missing");
-	else if (!existsSync(stamp) || readFileSync(stamp, "utf8").trim() !== expected) {
-		problems.push(`model data was not restored from the ${AI_PACKAGE}@${expected} release`);
+	else if (!stampIsCurrent(root)) {
+		problems.push(`model data was not restored from the ${AI_PACKAGE}@${releaseVersion(root)} release (or changed since)`);
 	}
 	return problems;
 }
 
 function run(root, command, args, env = {}) {
 	console.log(`$ ${command} ${args.join(" ")}`);
-	execFileSync(command, args, { cwd: root, stdio: "inherit", env: { ...process.env, ...env } });
-}
-
-function runNpm(root, args, env = {}) {
-	console.log(`$ npm ${args.join(" ")}`);
-	execNpmSync(args, { cwd: root, stdio: "inherit", env: { ...process.env, ...env } });
+	const options = { cwd: root, stdio: "inherit", env: { ...process.env, ...env } };
+	if (command === "npm") execNpmSync(args, options);
+	else execFileSync(command, args, options);
 }
 
 function installDependencies(root) {
@@ -113,7 +117,7 @@ function installDependencies(root) {
 		return;
 	}
 	// Cache first, network only for what the cache lacks. Integrity comes from the lockfile.
-	runNpm(root, ["ci", "--ignore-scripts", "--prefer-offline"]);
+	run(root, "npm", ["ci", "--ignore-scripts", "--prefer-offline"]);
 }
 
 function installHuskyShim(root) {
@@ -125,8 +129,7 @@ function installHuskyShim(root) {
 
 function restoreModelData(root) {
 	const version = releaseVersion(root);
-	const stamp = modelDataStampPath(root);
-	if (existsSync(modelDataDir(root)) && existsSync(stamp) && readFileSync(stamp, "utf8").trim() === version) {
+	if (existsSync(modelDataDir(root)) && stampIsCurrent(root)) {
 		console.log(`model data already restored from ${AI_PACKAGE}@${version}`);
 		return;
 	}
@@ -154,16 +157,17 @@ function restoreModelData(root) {
 	}
 	// Fail loudly if the release data does not match what this checkout's source expects.
 	run(root, process.execPath, [join(root, "packages/ai/scripts/check-model-data.ts")]);
-	writeFileSync(stamp, `${version}\n`);
+	writeFileSync(modelDataStampPath(root), `${expectedStamp(root)}\n`);
 }
 
 function buildDaemon(root) {
-	const args = ["build", "--manifest-path", "packages/env/daemon/Cargo.toml", "--locked"];
+	// Same script as CI. Cargo honors CARGO_NET_OFFLINE; retry online only for crates the cache lacks.
+	const args = ["run", "build:daemon", "--workspace", "packages/env"];
 	try {
-		run(root, "cargo", [...args, "--offline"]);
+		run(root, "npm", args, { CARGO_NET_OFFLINE: "true" });
 	} catch {
-		console.log("offline cargo build failed; retrying with the network for missing crates");
-		run(root, "cargo", args);
+		console.log("offline daemon build failed; retrying with the network for missing crates");
+		run(root, "npm", args);
 	}
 }
 

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -24,7 +25,8 @@ function makeReady(root) {
 	writeFileSync(join(root, ".husky/_/pre-commit"), "");
 	mkdirSync(join(root, "node_modules/@biomejs/wasm-nodejs"), { recursive: true });
 	mkdirSync(join(root, "packages/ai/src/providers/data"), { recursive: true });
-	writeFileSync(modelDataStampPath(root), "9.9.9\n");
+	writeFileSync(join(root, "packages/ai/src/providers/data/.manifest.json"), "{}");
+	writeFileSync(modelDataStampPath(root), `9.9.9 ${createHash("sha256").update("{}").digest("hex")}\n`);
 }
 
 // #85: a fresh worktree has no .husky/_, so git silently runs no pre-commit hook.
@@ -53,8 +55,15 @@ test("rejects borrowed node_modules symlinks", (t) => {
 test("rejects model data from another release", (t) => {
 	const root = makeRepo(t);
 	makeReady(root);
-	writeFileSync(modelDataStampPath(root), "9.9.8\n");
+	writeFileSync(modelDataStampPath(root), "9.9.8 deadbeef\n");
 	assert.match(findProblems(root).join("\n"), /not restored from the @earendil-works\/pi-ai@9\.9\.9 release/);
+});
+
+test("rejects model data regenerated after the restore", (t) => {
+	const root = makeRepo(t);
+	makeReady(root);
+	writeFileSync(join(root, "packages/ai/src/providers/data/.manifest.json"), '{"live":true}');
+	assert.match(findProblems(root).join("\n"), /changed since/);
 });
 
 test("reports an unset core.hooksPath", (t) => {
@@ -70,6 +79,22 @@ test("check exits non-zero locally and is skipped in CI", () => {
 	// The real checkout may or may not be set up; only the CI escape hatch is deterministic.
 	const ci = spawnSync(process.execPath, [script, "check"], { encoding: "utf8", env: { ...env, CI: "true" } });
 	assert.equal(ci.status, 0);
+	// #85: a worktree without the shim must fail the gate with exit 1 and the fix.
+	const root = mkdtempSync(join(tmpdir(), "pi-worktree-cli-"));
+	try {
+		execFileSync("git", ["init", "-q", root]);
+		mkdirSync(join(root, "scripts"));
+		mkdirSync(join(root, "packages/coding-agent"), { recursive: true });
+		copyFileSync(script, join(root, "scripts/worktree.mjs"));
+		copyFileSync(fileURLToPath(new URL("./npm-command.mjs", import.meta.url)), join(root, "scripts/npm-command.mjs"));
+		writeFileSync(join(root, "packages/coding-agent/package.json"), JSON.stringify({ version: "9.9.9" }));
+		execFileSync("git", ["-C", root, "config", "core.hooksPath", ".husky/_"]);
+		const local = spawnSync(process.execPath, [join(root, "scripts/worktree.mjs"), "check"], { encoding: "utf8", env });
+		assert.equal(local.status, 1);
+		assert.match(local.stderr, /npm run worktree:setup/);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
 	const usage = spawnSync(process.execPath, [script, "bogus"], { encoding: "utf8", env });
 	assert.equal(usage.status, 2);
 });

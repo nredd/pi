@@ -42,7 +42,7 @@
 
 ## Fresh Worktrees
 
-- Run `npm run worktree:setup` once in every new `git worktree`, before anything else. It is idempotent and does: `npm ci --ignore-scripts --prefer-offline`, the husky shim (`.husky/_`), the model data of the published `@earendil-works/pi-ai@<version>` release (same source as CI, never live data), and `npm run build:daemon` for `packages/env`. Use `--skip-daemon` via `node scripts/worktree.mjs setup --skip-daemon` without a Rust toolchain.
+- Run `npm run worktree:setup` once in every new `git worktree`, before anything else. It is idempotent and does: `npm ci --ignore-scripts --prefer-offline`, the husky shim (`.husky/_`), the model data of the published `@earendil-works/pi-ai@<version>` release (same source as CI, never live data; stamped, so a later regeneration fails `worktree:check`), and the `packages/env` daemon via its `build:daemon` script (cargo offline first, network only for missing crates). Installs use the npm cache first, so the network is touched only for what the cache lacks. Use `--skip-daemon` via `node scripts/worktree.mjs setup --skip-daemon` without a Rust toolchain.
 - Never borrow or symlink `node_modules`, `packages/ai/src/providers/data`, or `.husky/_` from another worktree.
 - `core.hooksPath=.husky/_` is relative and shared. Where `.husky/_` is missing, git runs NO hook and cannot warn. `npm run check` (and `npm run worktree:check`) fails loudly in that case, so run `npm run check` before committing.
 - Run Vitest from the package directory, not the repo root (root runs stale `dist`).

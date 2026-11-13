@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { closeSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { closeSync, fchmodSync, fstatSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -35,9 +35,13 @@ function launch(
 ) {
 	const root = realpathSync(mkdtempSync(join(tmpdir(), "pi-trace-")));
 	const file = join(root, "trace.jsonl");
-	const fd = openSync(file, "wx+", options.mode ?? 0o600);
+	const mode = options.mode ?? 0o600;
+	const fd = openSync(file, "wx+", mode);
 	const separateFd = options.separateOpen ? openSync(file, "r+") : undefined;
 	try {
+		// openSync applies the caller umask; set the requested mode explicitly (#77).
+		fchmodSync(fd, mode);
+		expect(fstatSync(fd).mode & 0o777).toBe(mode);
 		const stdio: Array<"ignore" | "pipe" | number> = ["ignore", "pipe", "pipe", options.pipe ? "pipe" : fd];
 		if (options.standardStream !== undefined) stdio[options.standardStream] = separateFd ?? fd;
 		const argv =
@@ -210,6 +214,15 @@ describe("startup trace producer", () => {
 	});
 	it("rejects nonprivate regular files", () => {
 		expect(launch("valid", {}, { mode: 0o644 }).raw).toBe("");
+	});
+	it("rejects nonprivate regular files under a strict umask", () => {
+		// #77: openSync("wx+", 0o644) yields 0o600 under umask 0077, which the producer correctly accepts.
+		const previous = process.umask(0o077);
+		try {
+			expect(launch("valid", {}, { mode: 0o644 }).raw).toBe("");
+		} finally {
+			process.umask(previous);
+		}
 	});
 	it.each(["null", "[]", "{", '{"x":"PRIVATE"}', '{"x":"ext_000","y":"ext_000"}', "x".repeat(16385)])(
 		"rejects malformed alias manifests",

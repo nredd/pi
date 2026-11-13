@@ -25,3 +25,5 @@ which remains OS-scheduling-dependent. It failed locally on the original impleme
 passes with the retained baseline. Separate controlled polling tests cover errors, cleanup,
 non-overlap and late callbacks after disposal or a working-directory change. Neither test
 changes the original footer test's deadlines, exact-count assertion or failure diagnostics.
+
+The startup trace launch fixture creates its trace file with `openSync`, which applies the caller umask. `startup-trace.test.ts` therefore sets the requested mode with `fchmodSync` and checks it with `fstatSync` before launching. Without that, the nonprivate-file case ([#77](https://github.com/nredd/pi/issues/77)) became a private `0600` file under `umask 0077`, e.g. in `./test.sh`, and the producer correctly traced it. Production behavior is unchanged.

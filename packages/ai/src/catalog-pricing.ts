@@ -151,6 +151,22 @@ function brokerCost(provider: string, id: string, previous: ModelCost): ModelCos
 }
 
 // Rates and bounds are one contract so a dated alias cannot acquire only one of them.
+const HAIKU_45 = {
+	cost: { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25, cacheWrite1h: 2 },
+	maxContextTokens: 200000,
+	maxOutputTokens: 64000,
+};
+const OPUS_45 = {
+	cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25, cacheWrite1h: 10 },
+	maxContextTokens: 200000,
+	maxOutputTokens: 64000,
+};
+const SONNET_45 = {
+	cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75, cacheWrite1h: 6 },
+	maxContextTokens: 200000,
+	maxOutputTokens: 64000,
+	retiredOn: "2026-11-30",
+};
 const BOUNDED_ANTHROPIC: Record<
 	string,
 	{ cost: ModelCost; maxContextTokens: number; maxOutputTokens: number; retiredOn?: string }
@@ -160,38 +176,12 @@ const BOUNDED_ANTHROPIC: Record<
 		maxContextTokens: 1000000,
 		maxOutputTokens: 128000,
 	},
-	"claude-haiku-4-5": {
-		cost: { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25, cacheWrite1h: 2 },
-		maxContextTokens: 200000,
-		maxOutputTokens: 64000,
-	},
-	"claude-haiku-4-5-20251001": {
-		cost: { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25, cacheWrite1h: 2 },
-		maxContextTokens: 200000,
-		maxOutputTokens: 64000,
-	},
-	"claude-opus-4-5": {
-		cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25, cacheWrite1h: 10 },
-		maxContextTokens: 200000,
-		maxOutputTokens: 64000,
-	},
-	"claude-opus-4-5-20251101": {
-		cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25, cacheWrite1h: 10 },
-		maxContextTokens: 200000,
-		maxOutputTokens: 64000,
-	},
-	"claude-sonnet-4-5": {
-		cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75, cacheWrite1h: 6 },
-		maxContextTokens: 200000,
-		maxOutputTokens: 64000,
-		retiredOn: "2026-11-30",
-	},
-	"claude-sonnet-4-5-20250929": {
-		cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75, cacheWrite1h: 6 },
-		maxContextTokens: 200000,
-		maxOutputTokens: 64000,
-		retiredOn: "2026-11-30",
-	},
+	"claude-haiku-4-5": HAIKU_45,
+	"claude-haiku-4-5-20251001": HAIKU_45,
+	"claude-opus-4-5": OPUS_45,
+	"claude-opus-4-5-20251101": OPUS_45,
+	"claude-sonnet-4-5": SONNET_45,
+	"claude-sonnet-4-5-20250929": SONNET_45,
 };
 
 /** Apply narrow official corrections before user overrides, never infer a provider from a model name. */

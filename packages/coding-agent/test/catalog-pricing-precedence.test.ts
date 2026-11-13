@@ -2,6 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+	type AnyModel,
 	createProvider,
 	InMemoryModelsStore,
 	type Model,
@@ -85,6 +86,54 @@ describe("catalogue pricing precedence", () => {
 		});
 		expect(globalThis.fetch).not.toHaveBeenCalled();
 	});
+	it.each([false, true])(
+		"corrects a successful personalized network refresh but preserves newer assessment=%s",
+		async (newer) => {
+			vi.spyOn(globalThis, "fetch").mockResolvedValue(
+				new Response(JSON.stringify([{ ...publicModel, cost: { ...publicModel.cost, input: 999 } }]), {
+					headers: { "last-modified": "Thu, 12 Nov 2026 00:00:00 GMT" },
+				}),
+			);
+			const personalize = vi.fn(async (models: readonly AnyModel[]) => {
+				expect(models[0]?.cost.input).toBe(2);
+				return models.map((model) => ({
+					...model,
+					cost: {
+						...model.cost,
+						input: 7,
+						...(newer
+							? {
+									assessment: {
+										status: "verified" as const,
+										source: "https://example.test/pricing",
+										checkedAt: "2026-11-13",
+										unit: "usd-per-million-tokens" as const,
+										conditions: "Synthetic newer assessment",
+									},
+								}
+							: {}),
+					},
+				}));
+			});
+			const provider = withPersonalizedCatalog(builtin(), personalize, "https://example.test", 1);
+			const store = new InMemoryModelsStore();
+			await refresh(provider, store, true);
+			expect(personalize).toHaveBeenCalledOnce();
+			expect(globalThis.fetch).toHaveBeenCalledOnce();
+			expect(provider.getModels()[0]?.cost.input).toBe(newer ? 7 : 2);
+			const restored = withPersonalizedCatalog(
+				builtin(),
+				async () => {
+					throw new Error("Offline refresh must not personalize");
+				},
+				"https://example.test",
+				1,
+			);
+			await refresh(restored, store, false);
+			expect(restored.getModels()[0]?.cost.input).toBe(newer ? 7 : 2);
+			expect(globalThis.fetch).toHaveBeenCalledOnce();
+		},
+	);
 	it("corrects fresh remote costs before the topmost explicit override", async () => {
 		vi.spyOn(globalThis, "fetch").mockResolvedValue(
 			new Response(JSON.stringify([publicModel]), { headers: { "last-modified": "Thu, 12 Nov 2026 00:00:00 GMT" } }),

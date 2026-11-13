@@ -58,6 +58,16 @@ it("carries official corrections and explicit unknowns into bundled shards and p
 		expect(
 			classifiers.typesafe.find((model: { type: string }) => model.type === "classifier").cost.assessment.status,
 		).toBe("unknown");
+		// nredd/pi#46: release hydration is a separate mode, with no public JSON output.
+		const hydrated = spawnSync(
+			process.execPath,
+			["--import", pathToFileURL(preload).href, "scripts/generate-models.ts", "--data-only"],
+			{ cwd: isolated, encoding: "utf8", timeout: 20000, env: { HOME: root, PATH: process.env.PATH } },
+		);
+		expect(hydrated.status, `${hydrated.stdout}\n${hydrated.stderr}`).toBe(0);
+		const hydratedShard = JSON.parse(readFileSync(join(isolated, "src/providers/data/openai.json"), "utf8"));
+		expect(hydratedShard["openai-responses"]["chat:gpt-6.1-sol"].cost).toEqual(cost);
+		expect(JSON.parse(readFileSync(join(root, "catalog/models.json"), "utf8"))).toEqual(legacy);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}

@@ -19,15 +19,27 @@ it("retains exact feed assessments and unavailable categories through both gener
 			id,
 			name: id,
 			supported_parameters: ["tools"],
-			pricing: prices.openrouter[id as keyof typeof prices.openrouter].pricing,
+			pricing: prices.openrouter[`chat:${id}` as keyof typeof prices.openrouter].pricing,
 		}));
 		const gateway = ["alibaba/qwen-3-14b", "openai/gpt-6.1-sol"].map((id) => ({
 			id,
 			name: id,
 			type: "language",
 			tags: ["tool-use"],
-			pricing: prices["vercel-ai-gateway"][id as keyof (typeof prices)["vercel-ai-gateway"]].pricing,
+			pricing: prices["vercel-ai-gateway"][`chat:${id}` as keyof (typeof prices)["vercel-ai-gateway"]].pricing,
 		}));
+		const routerClassifier = {
+			id: "cloudflare/clef",
+			name: "Public Clef",
+			architecture: { output_modalities: ["decisions"] },
+			pricing: prices.openrouter["classifier:cloudflare/clef"].pricing,
+		};
+		const gatewayClassifier = {
+			id: "convaiinnovations/laya",
+			name: "Public Laya",
+			type: "evaluation",
+			pricing: prices["vercel-ai-gateway"]["classifier:convaiinnovations/laya"].pricing,
+		};
 		const preload = join(root, "offline.mjs");
 		writeFileSync(
 			preload,
@@ -35,8 +47,9 @@ it("retains exact feed assessments and unavailable categories through both gener
 			const url = String(input);
 			if (url === 'https://models.dev/api.json') return Response.json({});
 			if (url.includes('models.dev/models.json')) return Response.json({'typesafe/jev-latest':{id:'jev-latest',type:'decision',name:'Public Jev'}});
+			if (url.includes('openrouter.ai/api/v1/models?output_modalities=decisions')) return Response.json({data:${JSON.stringify([routerClassifier])}});
 			if (url.includes('openrouter.ai/api/v1/models')) return Response.json({data:${JSON.stringify(router)}});
-			if (url === 'https://ai-gateway.vercel.sh/v1/models') return Response.json({data:${JSON.stringify(gateway)}});
+			if (url === 'https://ai-gateway.vercel.sh/v1/models') return Response.json({data:${JSON.stringify([...gateway, gatewayClassifier])}});
 			throw new Error('Offline synthetic input only');
 		};`,
 		);
@@ -55,6 +68,20 @@ it("retains exact feed assessments and unavailable categories through both gener
 		};
 		run(["--json-output", join(root, "catalog")]);
 		const legacy = JSON.parse(readFileSync(join(root, "catalog/models.json"), "utf8"));
+		const all = JSON.parse(readFileSync(join(root, "catalog/models.all.json"), "utf8"));
+		for (const [provider, id, rate] of [
+			["openrouter", routerClassifier.id, 0.192],
+			["vercel-ai-gateway", gatewayClassifier.id, 0.0105],
+		] as const) {
+			const classifier = all[provider].find(
+				(model: { id: string; type: string }) => model.id === id && model.type === "classifier",
+			);
+			expect(classifier.cost).toMatchObject({
+				input: rate,
+				assessment: { status: "verified", unavailable: ["cacheRead", "cacheWrite"] },
+			});
+		}
+
 		for (const [provider, ids] of [
 			["openrouter", router.map((model) => model.id)],
 			["vercel-ai-gateway", gateway.map((model) => model.id)],
@@ -85,6 +112,14 @@ it("retains exact feed assessments and unavailable categories through both gener
 				Object.values(group as Record<string, { id: string; cost: unknown }>),
 			);
 			for (const id of ids) expect(models.find((model) => model.id === id)?.cost).toEqual(legacy[provider][id].cost);
+		}
+		for (const [provider, id] of [
+			["openrouter", routerClassifier.id],
+			["vercel-ai-gateway", gatewayClassifier.id],
+		] as const) {
+			const shard = JSON.parse(readFileSync(join(isolated, `src/providers/data/${provider}.json`), "utf8"));
+			const actual = shard["typesafe-system-one"][`classifier:${id}`];
+			expect(actual.cost).toEqual(all[provider].find((model: { id: string }) => model.id === id).cost);
 		}
 		expect(JSON.parse(readFileSync(join(root, "catalog/models.json"), "utf8"))).toEqual(legacy);
 	} finally {

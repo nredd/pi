@@ -4,9 +4,9 @@ Published feed token baselines, checked 2026-11-13:
   116-assessment archive baseline in [the coverage table](pricing-coverage.md) is unchanged.
   Source review of 1,714 operations is not certification of their prices.
 - `packages/ai/src/catalog-feed-prices.json` retains source-shaped pricing and request limits for exact archived
-  chat identities intersected with the official feeds. OpenRouter entries must advertise a
-  supported synchronous chat endpoint; a batches-only selector is not a synchronous chat
-  contract. No new catalogue identities, generated shards or published assets are introduced.
+  chat and classifier identities intersected with the official feeds, keyed by the existing
+  `type:id` operation convention. OpenRouter entries must advertise a supported synchronous
+  chat or decisions endpoint; a batches-only selector is not a synchronous chat contract. No new catalogue identities, generated shards or published assets are introduced.
 - OpenRouter source [here](https://openrouter.ai/api/v1/models?output_modalities=all), SHA-256
   `16b6630b709efa5cfe6562f7b4e377e59ce2ee116087a5cbe668f7210ea999b6`;
   schema [here](https://openrouter.ai/docs/api-reference/list-available-models).
@@ -19,11 +19,17 @@ Published feed token baselines, checked 2026-11-13:
 
 Supported slices:
 
-- Exact matched synchronous chat fixed-token and request-wide prompt-tier contracts use the
+- Exact matched synchronous chat and classifier fixed-token and request-wide prompt-tier contracts use the
   existing `catalogueCost` seam. Both generation modes and runtime projection use the same
   dated corrections before explicit user overrides. Newer assessed catalogues are preserved.
   Exact feed-published context and output limits populate the existing assessment envelope;
-  the merged estimator rejects over-limit requests and evaluation before the check date.
+  OpenRouter selects its top-provider context like the existing catalogue normalizer, rather
+  than a larger outer context. Missing/zero context limits remain unknown. The merged estimator
+  rejects over-limit requests and evaluation before the check date.
+- Exact classifier operations such as OpenRouter `cloudflare/clef` and `cloudflare/clef-flash`
+  admit input rates 0.192 and 0.019 USD/million tokens, respectively, with published zero output
+  rates. Gateway `convaiinnovations/laya` admits input 0.0105 and output zero. Missing cache
+  categories remain unavailable. These contracts do not promote the same IDs as chat models.
 - The existing source normalizers now live in `catalog-pricing.ts`; their original provider
   and generator paths re-export them. This keeps the `models` entry point provider-free and
   within its existing import-graph budget, without copying conversion logic.
@@ -48,8 +54,10 @@ Supported slices:
 Remaining unknowns and excluded charges:
 
 - UTC/weekdays/overnight overrides, provider-varying or peak contracts, image/audio and other
-  non-token rates, malformed/negative sentinel prices, missing exact IDs and non-chat operations
-  remain unknown. Gapped, overlapping, finite-only or inconsistent Gateway brackets are not
+  non-token rates, malformed/negative sentinel prices, missing exact operation IDs and image operations
+  remain unknown. Explicit non-Standard Gateway selectors, e.g. `openai/gpt-4.1-fast`,
+  `anthropic/claude-opus-5.5-fast` and `deepseek/deepseek-v4.1-flash-fast`, are excluded by
+  exact source identity, not stripped or relabelled as Standard. Gapped, overlapping, finite-only or inconsistent Gateway brackets are not
   flattened into a complete contract. Missing categories cannot become free through legacy zeros.
 - Each admitted assessment is a chosen published default/Standard global **token baseline**.
   Search charges, image/request counters, regional routes, Fast/service-tier prices and optional

@@ -1,11 +1,78 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createProvider, estimateTokenCost, InMemoryModelsStore, type Model } from "@earendil-works/pi-ai";
+import {
+	type ClassifierModel,
+	createProvider,
+	estimateTokenCost,
+	InMemoryModelsStore,
+	type Model,
+} from "@earendil-works/pi-ai";
 import { expect, it, vi } from "vitest";
 import { ModelConfig } from "../src/core/model-config.ts";
 import { composeModelProvider } from "../src/core/provider-composer.ts";
 import { withPersonalizedCatalog, withRemoteCatalog } from "../src/core/remote-catalog-provider.ts";
+
+// nredd/pi#55/#56: classifier operations use the same runtime projection and explicit override precedence.
+it.each([false, true])(
+	"projects exact classifier prices before user overrides, personalized=%s",
+	async (personalized) => {
+		const home = await mkdtemp(join(tmpdir(), "classifier-feed-precedence-"));
+		try {
+			const model: ClassifierModel<"typesafe-system-one"> = {
+				type: "classifier",
+				provider: "openrouter",
+				id: "cloudflare/clef",
+				name: "Synthetic legacy classifier",
+				api: "typesafe-system-one",
+				baseUrl: "https://example.test",
+				input: ["text"],
+				contextWindow: 65537,
+				cost: { input: 999, output: 0, cacheRead: 0, cacheWrite: 0 },
+			};
+			const base = createProvider({
+				id: "openrouter",
+				models: [model],
+				auth: {
+					apiKey: {
+						name: "Synthetic",
+						resolve: async () => {
+							throw new Error("No auth permitted");
+						},
+					},
+				},
+				classifiers: {
+					"typesafe-system-one": {
+						classify: async () => {
+							throw new Error("No inference permitted");
+						},
+					},
+				},
+			});
+			const provider = personalized
+				? withPersonalizedCatalog(base, async (models) => models)
+				: withRemoteCatalog(base, "https://example.test", 1);
+			const projected = provider.getAllModels?.()[0];
+			expect(projected?.cost.input).toBe(0.192);
+			expect(
+				estimateTokenCost(projected, { input: 1000, output: 0, cacheRead: 0, cacheWrite: 0 }).cost?.total,
+			).toBeCloseTo(0.000192);
+			const path = join(home, "models.json");
+			await writeFile(path, "{}");
+			// models.json overrides are chat-only; classifier replacements use the existing extension definition seam.
+			const composed = composeModelProvider("openrouter", provider, await ModelConfig.load(path), {
+				models: [{ ...model, cost: { ...model.cost, input: 7 } }],
+			});
+			const overridden = composed.getAllModels?.()[0];
+			expect(overridden?.cost.input).toBe(7);
+			expect(overridden?.cost.assessment).toBeUndefined();
+			expect(estimateTokenCost(overridden, { input: 1, output: 0, cacheRead: 0, cacheWrite: 0 }).cost).toBeNull();
+			expect(model.cost.input).toBe(999);
+		} finally {
+			await rm(home, { recursive: true, force: true });
+		}
+	},
+);
 
 // nredd/pi#55/#56: actual runtime wrappers and topmost models.json overrides, no auth or inference.
 it.each([false, true])(

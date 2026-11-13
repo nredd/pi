@@ -249,21 +249,27 @@ function perMillion(value: string | number | undefined, fallback = 0): number {
 	return Number.isFinite(parsed) && parsed >= 0 ? Number((parsed * 1_000_000).toFixed(6)) : fallback;
 }
 
-/** Assess only the archived exact chat identities, using the existing source normalizers. */
-function feedCost(provider: "openrouter" | "vercel-ai-gateway", id: string, previous: ModelCost): ModelCost {
+/** Assess only exact archived operation identities, using the existing source normalizers. */
+function feedCost(
+	provider: "openrouter" | "vercel-ai-gateway",
+	type: "chat" | "classifier",
+	id: string,
+	previous: ModelCost,
+): ModelCost {
 	const prices: Record<string, Record<string, unknown>> = feedPrices[provider];
 	const unknown = (reason: string): ModelCost => ({ ...previous, assessment: { status: "unknown", reason } });
-	if (!Object.hasOwn(prices, id))
+	const key = `${type}:${id}`;
+	if (!Object.hasOwn(prices, key))
 		return unknown(
-			"No admitted exact archived chat token contract; missing identities and unsupported operation/mode contracts remain unknown.",
+			"No admitted exact archived operation token contract; missing identities and unsupported operation/mode contracts remain unknown.",
 		);
-	const source = prices[id];
+	const source = prices[key];
 	const raw = source.pricing as Record<string, unknown>;
+	if (!raw || typeof raw !== "object" || Array.isArray(raw)) return unknown("Invalid official pricing object.");
 	const openRouter = provider === "openrouter";
-	const context = openRouter ? source.context_length : source.context_window;
-	const output = openRouter
-		? (source.top_provider as OpenRouterModel["top_provider"])?.max_completion_tokens
-		: source.max_tokens;
+	const topProvider = source.top_provider as OpenRouterModel["top_provider"];
+	const context = openRouter ? topProvider?.context_length || source.context_length : source.context_window;
+	const output = openRouter ? topProvider?.max_completion_tokens : source.max_tokens;
 	if (typeof context !== "number" || !Number.isSafeInteger(context) || context <= 0)
 		return unknown("Official request context limit is unavailable.");
 	const fields = openRouter
@@ -289,7 +295,11 @@ function feedCost(provider: "openrouter" | "vercel-ai-gateway", id: string, prev
 		const pricing = raw as OpenRouterPricing;
 		if (pricing.input_cache_write_1h !== undefined && !valid(pricing.input_cache_write_1h))
 			return unknown("Malformed extended cache-write rate.");
+		if (pricing.overrides !== undefined && !Array.isArray(pricing.overrides))
+			return unknown("Invalid OpenRouter pricing overrides.");
 		for (const override of pricing.overrides ?? []) {
+			if (!override || typeof override !== "object" || Array.isArray(override))
+				return unknown("Invalid OpenRouter pricing override.");
 			if (
 				Object.keys(override).some((key) => ![...fields, "input_cache_write_1h", "min_prompt_tokens"].includes(key))
 			)
@@ -376,8 +386,9 @@ export function catalogueCost(model: Pick<AnyModel, "provider" | "id" | "type" |
 		].includes(model.id);
 	const previous = model.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 	const feed =
-		type === "chat" && (model.provider === "openrouter" || model.provider === "vercel-ai-gateway")
-			? feedCost(model.provider, model.id, previous)
+		(type === "chat" || type === "classifier") &&
+		(model.provider === "openrouter" || model.provider === "vercel-ai-gateway")
+			? feedCost(model.provider, type, model.id, previous)
 			: undefined;
 	const checkedAt =
 		(feed?.assessment?.status !== "unknown" ? feed?.assessment?.checkedAt : undefined) ??

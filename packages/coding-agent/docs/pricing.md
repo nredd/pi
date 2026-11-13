@@ -108,8 +108,8 @@ Source audit, checked 2026-11-12:
   [here](pricing-feeds.md). They do not certify either complete provider catalogue.
 - AI Gateway `-batch` IDs select the asynchronous Batch API, and synchronous requests do not
   accept them ([docs](https://vercel.com/docs/ai-gateway/models-and-providers/batch-processing.md)).
-  They stay unknown: no batch rate schedule is admitted, and the default Standard rates are
-  not assigned to them.
+  They stay unknown unless a newer assessed catalogue (after 2026-11-13) supplies one: no batch
+  rate schedule is admitted, and the default Standard rates are not assigned to them.
 - Provider rate strings are plain decimal or scientific notation (`0.0000001`, `1e-7`) or
   finite non-negative numbers. Anything else, including radix literals such as `0x10`, is
   malformed: compatibility arithmetic falls back to 0 and the feed is never certified. A

@@ -512,9 +512,15 @@ function catalogueCostUnbounded(model: Pick<AnyModel, "provider" | "id" | "type"
 		(model.provider === "openrouter" || model.provider === "vercel-ai-gateway")
 			? feedCost(model.provider, type, model.id, previous)
 			: undefined;
+	// An id the feed archive covers is compared at the feed date even when the feed result is unknown
+	// (malformed row, Gateway `-batch`), so the unknown result cannot discard a newer incoming assessment.
+	const archived =
+		feed !== undefined &&
+		((model.provider === "vercel-ai-gateway" && model.id.endsWith("-batch")) ||
+			Object.hasOwn(feedPrices[model.provider as "openrouter" | "vercel-ai-gateway"], `${type}:${model.id}`));
 	const checkedAt =
 		(feed?.assessment?.status !== "unknown" ? feed?.assessment?.checkedAt : undefined) ??
-		(codexTerra || bedrockContract || boundedAnthropicContract || cerebras || xai || gemini
+		(archived || codexTerra || bedrockContract || boundedAnthropicContract || cerebras || xai || gemini
 			? "2026-11-13"
 			: PRICING_CHECKED_AT);
 	// A newer explicitly assessed catalog must not be frozen at this client's audit date.

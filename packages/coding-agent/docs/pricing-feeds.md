@@ -59,7 +59,7 @@ Remaining unknowns and excluded charges:
   `anthropic/claude-opus-5.5-fast` and `deepseek/deepseek-v4.1-flash-fast`, are excluded by
   exact source identity, not stripped or relabelled as Standard. Gateway `-batch` IDs are
   async Batch API selectors that synchronous requests reject, so they are unknown too
-  (all `-batch` rows in the archive, no batch schedule is admitted). Gapped, overlapping, finite-only or inconsistent Gateway brackets are not
+  (all `-batch` rows in the archive, no batch schedule is admitted, unless a newer assessed catalogue (after 2026-11-13) supplies one). Gapped, overlapping, finite-only or inconsistent Gateway brackets are not
   flattened into a complete contract. Missing categories cannot become free through legacy zeros.
 - Each admitted assessment is a chosen published default/Standard global **token baseline**.
   Search charges, image/request counters, regional routes, Fast/service-tier prices and optional

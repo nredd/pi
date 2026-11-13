@@ -346,3 +346,50 @@ describe.each(["openrouter", "vercel-ai-gateway"] as const)("%s id outside the a
 		expect(catalogueCost(input)).toBe(input.cost);
 	});
 });
+
+// An id the feed archive covers is compared against the feed date (2026-11-13) even when the feed result is
+// unknown (Gateway `-batch`, malformed row), not this client's 2026-11-12 audit date.
+describe("unknown feed results for archived ids compare at the feed date", () => {
+	const verifiedOn = (checkedAt: string): ModelCost => ({
+		...legacy,
+		assessment: {
+			status: "verified",
+			checkedAt,
+			source: "synthetic",
+			unit: "usd-per-million-tokens",
+			conditions: "synthetic",
+		},
+	});
+	const cases = [
+		{
+			name: "Gateway -batch id",
+			provider: "vercel-ai-gateway",
+			id: "anthropic/claude-opus-4.5-batch",
+			run: <T>(fn: () => T) => fn(),
+		},
+		{
+			name: "malformed in-feed OpenRouter row",
+			provider: "openrouter",
+			id: OR_KEY.slice("chat:".length),
+			run: <T>(fn: () => T) => withPricing("openrouter", OR_KEY, { prompt: "-1" }, fn),
+		},
+		{
+			name: "malformed in-feed Gateway row",
+			provider: "vercel-ai-gateway",
+			id: GW_KEY.slice("chat:".length),
+			run: <T>(fn: () => T) => withPricing("vercel-ai-gateway", GW_KEY, { input: "-1" }, fn),
+		},
+	];
+
+	describe.each(cases)("$name", ({ provider, id, run }) => {
+		it("replaces a verified previous dated at the feed date with unknown", () => {
+			const cost = run(() => catalogueCost({ provider, id, type: "chat", cost: verifiedOn(AS_OF) }));
+			expect(cost.assessment?.status).toBe("unknown");
+		});
+
+		it("keeps a verified previous dated after the feed date unchanged", () => {
+			const previous = verifiedOn("2026-11-14");
+			expect(run(() => catalogueCost({ provider, id, type: "chat", cost: previous }))).toBe(previous);
+		});
+	});
+});

@@ -61,6 +61,11 @@ Public catalogue coverage, checked 2026-11-12:
 
 Source follow-up, checked 2026-11-13:
 
+- Exact `cerebras/gpt-oss-120b` and `cerebras/qwen-3.8-27b`, four direct
+  `xai/grok-4.{7,6,5,3}` IDs, and `google/gemini-3.5-flash-lite` have narrow
+  token-price assessments. Cache-write tariffs remain unavailable. These partial additions
+  do not certify the rest of their families or change the frozen table above.
+
 - The exact `openai-codex/gpt-6.1-terra` selector is now assessed as API-equivalent,
   using the [public Codex guide](https://developers.openai.com/codex/models),
   [exact API model card](https://developers.openai.com/api/docs/models/gpt-6.1-terra.md)
@@ -94,3 +99,12 @@ Claude source follow-up, checked 2026-11-13:
 - These are first-party contracts only, not inferred Bedrock prices. The dated archive table
   remains an immutable baseline, not a claim that these source changes have shipped.
 
+Bedrock source follow-up, checked 2026-11-13:
+
+- Exact Nova 2 Lite, Lite, Micro and Pro model-card IDs are assessed at the Standard/on-demand
+  N. Virginia baseline, with the cache-write tariff unavailable. Exact `openai.gpt-6-astra`,
+  `openai.gpt-6.1-sol` and `openai.gpt-6.1-terra` plus their documented `us.` and `global.`
+  IDs are assessed at the Standard Global CRIS baseline, with 30m writes priced only when
+  stated. See [the pricing audit](pricing.md) for rates; regional premiums are not added.
+- The frozen archive table above remains unchanged and is not recounted for these identities.
+  This source change does not modify `.11`, publish a release or advance selected pins.

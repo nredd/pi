@@ -109,6 +109,8 @@ export class FooterDataProvider {
 	private reftableWatcher: FSWatcher | null = null;
 	private reftableTablesListWatcher: FSWatcher | null = null;
 	private reftablePollTimer: ReturnType<typeof setInterval> | null = null;
+	private reftablePollPath: string | null = null;
+	private reftablePollBaseline: Stats | null = null;
 	private branchChangeCallbacks = new Set<() => void>();
 	private availableProviderCount = 0;
 	private refreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -228,6 +230,7 @@ export class FooterDataProvider {
 		}
 
 		this.refreshInFlight = true;
+		this.rebaselineReftablePoll();
 		try {
 			const nextBranch = await this.resolveGitBranchAsync();
 			if (this.disposed) return;
@@ -292,21 +295,36 @@ export class FooterDataProvider {
 			clearInterval(this.reftablePollTimer);
 			this.reftablePollTimer = null;
 		}
+		this.reftablePollPath = null;
+		this.reftablePollBaseline = null;
 		if (this.gitWatcherRetryTimer) {
 			clearTimeout(this.gitWatcherRetryTimer);
 			this.gitWatcherRetryTimer = null;
 		}
 	}
 
+	/**
+	 * A starting refresh already observes everything the poll's baseline predates, so adopt the current
+	 * metadata. Otherwise the poll reports the same mutation again and spawns a redundant git process.
+	 */
+	private rebaselineReftablePoll(): void {
+		if (!this.reftablePollPath) return;
+		try {
+			this.reftablePollBaseline = statSync(this.reftablePollPath);
+		} catch {
+			// Keep the old baseline; the next poll sample reports the error through the retry path.
+		}
+	}
+
 	/** Keep a pre-mutation baseline; watchFile's asynchronous initial stat can miss the first update. */
 	private pollReftableTablesList(path: string): void {
-		let previous: Stats;
 		try {
-			previous = statSync(path);
+			this.reftablePollBaseline = statSync(path);
 		} catch {
 			this.handleGitWatcherError();
 			return;
 		}
+		this.reftablePollPath = path;
 
 		let inFlight = false;
 		const timer = setInterval(() => {
@@ -320,14 +338,16 @@ export class FooterDataProvider {
 					this.handleGitWatcherError();
 					return;
 				}
+				const previous = this.reftablePollBaseline;
 				if (
-					current.mtimeMs !== previous.mtimeMs ||
-					current.ctimeMs !== previous.ctimeMs ||
-					current.size !== previous.size
+					previous &&
+					(current.mtimeMs !== previous.mtimeMs ||
+						current.ctimeMs !== previous.ctimeMs ||
+						current.size !== previous.size)
 				) {
 					this.scheduleRefresh();
 				}
-				previous = current;
+				this.reftablePollBaseline = current;
 			});
 		}, 250);
 		this.reftablePollTimer = timer;

@@ -123,8 +123,9 @@ function brokerCost(provider: string, id: string, previous: ModelCost): ModelCos
 		const values = [rate.input, rate.output, rate.cacheRead, ...(entry ? [rate.cacheWrite] : [])];
 		if (values.some((value) => typeof value !== "number" || !Number.isFinite(value) || value < 0)) return undefined;
 		if (entry?.free && values.some((value) => value !== 0)) return undefined;
-		if ("inputTokensAbove" in rate) {
-			if (!Number.isSafeInteger(rate.inputTokensAbove) || rate.inputTokensAbove <= threshold) return undefined;
+		if (rate !== row) {
+			if (!("inputTokensAbove" in rate) || !Number.isSafeInteger(rate.inputTokensAbove)) return undefined;
+			if (rate.inputTokensAbove <= threshold) return undefined;
 			threshold = rate.inputTokensAbove;
 		}
 	}

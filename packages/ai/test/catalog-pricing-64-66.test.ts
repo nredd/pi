@@ -59,6 +59,8 @@ describe("broker pricing", () => {
 				{ free: true, cost: { ...zero, input: 1 } },
 				{ free: false, cost: { ...zero, input: Number.NaN } },
 				{ free: false, cost: { input: 1, output: 1, cacheWrite: 0 } },
+				{ free: false, cost: { ...zero, input: 1, tiers: [null] } },
+				{ free: false, cost: { ...zero, input: 1, tiers: [{ ...zero, input: 1 }] } },
 			]) {
 				rows["claude-haiku-4-5"] = row;
 				expect(catalogueCost(entry("radius", "claude-haiku-4-5")).assessment?.status).toBe("unknown");

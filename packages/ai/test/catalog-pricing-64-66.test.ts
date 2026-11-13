@@ -39,6 +39,39 @@ describe("broker pricing", () => {
 		).toBeCloseTo(6.1);
 		expect(estimateTokenCost({ cost }, { ...zero, cacheWrite: 1, cacheWrite1h: 1 }).cost).toBeNull();
 	});
+	it("joins source-shaped OpenCode endpoint and tier rows at the strict boundary", () => {
+		const endpoints = [
+			"| Claude Sonnet 4.5 | claude-sonnet-4-5 | https://opencode.ai/inference/anthropic/v1/messages |",
+			"| Gemini 3.1 Pro | gemini-3.1-pro | https://opencode.ai/inference/google/v1beta/models/gemini-3.1-pro |",
+		];
+		const prices = [
+			"| Claude Sonnet 4.5 (≤ 200K tokens) | $3.00 | $15.00 | $0.30 | $3.75 |",
+			"| Claude Sonnet 4.5 (> 200K tokens) | $6.00 | $22.50 | $0.60 | $7.50 |",
+			"| Gemini 3.1 Pro (≤ 200K tokens) | $2.00 | $12.00 | $0.20 | - |",
+			"| Gemini 3.1 Pro (> 200K tokens) | $4.00 | $18.00 | $0.40 | - |",
+		];
+		for (const endpoint of endpoints) {
+			const [, name, id] = endpoint.split("|").map((cell) => cell.trim());
+			const rows = prices.filter((line) => line.includes(`| ${name} (`));
+			expect(rows).toHaveLength(2);
+			const cost = catalogueCost(entry("opencode", id));
+			for (const [index, row] of rows.entries()) {
+				const [, , input, output, read, write] = row.split("|").map((cell) => cell.trim());
+				const tokens = { ...zero, input: 100000 + index, cacheRead: 100000, output: 1000 };
+				const estimate = estimateTokenCost({ cost }, tokens);
+				const expected =
+					(tokens.input * Number(input.slice(1)) +
+						tokens.output * Number(output.slice(1)) +
+						tokens.cacheRead * Number(read.slice(1))) /
+					1_000_000;
+				expect(estimate.cost?.total).toBeCloseTo(expected, 9);
+				if (write === "-")
+					expect(
+						estimateTokenCost({ cost }, { ...tokens, cacheWrite: 1, shortCacheWrites: true }).cost,
+					).toBeNull();
+			}
+		}
+	});
 	it("does not infer aliases, providers, operation types, or promotions", () => {
 		for (const model of [
 			entry("radius", "claude-haiku-5-5-latest"),

@@ -150,22 +150,58 @@ function brokerCost(provider: string, id: string, previous: ModelCost): ModelCos
 	return assessed;
 }
 
+// Rates and bounds are one contract so a dated alias cannot acquire only one of them.
+const BOUNDED_ANTHROPIC: Record<
+	string,
+	{ cost: ModelCost; maxContextTokens: number; maxOutputTokens: number; retiredOn?: string }
+> = {
+	"claude-fable-5-2": {
+		cost: { input: 8, output: 40, cacheRead: 0.2, cacheWrite: 10, cacheWrite1h: 16 },
+		maxContextTokens: 1000000,
+		maxOutputTokens: 128000,
+	},
+	"claude-haiku-4-5": {
+		cost: { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25, cacheWrite1h: 2 },
+		maxContextTokens: 200000,
+		maxOutputTokens: 64000,
+	},
+	"claude-haiku-4-5-20251001": {
+		cost: { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25, cacheWrite1h: 2 },
+		maxContextTokens: 200000,
+		maxOutputTokens: 64000,
+	},
+	"claude-opus-4-5": {
+		cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25, cacheWrite1h: 10 },
+		maxContextTokens: 200000,
+		maxOutputTokens: 64000,
+	},
+	"claude-opus-4-5-20251101": {
+		cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25, cacheWrite1h: 10 },
+		maxContextTokens: 200000,
+		maxOutputTokens: 64000,
+	},
+	"claude-sonnet-4-5": {
+		cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75, cacheWrite1h: 6 },
+		maxContextTokens: 200000,
+		maxOutputTokens: 64000,
+		retiredOn: "2026-11-30",
+	},
+	"claude-sonnet-4-5-20250929": {
+		cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75, cacheWrite1h: 6 },
+		maxContextTokens: 200000,
+		maxOutputTokens: 64000,
+		retiredOn: "2026-11-30",
+	},
+};
+
 /** Apply narrow official corrections before user overrides, never infer a provider from a model name. */
 export function catalogueCost(model: Pick<AnyModel, "provider" | "id" | "type" | "cost">): ModelCost {
 	const type = model.type ?? "chat";
 	const codexTerra = type === "chat" && model.provider === "openai-codex" && model.id === "gpt-6.1-terra";
 	const boundedAnthropicContract =
-		type === "chat" &&
-		model.provider === "anthropic" &&
-		[
-			"claude-fable-5-2",
-			"claude-haiku-4-5",
-			"claude-haiku-4-5-20251001",
-			"claude-opus-4-5",
-			"claude-opus-4-5-20251101",
-			"claude-sonnet-4-5",
-			"claude-sonnet-4-5-20250929",
-		].includes(model.id);
+		type === "chat" && model.provider === "anthropic" && Object.hasOwn(BOUNDED_ANTHROPIC, model.id)
+			? BOUNDED_ANTHROPIC[model.id]
+			: undefined;
 	const previous = model.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 	const broker = type === "chat" ? brokerCost(model.provider, model.id, previous) : undefined;
 	const checkedAt = codexTerra || boundedAnthropicContract || broker ? "2026-11-13" : PRICING_CHECKED_AT;
@@ -201,13 +237,6 @@ export function catalogueCost(model: Pick<AnyModel, "provider" | "id" | "type" |
 	}
 	if (type === "chat" && model.provider === "anthropic") {
 		const direct: Record<string, ModelCost> = {
-			"claude-fable-5-2": { input: 8, output: 40, cacheRead: 0.2, cacheWrite: 10, cacheWrite1h: 16 },
-			"claude-haiku-4-5": { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25, cacheWrite1h: 2 },
-			"claude-haiku-4-5-20251001": { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25, cacheWrite1h: 2 },
-			"claude-opus-4-5": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25, cacheWrite1h: 10 },
-			"claude-opus-4-5-20251101": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25, cacheWrite1h: 10 },
-			"claude-sonnet-4-5": { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75, cacheWrite1h: 6 },
-			"claude-sonnet-4-5-20250929": { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75, cacheWrite1h: 6 },
 			"claude-sonnet-5-5": { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5, cacheWrite1h: 4 },
 			"claude-opus-5-5": { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5, cacheWrite1h: 8 },
 			"claude-opus-5": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25, cacheWrite1h: 10 },
@@ -236,7 +265,7 @@ export function catalogueCost(model: Pick<AnyModel, "provider" | "id" | "type" |
 				],
 			},
 		};
-		const cost = Object.hasOwn(direct, model.id) ? direct[model.id] : undefined;
+		const cost = boundedAnthropicContract?.cost ?? (Object.hasOwn(direct, model.id) ? direct[model.id] : undefined);
 		if (cost) {
 			const assessed = verified(
 				cost,
@@ -246,14 +275,12 @@ export function catalogueCost(model: Pick<AnyModel, "provider" | "id" | "type" |
 				checkedAt,
 			);
 			if (boundedAnthropicContract && assessed.assessment?.status === "verified") {
-				const legacy = model.id !== "claude-fable-5-2";
+				const { maxContextTokens, maxOutputTokens, retiredOn } = boundedAnthropicContract;
 				assessed.assessment = {
 					...assessed.assessment,
-					maxContextTokens: legacy ? 200000 : 1000000,
-					maxOutputTokens: legacy ? 64000 : 128000,
-					...(model.id === "claude-sonnet-4-5" || model.id === "claude-sonnet-4-5-20250929"
-						? { retiredOn: "2026-11-30" }
-						: {}),
+					maxContextTokens,
+					maxOutputTokens,
+					...(retiredOn ? { retiredOn } : {}),
 				};
 			}
 			return assessed;

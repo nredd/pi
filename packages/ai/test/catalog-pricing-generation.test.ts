@@ -18,7 +18,8 @@ it("carries official corrections and explicit unknowns into bundled shards and p
 		writeFileSync(
 			preload,
 			`globalThis.fetch = async (input) => {
-			if (String(input) === 'https://models.dev/api.json') return Response.json({anthropic:{models:{'claude-sonnet-4-5':{id:'claude-sonnet-4-5',name:'Public Sonnet',tool_call:true,cost:{input:999,output:999}}}},openai:{models:{'gpt-6.1-sol':{id:'gpt-6.1-sol',name:'Public Sol',tool_call:true,cost:{input:999,output:999}}}},'cloudflare-ai-gateway':{models:{'openai/gpt-4o':{id:'gpt-4o',name:'Public 4o',tool_call:true,cost:{input:999,output:999}},'openai/gpt-6.1-terra':{id:'gpt-6.1-terra',name:'Public Terra',tool_call:true,cost:{input:999,output:999}}}},'example-provider':{models:{}}});
+			if (String(input) === 'https://models.dev/api.json') return Response.json({anthropic:{models:{'claude-sonnet-4-5':{id:'claude-sonnet-4-5',name:'Public Sonnet',tool_call:true,cost:{input:999,output:999}}}},openai:{models:{'gpt-6.1-sol':{id:'gpt-6.1-sol',name:'Public Sol',tool_call:true,cost:{input:999,output:999}}}},'cloudflare-ai-gateway':{models:{'openai/gpt-4o':{id:'gpt-4o',name:'Public 4o',tool_call:true,cost:{input:999,output:999}},'openai/gpt-6.1-terra':{id:'gpt-6.1-terra',name:'Public Terra',tool_call:true,cost:{input:999,output:999}}}},'example-provider':{models:{}},opencode:{models:{'claude-haiku-4-5':{id:'claude-haiku-4-5',name:'Synthetic Haiku',tool_call:true,cost:{input:999,output:999}}}}});
+			if (String(input) === 'https://radius.pi.dev/v1/config') return Response.json({baseUrl:'https://radius.invalid',models:[{id:'claude-haiku-5-5',name:'Synthetic Haiku',reasoning:false,input:['text'],cost:{input:999,output:999,cacheRead:999,cacheWrite:999},contextWindow:200000,maxTokens:1000}]});
 			if (String(input).includes('models.dev/models.json')) return Response.json({'typesafe/jev-latest':{id:'jev-latest',type:'decision',name:'Public Jev'}});
 			if (String(input).includes('openrouter.ai/api/v1/models')) return Response.json({data:[{id:'example/unknown',name:'Synthetic unknown',supported_parameters:['tools']}]});
 			throw new Error('Offline synthetic source unavailable');
@@ -38,6 +39,21 @@ it("carries official corrections and explicit unknowns into bundled shards and p
 		expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
 		const legacy = JSON.parse(readFileSync(join(root, "catalog/models.json"), "utf8"));
 		const shard = JSON.parse(readFileSync(join(isolated, "src/providers/data/openai.json"), "utf8"));
+		// nredd/pi#64 and #66: exact broker mappings reach both public and hydrated output.
+		const radius = legacy.radius["claude-haiku-5-5"].cost;
+		const opencode = legacy.opencode["claude-haiku-4-5"].cost;
+		expect(radius).toMatchObject({
+			input: 0.1,
+			output: 0.5,
+			cacheRead: 0.01,
+			assessment: { checkedAt: "2026-11-13", unavailable: ["cacheWrite"] },
+		});
+		expect(opencode).toMatchObject({
+			input: 1,
+			output: 5,
+			cacheRead: 0.1,
+			assessment: { checkedAt: "2026-11-13", unavailable: ["cacheWrite"] },
+		});
 		const cost = legacy.openai["gpt-6.1-sol"].cost;
 		expect(cost).toMatchObject({
 			input: 2,
@@ -101,6 +117,16 @@ it("carries official corrections and explicit unknowns into bundled shards and p
 		expect(hydratedShard["openai-responses"]["chat:gpt-6.1-sol"].cost).toEqual(cost);
 		const hydratedAnthropic = JSON.parse(readFileSync(join(isolated, "src/providers/data/anthropic.json"), "utf8"));
 		expect(hydratedAnthropic["anthropic-messages"]["chat:claude-sonnet-4-5"].cost).toEqual(claude);
+		for (const [provider, id, expected] of [
+			["radius", "claude-haiku-5-5", radius],
+			["opencode", "claude-haiku-4-5", opencode],
+		] as const) {
+			const data = JSON.parse(readFileSync(join(isolated, `src/providers/data/${provider}.json`), "utf8"));
+			const model = Object.values(data)
+				.flatMap((group) => Object.values(group as Record<string, { id: string; cost: unknown }>))
+				.find((model) => model.id === id);
+			expect(model?.cost).toEqual(expected);
+		}
 		const hydratedCodex = JSON.parse(readFileSync(join(isolated, "src/providers/data/openai-codex.json"), "utf8"));
 		expect(hydratedCodex["openai-codex-responses"]["chat:gpt-6.1-terra"].cost).toEqual(terra.cost);
 		expect(JSON.parse(readFileSync(join(root, "catalog/models.json"), "utf8"))).toEqual(legacy);

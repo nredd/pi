@@ -5,3 +5,23 @@ The footer reftable filesystem test reports bounded diagnostics only if a wait t
 branch-change notifications, wait phase, elapsed time and maximum observation gap. Native
 callback and polling-baseline timing remain unknown. The exact-count assertion and deadlines
 are unchanged; a green run does not establish the historical timeout's cause.
+
+The reftable polling fallback captures its metadata baseline synchronously during watcher
+setup, then samples asynchronously every 250ms. This preserves a change made before the
+first asynchronous stat completes, even if native watcher startup misses that change.
+Only one sample is in flight, and results from disposed or retargeted watchers are ignored.
+This startup failure mode is reproducible on real filesystem fixtures under delayed stat
+sampling; it does not establish the unrecorded native/poll timing of earlier failures.
+
+Watcher setup already discovers git paths and reads metadata synchronously. The fallback adds
+one synchronous `stat` of `tables.list` to retain a baseline before the constructor or `setCwd`
+returns. This can block on a slow filesystem; subsequent samples remain asynchronous and do
+not overlap. Sampling errors close the watchers and use the existing five-second retry path.
+
+`footer-data-provider.startup.test.ts` queues real crypto work on the libuv pool before
+constructing and immediately mutating 32 real filesystem fixtures. It needs neither `mkfifo`
+nor a platform skip; only git replies are mocked. The burst amplifies native startup loss,
+which remains OS-scheduling-dependent. It failed locally on the original implementation and
+passes with the retained baseline. Separate controlled polling tests cover errors, cleanup,
+non-overlap and late callbacks after disposal or a working-directory change. Neither test
+changes the original footer test's deadlines, exact-count assertion or failure diagnostics.

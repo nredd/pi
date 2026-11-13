@@ -86,6 +86,84 @@ describe("AgentSession tool orchestration", () => {
 		]);
 	});
 
+	it("lets a tool_not_found handler replace the not-found text of a model call", async () => {
+		const seen: string[] = [];
+		const harness = await createHarness({
+			initialActiveToolNames: [],
+			extensionFactories: [
+				orchestratorExtension,
+				(pi) => {
+					pi.on("tool_not_found", (event) => {
+						seen.push(`${event.toolName}:${event.parentToolCallId ? "nested" : "top"}`);
+						if (event.toolName === "ghost") return { message: "ghost is deferred, call search_tools" };
+						return undefined;
+					});
+				},
+			],
+		});
+		harnesses.push(harness);
+		await harness.session.bindExtensions({});
+		harness.session.setActiveToolsByName(["run_tools"]);
+
+		harness.setResponses([
+			fauxAssistantMessage([fauxToolCall("ghost", {}), fauxToolCall("echo", { text: "hi" })], {
+				stopReason: "toolUse",
+			}),
+			fauxAssistantMessage("done"),
+		]);
+		await harness.session.prompt("go");
+
+		const results = harness.session.messages.filter(
+			(message): message is ToolResultMessage => message.role === "toolResult",
+		);
+		expect(results.map((result) => [result.isError, result.content])).toEqual([
+			[true, [{ type: "text", text: "ghost is deferred, call search_tools" }]],
+			// Handler declines: the default text stays.
+			[
+				true,
+				[
+					{
+						type: "text",
+						text: "Tool echo is not available in this request: it is not active (deferred tools must be loaded first), not registered, or excluded by the active profile",
+					},
+				],
+			],
+		]);
+		expect(seen).toEqual(["ghost:top", "echo:top"]);
+	});
+
+	it("passes the parent call id to tool_not_found for a nested call", async () => {
+		const seen: string[] = [];
+		const harness = await createHarness({
+			initialActiveToolNames: [],
+			extensionFactories: [
+				orchestratorExtension,
+				(pi) => {
+					pi.on("tool_not_found", (event) => {
+						seen.push(`${event.toolName}:${event.parentToolCallId ?? "top"}`);
+						return { message: "nested custom" };
+					});
+				},
+			],
+		});
+		harnesses.push(harness);
+		await harness.session.bindExtensions({});
+
+		harness.setResponses([
+			fauxAssistantMessage([fauxToolCall("run_tools", {})], { stopReason: "toolUse" }),
+			fauxAssistantMessage("done"),
+		]);
+		await harness.session.prompt("go");
+
+		const result = harness.session.messages.find(
+			(message): message is ToolResultMessage => message.role === "toolResult",
+		);
+		if (!result) throw new Error("No tool result");
+		// `run_tools` calls itself through `ctx.executeTool()`, which is not callable from inside.
+		expect(result.content).toEqual([{ type: "text", text: "helped | echo: hi | nested custom" }]);
+		expect(seen).toEqual([`run_tools:${result.toolCallId}`]);
+	});
+
 	it("supports tools that call other tools under any name through the extension API", async () => {
 		const toolCalls: string[] = [];
 		const harness = await createHarness({

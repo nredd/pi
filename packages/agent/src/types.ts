@@ -115,6 +115,16 @@ export interface BeforeToolCallContext {
 	context: AgentContext;
 }
 
+/** Context passed to `getToolNotFoundMessage`. */
+export interface ToolNotFoundContext {
+	/** The assistant message that requested the tool call. */
+	assistantMessage: AssistantMessage;
+	/** The raw tool call block naming the unavailable tool. */
+	toolCall: AgentToolCall;
+	/** Current agent context at the time the tool call is prepared. */
+	context: AgentContext;
+}
+
 /** Context passed to `afterToolCall`. */
 export interface AfterToolCallContext {
 	/** The assistant message that requested the tool call. */
@@ -329,6 +339,14 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 * The hook receives the agent abort signal and is responsible for honoring it.
 	 */
 	beforeToolCall?: (context: BeforeToolCallContext, signal?: AbortSignal) => Promise<BeforeToolCallResult | undefined>;
+
+	/**
+	 * Called when the model calls a tool that is not available, before `beforeToolCall` (which never
+	 * runs for such calls). Return text to replace the error message the model sees; return
+	 * `undefined` or an empty string to keep the default. A throwing hook also keeps the default.
+	 * The result is always an error result.
+	 */
+	getToolNotFoundMessage?: (context: ToolNotFoundContext, signal?: AbortSignal) => Promise<string | undefined>;
 
 	/**
 	 * Called after a tool finishes executing, before `tool_execution_end` and tool-result message events are emitted.

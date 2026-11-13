@@ -85,6 +85,8 @@ import type {
 	SessionShutdownEvent,
 	ToolCallEvent,
 	ToolCallEventResult,
+	ToolNotFoundEvent,
+	ToolNotFoundEventResult,
 	ToolRenderers,
 	ToolResultEvent,
 	ToolResultEventResult,
@@ -1271,6 +1273,31 @@ export class ExtensionRunner {
 		}
 
 		return result;
+	}
+
+	/** The first non-empty message a `tool_not_found` handler returns. A failing handler is reported and skipped. */
+	async emitToolNotFound(event: ToolNotFoundEvent): Promise<string | undefined> {
+		const ctx = this.createContext();
+
+		for (const { ext, handlers } of snapshotEventHandlers(this.extensions, "tool_not_found")) {
+			for (const handler of handlers) {
+				try {
+					const handlerResult = (await handler(event, ctx)) as ToolNotFoundEventResult | undefined;
+					if (handlerResult?.message) {
+						return handlerResult.message;
+					}
+				} catch (err) {
+					this.emitError({
+						extensionPath: ext.path,
+						event: "tool_not_found",
+						error: err instanceof Error ? err.message : String(err),
+						stack: err instanceof Error ? err.stack : undefined,
+					});
+				}
+			}
+		}
+
+		return undefined;
 	}
 
 	async emitUserBash(event: UserBashEvent): Promise<UserBashEventResult | undefined> {

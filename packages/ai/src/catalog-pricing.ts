@@ -106,7 +106,7 @@ function verified(
 export function catalogueCost(model: Pick<AnyModel, "provider" | "id" | "type" | "cost">): ModelCost {
 	const type = model.type ?? "chat";
 	const codexTerra = type === "chat" && model.provider === "openai-codex" && model.id === "gpt-6.1-terra";
-	const claude53 =
+	const boundedAnthropicContract =
 		type === "chat" &&
 		model.provider === "anthropic" &&
 		[
@@ -118,7 +118,7 @@ export function catalogueCost(model: Pick<AnyModel, "provider" | "id" | "type" |
 			"claude-sonnet-4-5",
 			"claude-sonnet-4-5-20250929",
 		].includes(model.id);
-	const checkedAt = codexTerra || claude53 ? "2026-11-13" : PRICING_CHECKED_AT;
+	const checkedAt = codexTerra || boundedAnthropicContract ? "2026-11-13" : PRICING_CHECKED_AT;
 	const previous = model.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 	// A newer explicitly assessed catalog must not be frozen at this client's audit date.
 	if (
@@ -195,7 +195,7 @@ export function catalogueCost(model: Pick<AnyModel, "provider" | "id" | "type" |
 				[],
 				checkedAt,
 			);
-			if (claude53 && assessed.assessment?.status === "verified") {
+			if (boundedAnthropicContract && assessed.assessment?.status === "verified") {
 				const legacy = model.id !== "claude-fable-5-2";
 				assessed.assessment = {
 					...assessed.assessment,

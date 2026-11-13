@@ -48,6 +48,26 @@ it("carries official corrections and explicit unknowns into bundled shards and p
 			assessment: { status: "verified", checkedAt: "2026-11-12", unit: "usd-per-million-tokens" },
 		});
 		expect(shard["openai-responses"]["chat:gpt-6.1-sol"].cost).toEqual(cost);
+		// nredd/pi#52: the same exact Codex selector survives both release output paths.
+		const terra = legacy["openai-codex"]["gpt-6.1-terra"];
+		expect(terra).toMatchObject({
+			id: "gpt-6.1-terra",
+			api: "openai-codex-responses",
+			contextWindow: 272000,
+			cost: {
+				input: 1,
+				output: 5,
+				cacheRead: 0.05,
+				cacheWrite: 1.25,
+				cacheWrite12h: 2.5,
+				assessment: { status: "verified", checkedAt: "2026-11-13" },
+				tiers: [
+					{ inputTokensAbove: 272000, input: 2, output: 7.5, cacheRead: 0.1, cacheWrite: 2.5, cacheWrite12h: 5 },
+				],
+			},
+		});
+		const codexShard = JSON.parse(readFileSync(join(isolated, "src/providers/data/openai-codex.json"), "utf8"));
+		expect(codexShard["openai-codex-responses"]["chat:gpt-6.1-terra"].cost).toEqual(terra.cost);
 		expect(legacy["cloudflare-ai-gateway"]["gpt-4o"].cost.input).toBe(2.5);
 		expect(legacy["cloudflare-ai-gateway"]["gpt-4o"].cost.tiers).toBeUndefined();
 		expect(legacy["cloudflare-ai-gateway"]["gpt-6.1-terra"].cost.tiers).toEqual([
@@ -67,6 +87,8 @@ it("carries official corrections and explicit unknowns into bundled shards and p
 		expect(hydrated.status, `${hydrated.stdout}\n${hydrated.stderr}`).toBe(0);
 		const hydratedShard = JSON.parse(readFileSync(join(isolated, "src/providers/data/openai.json"), "utf8"));
 		expect(hydratedShard["openai-responses"]["chat:gpt-6.1-sol"].cost).toEqual(cost);
+		const hydratedCodex = JSON.parse(readFileSync(join(isolated, "src/providers/data/openai-codex.json"), "utf8"));
+		expect(hydratedCodex["openai-codex-responses"]["chat:gpt-6.1-terra"].cost).toEqual(terra.cost);
 		expect(JSON.parse(readFileSync(join(root, "catalog/models.json"), "utf8"))).toEqual(legacy);
 	} finally {
 		rmSync(root, { recursive: true, force: true });

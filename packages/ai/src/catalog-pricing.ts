@@ -62,6 +62,7 @@ const CODEX_API_EQUIVALENT_IDS = new Set([
 	"gpt-6-sol",
 	"gpt-6-luna",
 	"gpt-6.1-sol",
+	"gpt-6.1-terra",
 ]);
 
 /** Published OpenAI Standard long-context policy, shared by generation and runtime correction. */
@@ -86,13 +87,14 @@ function verified(
 	source: string,
 	conditions: string,
 	unavailable: ("input" | "output" | "cacheRead" | "cacheWrite")[] = [],
+	checkedAt = PRICING_CHECKED_AT,
 ): ModelCost {
 	return {
 		...cost,
 		assessment: {
 			status: "verified",
 			source,
-			checkedAt: PRICING_CHECKED_AT,
+			checkedAt,
 			unit: "usd-per-million-tokens",
 			conditions,
 			unavailable,
@@ -103,12 +105,14 @@ function verified(
 /** Apply narrow official corrections before user overrides, never infer a provider from a model name. */
 export function catalogueCost(model: Pick<AnyModel, "provider" | "id" | "type" | "cost">): ModelCost {
 	const type = model.type ?? "chat";
+	const codexTerra = type === "chat" && model.provider === "openai-codex" && model.id === "gpt-6.1-terra";
+	const checkedAt = codexTerra ? "2026-11-13" : PRICING_CHECKED_AT;
 	const previous = model.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 	// A newer explicitly assessed catalog must not be frozen at this client's audit date.
 	if (
 		previous.assessment?.status !== "unknown" &&
 		previous.assessment?.checkedAt &&
-		previous.assessment.checkedAt > PRICING_CHECKED_AT
+		previous.assessment.checkedAt > checkedAt
 	)
 		return previous;
 	if (
@@ -121,11 +125,15 @@ export function catalogueCost(model: Pick<AnyModel, "provider" | "id" | "type" |
 			return verified(
 				OPENAI_LONG_CONTEXT_PRICING_MODEL_IDS.has(model.id) ? withOpenAiLongContextPricing(cost) : cost,
 				OPENAI_SOURCE,
-				"Standard, global; explicitly listed cache lifetimes only; API-equivalent, not subscription charges. Regional, Batch, Flex, Fast and Ultrafast excluded.",
+				"Standard, global; explicitly listed cache lifetimes only; API-equivalent, not subscription charges. Regional, Batch, Flex, Fast and Ultrafast excluded." +
+					(codexTerra
+						? " Exact Codex selector: https://developers.openai.com/codex/models; API model: https://developers.openai.com/api/docs/models/gpt-6.1-terra.md."
+						: ""),
 				[
 					...(base.cacheWrite === 0 ? ["cacheWrite" as const] : []),
 					...(base.cacheRead === 0 ? ["cacheRead" as const] : []),
 				],
+				checkedAt,
 			);
 		}
 	}

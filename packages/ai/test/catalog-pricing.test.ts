@@ -95,6 +95,52 @@ describe("catalogue assessment", () => {
 		});
 		expect(sol).toMatchObject({ input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5, cacheWrite12h: 5 });
 	});
+	// nredd/pi#52: this public Codex selector has an exact API-equivalent contract.
+	it("assesses only the exact Codex Terra selector with explicit cache lifetimes", () => {
+		const cost = catalogueCost(entry("openai-codex", "gpt-6.1-terra"));
+		expect(cost).toMatchObject({
+			input: 1,
+			output: 5,
+			cacheRead: 0.05,
+			cacheWrite: 1.25,
+			cacheWrite12h: 2.5,
+			assessment: {
+				status: "verified",
+				checkedAt: "2026-11-13",
+				conditions: expect.stringContaining("https://developers.openai.com/codex/models"),
+			},
+		});
+		for (const [extra, expected] of [
+			[0, 0.26],
+			[1, 0.495002],
+		] as const) {
+			const tokens = {
+				input: 100000 + extra,
+				output: 10000,
+				cacheRead: 100000,
+				cacheWrite: 72000,
+				cacheWrite12h: 12000,
+				shortCacheWrites: true,
+			};
+			const before = structuredClone(tokens);
+			expect(estimateTokenCost({ cost }, tokens).cost?.total).toBeCloseTo(expected, 8);
+			expect(tokens).toEqual(before);
+		}
+		expect(estimateTokenCost({ cost }, { ...zero, cacheWrite: 1 }).reason).toContain("lifetime");
+		expect(estimateTokenCost({ cost }, { ...zero, cacheWrite: 1, cacheWrite1h: 1 }).reason).toContain("price");
+		for (const model of [
+			entry("openai-codex", "gpt-6.1-terra-latest"),
+			entry("example-provider", "gpt-6.1-terra"),
+			entry("openai-codex", "gpt-6.1-terra", "classifier"),
+		])
+			expect(catalogueCost(model).assessment?.status).toBe("unknown");
+		const future: ModelCost = {
+			...cost,
+			input: 7,
+			assessment: { ...free.assessment, status: "verified", checkedAt: "2026-11-14" },
+		};
+		expect(catalogueCost(entry("openai-codex", "gpt-6.1-terra", "chat", future))).toBe(future);
+	});
 	it("does not replace newer explicitly assessed prices", () => {
 		const cost: ModelCost = {
 			...sol,

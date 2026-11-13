@@ -506,6 +506,8 @@ export class AgentSession {
 	 * registered yet, because their servers may still be connecting.
 	 */
 	private _isFirstRunSinceRebuild = true;
+	/** Identifies the runtime whose grace and pending loadout a starting run may consume. */
+	private _toolRuntimeGeneration = 0;
 	/** MCP tools held back by the first run and still unregistered; the next run reports them if still gone. */
 	private _heldBackMcpToolNames = new Set<string>();
 	/** `_heldBackMcpToolNames` for the run being prepared; committed once the run starts, so a failed start reports nothing. */
@@ -2065,6 +2067,7 @@ export class AgentSession {
 
 	/** Give the next run MCP grace again; see `_isFirstRunSinceRebuild`. */
 	private _markRuntimeRebuilt(): void {
+		this._toolRuntimeGeneration++;
 		this._isFirstRunSinceRebuild = true;
 	}
 
@@ -2095,6 +2098,7 @@ export class AgentSession {
 		this._isAgentRunActive = true;
 		this._agentRunAbortRequested = false;
 		let messages: AgentMessage[];
+		const toolRuntimeGeneration = this._toolRuntimeGeneration;
 		try {
 			messages = await this._prepareRun(trigger, startingMessages);
 			// before_agent_start handlers ran inside _prepareRun; a replay that was paused there
@@ -2129,9 +2133,14 @@ export class AgentSession {
 		this._recordSelection();
 		// The run records the loadout in the transcript; restored tools that did not register by now
 		// are dropped, so a tool that never registers does not stay pending.
-		this._pendingToolNames.clear();
-		this._isFirstRunSinceRebuild = false;
-		this._heldBackMcpToolNames = this._stagedHeldBackMcpToolNames;
+		if (toolRuntimeGeneration === this._toolRuntimeGeneration) {
+			this._pendingToolNames.clear();
+			this._isFirstRunSinceRebuild = false;
+			this._heldBackMcpToolNames = this._stagedHeldBackMcpToolNames;
+		} else {
+			// A reload during preparation owns the next grace run and its pending loadout.
+			for (const name of this._stagedHeldBackMcpToolNames) this._heldBackMcpToolNames.add(name);
+		}
 		try {
 			await this.agent.prompt(messages);
 			while (!this._agentRunAbortRequested) {

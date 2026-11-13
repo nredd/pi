@@ -327,6 +327,81 @@ test("reload gives an MCP tool that was unregistered before it a fresh grace tur
 	}
 });
 
+// nredd/pi-harness#634: reload can replace the runtime while before_agent_start is parked.
+test.each(["print", "rpc"] as const)(
+	"reload during %s run preparation preserves the new MCP grace run",
+	async (mode) => {
+		const entered = Promise.withResolvers<void>();
+		const release = Promise.withResolvers<void>();
+		const parked: ExtensionFactory = (pi) => {
+			pi.on("before_agent_start", async () => {
+				entered.resolve();
+				await release.promise;
+			});
+		};
+		const harness = await resume([parked]);
+		let running: Promise<void> | undefined;
+		try {
+			await harness.session.bindExtensions({ mode });
+			running = prompt(harness, "parked before reload");
+			await entered.promise;
+			await harness.session.reload();
+			release.resolve();
+			await running;
+			expect(noticeTexts(harness.session).join("")).not.toContain(MCP_TOOL);
+			await prompt(harness, "first after reload");
+			expect(noticeTexts(harness.session).join("")).not.toContain(MCP_TOOL);
+			await prompt(harness, "second after reload");
+			expect(noticeTexts(harness.session).filter((text) => text.includes(MCP_TOOL))).toHaveLength(1);
+			await prompt(harness, "third after reload");
+			expect(noticeTexts(harness.session).filter((text) => text.includes(MCP_TOOL))).toHaveLength(1);
+		} finally {
+			release.resolve();
+			await running;
+			harness.cleanup();
+		}
+	},
+);
+
+// nredd/pi-harness#634: the old run must not drop the reload's pending active loadout.
+test("reload during preparation keeps late deferred tools pending for activation", async () => {
+	const entered = Promise.withResolvers<void>();
+	const release = Promise.withResolvers<void>();
+	let connect: (() => void) | undefined;
+	const parked: ExtensionFactory = (pi) => {
+		pi.on("before_agent_start", async () => {
+			entered.resolve();
+			await release.promise;
+		});
+	};
+	const reconnecting: ExtensionFactory = (pi) => {
+		pi.on("session_start", () => {
+			connect = () => registerFixtureTools(pi, "deferred");
+		});
+	};
+	const factories = [directTools, parked];
+	const harness = await resume(factories);
+	let running: Promise<void> | undefined;
+	try {
+		running = prompt(harness, "parked with active tools");
+		await entered.promise;
+		factories.splice(0, factories.length, reconnecting);
+		await harness.session.reload();
+		release.resolve();
+		await running;
+		expect(harness.session.getActiveToolNames()).not.toContain(MCP_TOOL);
+		if (!connect) throw new Error("reloaded session did not start");
+		connect();
+		expect(harness.session.getActiveToolNames()).toContain(MCP_TOOL);
+		await prompt(harness, "after reconnect");
+		expect(noticeTexts(harness.session).join("")).not.toContain(MCP_TOOL);
+	} finally {
+		release.resolve();
+		await running;
+		harness.cleanup();
+	}
+});
+
 // nredd/pi-harness#555
 test("navigating to a branch that declares a held-back MCP tool keeps it held, then reports it once", async () => {
 	const harness = await resumeAndPrompt([], "first resumed prompt");

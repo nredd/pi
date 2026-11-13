@@ -471,6 +471,7 @@ export async function processResponsesStream<TApi extends Api>(
 	let sawTerminalResponseEvent = false;
 	const outputSlots = new Map<number, ResponsesOutputSlot>();
 	const reasoningBlocksById = new Map<string, ThinkingContent>();
+	const finalizedItems = new Set<string>();
 	const applyMessagePhaseStopReason = (item: ResponseOutputItem): void => {
 		if (item.type === "message" && item.phase === "final_answer") {
 			output.stopReason = "stop";
@@ -625,6 +626,20 @@ export async function processResponsesStream<TApi extends Api>(
 		if (output.content.some((b) => b.type === "toolCall") && output.stopReason === "stop") {
 			output.stopReason = "toolUse";
 		}
+		// A completed snapshot is not a substitute for the item stream. Otherwise a missing
+		// text/tool item becomes a successful empty final. Never reconstruct terminal-only calls.
+		// Incomplete responses retain their truncation/error semantics; server-side items have
+		// no assistant block. Keep the response identity/usage/raw reason above on failure.
+		if (status === "completed") {
+			for (const item of response.output ?? []) {
+				if (
+					["message", "reasoning", "function_call", "custom_tool_call"].includes(item.type) &&
+					(typeof item.id !== "string" || !item.id || !finalizedItems.has(`${item.type}:${item.id}`))
+				) {
+					throw new Error("OpenAI Responses terminal output was not finalized by output_item.done");
+				}
+			}
+		}
 	};
 
 	for await (const event of openaiStream) {
@@ -771,6 +786,7 @@ export async function processResponsesStream<TApi extends Api>(
 				});
 				outputSlots.delete(event.output_index);
 			}
+			if (slot && !outputSlots.has(event.output_index)) finalizedItems.add(`${item.type}:${item.id}`);
 		} else if (event.type === "response.completed" || event.type === "response.incomplete") {
 			finalizeResponse(event.response);
 		} else if (event.type === "error") {

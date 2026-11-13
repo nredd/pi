@@ -238,9 +238,20 @@ describe("catalogue assessment", () => {
 	it("keeps Gemini storage charges separate and does not assume Vertex parity", () => {
 		expect(catalogueCost(entry("google", "gemini-2.5-pro")).assessment).toMatchObject({
 			status: "verified",
+			retiredOn: "2026-12-01",
 			conditions: expect.stringContaining("storage"),
 		});
 		expect(catalogueCost(entry("google-vertex", "gemini-2.5-pro")).assessment?.status).toBe("unknown");
+	});
+	it("bounds gemini-2.5-pro at its published reroute date instead of freezing old rates", () => {
+		const cost = catalogueCost(entry("google", "gemini-2.5-pro"));
+		const tokens = { input: 100000, output: 100000, cacheRead: 0, cacheWrite: 0 };
+		expect(estimateTokenCost({ cost }, tokens, "2026-11-30").cost?.total).toBeCloseTo(1.125);
+		const rerouted = estimateTokenCost({ cost }, tokens, "2026-12-01");
+		expect(rerouted.cost).toBeNull();
+		expect(rerouted.reason).toContain("retired");
+		expect(estimateTokenCost({ cost }, tokens, "2027-01-01").cost).toBeNull();
+		expect(catalogueCost(entry("google", "gemini-2.5-flash")).assessment?.status).toBe("unknown");
 	});
 	it("validates explicit lifetime prices and assessment schemas", () => {
 		const schema = Compile(ModelCostSchema);
@@ -283,7 +294,8 @@ describe("request arithmetic", () => {
 				cacheWrite: provider === "google" ? 0 : 10,
 				output: 0,
 			};
-			const estimate = estimateTokenCost({ cost }, { ...value, shortCacheWrites: true });
+			// Pinned: the google row is date-bounded, so the wall clock must not decide this test.
+			const estimate = estimateTokenCost({ cost }, { ...value, shortCacheWrites: true }, "2026-11-13");
 			expect(estimate.cost).not.toBeNull();
 			expect(costRates(cost, value.input + value.cacheRead + value.cacheWrite).input).toBe(extra ? high : low);
 		}

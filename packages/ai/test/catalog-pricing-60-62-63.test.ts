@@ -61,6 +61,11 @@ it("prices only paid Standard Gemini token categories", () => {
 		estimateTokenCost({ cost }, { input: 1000000, output: 1000000, cacheRead: 1000000, cacheWrite: 0 }).cost?.total,
 	).toBeCloseTo(2.83);
 	expect(estimateTokenCost({ cost }, { ...zero, cacheWrite: 1, cacheWrite1h: 1 }).cost).toBeNull();
+	const conditions = (cost.assessment as { conditions: string }).conditions;
+	expect(conditions).toContain("text input");
+	expect(conditions).toContain("Audio input");
+	expect(conditions).toContain("image and audio output");
+	expect(conditions).not.toMatch(/text, image, video and audio/);
 });
 
 it("rejects fabricated aliases and other providers or operation types", () => {

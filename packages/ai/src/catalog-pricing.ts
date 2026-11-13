@@ -383,13 +383,13 @@ export function catalogueCost(model: Pick<AnyModel, "provider" | "id" | "type" |
 		return verified(
 			{ input: 0.3, output: 2.5, cacheRead: 0.03, cacheWrite: 0 },
 			GOOGLE_SOURCE,
-			"Paid Standard; input token rates cover text, image, video and audio. Cache storage is $1 per million token-hours, not a token-write price; tools and other non-token charges excluded. No Vertex substitution.",
+			"Paid Standard; text input, output and cached-read token rates only. Audio input and image and audio output carry separate units and are excluded. Cache storage is $1 per million token-hours, not a token-write price; tools and other non-token charges excluded. No Vertex substitution.",
 			["cacheWrite"],
 			checkedAt,
 		);
 	}
 	if (type === "chat" && model.provider === "google" && model.id === "gemini-2.5-pro") {
-		return verified(
+		const assessed = verified(
 			{
 				input: 1.25,
 				output: 10,
@@ -398,9 +398,12 @@ export function catalogueCost(model: Pick<AnyModel, "provider" | "id" | "type" |
 				tiers: [{ inputTokensAbove: 200000, input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 }],
 			},
 			GOOGLE_SOURCE,
-			"Paid Standard token charges only; cache storage at USD 4.50 per million tokens/hour is excluded. No Vertex substitution.",
+			"Paid Standard token charges only; cache storage at USD 4.50 per million tokens/hour is excluded. Google reroutes this alias to gemini-3.8-flash from 2026-12-01, so these rates are bounded before that date and the rerouted contract is not assessed. No Vertex substitution.",
 			["cacheWrite"],
 		);
+		if (assessed.assessment?.status === "verified")
+			assessed.assessment = { ...assessed.assessment, retiredOn: "2026-12-01" };
+		return assessed;
 	}
 	return {
 		...previous,

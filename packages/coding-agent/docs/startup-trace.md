@@ -9,6 +9,10 @@ sockets, devices, nonempty files, multiple hard links, group/other-accessible fi
 files owned by another user are refused. Permissions must be exactly `0600`. The caller
 owns the descriptor for the process lifetime; Pi never opens a path, closes the descriptor,
 retries a write or buffers records. Do not replace or reuse the descriptor during tracing.
+Preflight compares exact device/inode identities against descriptors `0`, `1` and `2`
+before any trace write. Both duplicated descriptors and independent opens of the same
+standard-stream file are refused. If any standard descriptor is closed or cannot be
+inspected, measurement is refused without changing application startup or its output.
 
 Also set:
 

@@ -26,6 +26,9 @@ if (scenario === "disabled") {
 	assert.equal(startupTraceEnabled(), false);
 	markStartup("session.bind.ready");
 	assert.equal(await traceStartup("session.handlers", async () => 42), 42);
+} else if (scenario?.startsWith("closed-")) {
+	process.getBuiltinModule("node:fs").closeSync(Number(scenario.slice("closed-".length)));
+	markStartup("session.bind.ready");
 } else if (scenario === "overflow") {
 	for (let i = 0; i < 1000; i++) markStartup("session.bind.ready");
 } else if (scenario === "alias") {

@@ -66,15 +66,21 @@ function getTrace(): Trace | undefined {
 		}
 		// Lazy builtins: disabled mode does not import, stat, enumerate aliases, or read a clock.
 		const fs = process.getBuiltinModule("node:fs");
-		const stat = fs.fstatSync(fd);
+		const stat = fs.fstatSync(fd, { bigint: true });
 		if (
 			!stat.isFile() ||
-			(stat.mode & 0o777) !== 0o600 ||
-			stat.nlink !== 1 ||
-			stat.size !== 0 ||
-			(process.getuid && stat.uid !== process.getuid())
+			(stat.mode & 0o777n) !== 0o600n ||
+			stat.nlink !== 1n ||
+			stat.size !== 0n ||
+			(process.getuid && stat.uid !== BigInt(process.getuid()))
 		)
 			return;
+		// A descriptor number does not establish a dedicated file: dup() and separate opens
+		// can alias standard streams. Refuse measurement if any stream cannot be inspected.
+		for (const standardFd of [0, 1, 2]) {
+			const standard = fs.fstatSync(standardFd, { bigint: true });
+			if (stat.dev === standard.dev && stat.ino === standard.ino) return;
+		}
 		const { AsyncLocalStorage } = process.getBuiltinModule("node:async_hooks");
 		const context = new AsyncLocalStorage<number>();
 		const origin = process.hrtime.bigint();

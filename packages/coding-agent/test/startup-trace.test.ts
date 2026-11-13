@@ -24,12 +24,22 @@ interface RecordEntry {
 function launch(
 	scenario: string,
 	overrides: NodeJS.ProcessEnv = {},
-	options: { disabled?: boolean; mode?: number; pipe?: boolean } = {},
+	options: {
+		disabled?: boolean;
+		mode?: number;
+		pipe?: boolean;
+		standardStream?: 0 | 1 | 2;
+		separateOpen?: boolean;
+		rawOnly?: boolean;
+	} = {},
 ) {
 	const root = realpathSync(mkdtempSync(join(tmpdir(), "pi-trace-")));
 	const file = join(root, "trace.jsonl");
 	const fd = openSync(file, "wx+", options.mode ?? 0o600);
+	const separateFd = options.separateOpen ? openSync(file, "r+") : undefined;
 	try {
+		const stdio: Array<"ignore" | "pipe" | number> = ["ignore", "pipe", "pipe", options.pipe ? "pipe" : fd];
+		if (options.standardStream !== undefined) stdio[options.standardStream] = separateFd ?? fd;
 		const argv =
 			scenario === "sdk" ? [sdkFixture] : scenario === "launcher" ? [launcher, "--version"] : [fixture, scenario];
 		const child = spawnSync(process.execPath, argv, {
@@ -60,19 +70,21 @@ function launch(
 						}),
 				...overrides,
 			},
-			stdio: ["ignore", "pipe", "pipe", options.pipe ? "pipe" : fd],
+			stdio,
 		});
 		expect(child.error).toBeUndefined();
 		expect(child.status, child.stderr).toBe(0);
 		const raw = readFileSync(file, "utf8");
-		const records = raw.trim()
-			? raw
-					.trim()
-					.split("\n")
-					.map((line) => JSON.parse(line) as RecordEntry)
-			: [];
+		const records =
+			raw.trim() && !options.rawOnly
+				? raw
+						.trim()
+						.split("\n")
+						.map((line) => JSON.parse(line) as RecordEntry)
+				: [];
 		return { raw, records };
 	} finally {
+		if (separateFd !== undefined) closeSync(separateFd);
 		closeSync(fd);
 		rmSync(root, { recursive: true, force: true });
 	}
@@ -175,6 +187,23 @@ describe("startup trace producer", () => {
 	);
 	it.each(["0", "1", "2", "-3", "3.0", "3x", "999999", ""])("rejects malformed or unavailable descriptor %s", (fd) => {
 		expect(launch("valid", { PI_STARTUP_TRACE_FD: fd }).raw).toBe("");
+	});
+	for (const standardStream of [0, 1, 2] as const) {
+		for (const separateOpen of [false, true]) {
+			it(`rejects trace files ${separateOpen ? "separately opened on" : "duplicated onto"} standard descriptor ${standardStream} before writing`, () => {
+				expect(launch("valid", {}, { standardStream, separateOpen }).raw).toBe("");
+			});
+			it(`rejects compiled-launcher trace aliases on standard descriptor ${standardStream}, separateOpen=${separateOpen}`, () => {
+				const { raw } = launch("launcher", {}, { standardStream, separateOpen, rawOnly: true });
+				expect(raw).toBe(standardStream === 1 ? "1.3.0\n" : "");
+			});
+		}
+		it(`performs no trace preflight when disabled with standard descriptor ${standardStream} aliased`, () => {
+			expect(launch("disabled", {}, { disabled: true, standardStream }).raw).toBe("");
+		});
+	}
+	it.each([0, 1, 2])("refuses measurement when standard descriptor %s is closed", (fd) => {
+		expect(launch(`closed-${fd}`).raw).toBe("");
 	});
 	it("rejects a pipe descriptor without writing or waiting", () => {
 		expect(launch("valid", {}, { pipe: true }).raw).toBe("");

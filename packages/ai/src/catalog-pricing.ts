@@ -311,8 +311,8 @@ function catalogueCostUnbounded(model: Pick<AnyModel, "provider" | "id" | "type"
 			return verified(
 				withOpenAiLongContextPricing(rates),
 				`https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-${card}.md`,
-				"Standard Global CRIS baseline, not actual regional/profile invoices; Geo and in-Region premiums excluded. Published writes are 30m, but the estimator cannot identify that exact TTL; writes unavailable. Ultrafast, Priority, Flex and Batch excluded.",
-				["cacheWrite"],
+				"Standard Global CRIS baseline, not actual regional/profile invoices; Geo and in-Region premiums excluded. Writes are the published 30m rate, the only supported explicit TTL (also per the AWS prompt-caching guide, https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html); callers must state short writes, 1h/12h writes are unpriced. Ultrafast, Priority, Flex and Batch excluded.",
+				[],
 				checkedAt,
 			);
 		}

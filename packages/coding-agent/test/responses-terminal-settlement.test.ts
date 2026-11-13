@@ -3,7 +3,7 @@ import type { Model } from "@earendil-works/pi-ai";
 import { stream } from "@earendil-works/pi-ai/api/openai-responses";
 import { Type } from "typebox";
 import { afterEach, expect, it, vi } from "vitest";
-import { createHarness, type Harness } from "./harness.ts";
+import { createHarness, type Harness } from "../src/testing/harness.ts";
 
 const model: Model<"openai-responses"> = {
 	id: "fixture",

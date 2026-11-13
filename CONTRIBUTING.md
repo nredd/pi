@@ -66,6 +66,12 @@ npm run check
 
 Both must pass.
 
+The footer reftable filesystem test reports bounded diagnostics only if a wait times out
+([#69](https://github.com/nredd/pi/issues/69)): async git call count, cached fixture branch,
+branch-change notifications, wait phase, elapsed time and maximum observation gap. Native
+callback and polling-baseline timing remain unknown. The exact-count assertion and deadlines
+are unchanged; a green run does not establish the historical timeout's cause.
+
 Do not edit `CHANGELOG.md`. Changelog entries are added by maintainers.
 
 If you are adding a new provider to `packages/ai`, see `AGENTS.md` for required tests.

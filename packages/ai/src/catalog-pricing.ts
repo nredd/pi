@@ -88,7 +88,7 @@ function verified(
 	conditions: string,
 	unavailable: ("input" | "output" | "cacheRead" | "cacheWrite")[] = [],
 	checkedAt = PRICING_CHECKED_AT,
-): ModelCost {
+): ModelCost & { assessment: { status: "verified" } } {
 	return {
 		...cost,
 		assessment: {
@@ -142,15 +142,13 @@ export function catalogueCost(
 			["cacheWrite"],
 			checkedAt,
 		);
-		if (cost.assessment?.status === "verified") {
-			cost.assessment = {
-				...cost.assessment,
-				maxInputTokens: 272000,
-				maxContextTokens: 400000,
-				maxOutputTokens: 128000,
-				retiredOn: "2027-04-01",
-			};
-		}
+		cost.assessment = {
+			...cost.assessment,
+			maxInputTokens: 272000,
+			maxContextTokens: 400000,
+			maxOutputTokens: 128000,
+			retiredOn: "2027-04-01",
+		};
 		return cost;
 	}
 	if (

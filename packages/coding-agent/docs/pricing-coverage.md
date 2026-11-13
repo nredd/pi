@@ -15,7 +15,7 @@ Public catalogue coverage, checked 2026-11-12:
 
 | Provider | Chat | Classifier | Image | Verified | Free | Unknown |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `amazon-bedrock` | 193 | 0 | 0 | 0 | 0 | 193 |
+| `amazon-bedrock` | 193 | 0 | 0 | 70 | 0 | 123 |
 | `ant-ling` | 3 | 0 | 0 | 0 | 0 | 3 |
 | `anthropic` | 17 | 0 | 0 | 11 | 0 | 6 |
 | `azure` | 45 | 0 | 0 | 0 | 0 | 45 |
@@ -57,4 +57,4 @@ Public catalogue coverage, checked 2026-11-12:
 | `xiaomi` | 6 | 0 | 0 | 0 | 0 | 6 |
 | `zai-coding-cn` | 4 | 0 | 0 | 0 | 0 | 4 |
 | `zai` | 7 | 0 | 0 | 0 | 0 | 7 |
-| Total | 1614 | 40 | 60 | 46 | 0 | 1668 |
+| Total | 1614 | 40 | 60 | 116 | 0 | 1598 |

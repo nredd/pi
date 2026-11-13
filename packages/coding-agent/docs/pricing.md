@@ -53,13 +53,27 @@ Source audit, checked 2026-11-12:
   `gemini-2.5-pro` uses $1.25/$10/$0.125 through 200K input and $2.50/$15/$0.25 above
   it (input/output/read). Storage at $4.50 per million tokens/hour is outside token value.
   Its published future reroute is not applied as if it already happened.
-- Official AWS pricing [here](https://aws.amazon.com/bedrock/pricing/) and public offer index
-  [here](https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/region_index.json)
-  require region, inference profile scope and service mode. A public offer SKU must be
-  matched to its dimensions/units, not a similarly named direct-provider rate. The inspected
-  2026-11-11 `us-east-1` offer did not expose Sonnet 5.5 products by that name; absence
-  is not a zero price or permission to substitute Anthropic. Deployment-specific rates
-  remain unresolved. No credentials or inference request are required for this source audit.
+- Official AWS pricing [here](https://aws.amazon.com/bedrock/pricing/) supplies a chosen
+  published baseline, not an account-specific invoice. AWS has no universal default region.
+  This estimate uses the **Global Cross-region Inference**, **US East (N. Virginia)** selector,
+  **Standard/on-demand**, **USD per million tokens** table, checked 2026-11-12. Exact
+  `anthropic.*` physical IDs and AWS's recognized profile prefixes are normalized to this
+  baseline, even when an ID names geographic routing. Regional uplifts, Batch, Flex,
+  Priority, Reserved and negotiated discounts are excluded, not silently asserted absent.
+  The assessment exposes this assumption on every price. Unknown physical IDs stay unknown.
+- The AWS page's prices are resolved from its own public meter maps, not copied from
+  Anthropic: the main USD map is [here](https://b0.p.awsstatic.com/pricing/2.0/meteredUnitMaps/bedrockfoundationmodels/USD/current/bedrockfoundationmodels.json)
+  (publication 2026-11-09), and the newer-model map is [here](https://b0.p.awsstatic.com/pricing/2.0/meteredUnitMaps/bedrockfoundationmodels/USD/current/cHVibGljLzljYzM1NWVlLTRjNjYtNDk0OC04MTg0LWVjMDFkYjBlNGNmMy8zMA.json).
+  Join the page's `priceOf` keys to that selector's entries, preserving table column units.
+  The separate public AWS offer index lacks some newer Anthropic products; that is not
+  evidence of free service or a reason to block this published baseline.
+- AWS Sonnet 5.5 baseline is $2/$10/$0.10/$2.50/$4 for input/output/read/5m-write/1h-write;
+  Opus 5.5 is $4/$20/$0.20/$5/$8. Haiku 5.5 is $0.10/$0.50/$0.01/$0.125/$0.20 through
+  100K input and $0.50/$2.50/$0.05/$0.625/$1 above it. The exact threshold is documented
+  in its AWS model card [here](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-haiku-5-5.html).
+  Sonnet 5.5's exact physical/global/geo IDs and 1M context are documented [here](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-5-5.html).
+  Assessed Sonnet/Opus 4.6+ and Fable models do not inherit an older 200K premium.
+  Older unassessed Sonnet models remain unknown until their applicable tiers are verified.
 - Other generated providers/models retain their source rates for compatibility but are
   explicitly unverified unless an assessment is supplied. This is NOT a completed official
   price verification for every provider. Public source-feed numbers alone are not certified

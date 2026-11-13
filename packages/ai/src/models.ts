@@ -20,6 +20,9 @@ import type {
 	ProviderAuth,
 } from "./auth/types.ts";
 import { calculateTokenCost } from "./catalog-pricing.ts";
+
+export { estimateTokenCost } from "./catalog-pricing.ts";
+
 import { InMemoryModelsStore, type ModelsStore, type ModelsStoreEntry } from "./models-store.ts";
 import type {
 	AnyModel,

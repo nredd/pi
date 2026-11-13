@@ -53,7 +53,7 @@ describe("catalogue assessment", () => {
 		);
 		expect(catalogueCost(entry("amazon-bedrock")).assessment).toMatchObject({
 			status: "unknown",
-			reason: expect.stringContaining("profile"),
+			reason: expect.stringContaining("mapping"),
 		});
 		expect(catalogueCost(entry("example-provider", "image", "image")).assessment).toMatchObject({
 			status: "unknown",
@@ -110,6 +110,46 @@ describe("catalogue assessment", () => {
 			expect(catalogueCost(entry("amazon-bedrock", id)).assessment?.status).toBe("unknown");
 		},
 	);
+	it("uses the published Bedrock baseline without claiming actual profile invoices", () => {
+		for (const prefix of ["", "global.", "us.", "eu.", "au.", "jp.", "in.", "ca.", "apac."]) {
+			const cost = catalogueCost(entry("amazon-bedrock", `${prefix}anthropic.claude-sonnet-5-5`));
+			expect(cost).toMatchObject({
+				input: 2,
+				output: 10,
+				cacheRead: 0.1,
+				cacheWrite: 2.5,
+				cacheWrite1h: 4,
+				assessment: {
+					status: "verified",
+					source: "https://aws.amazon.com/bedrock/pricing/",
+					conditions: expect.stringContaining("NOT actual regional/profile invoice"),
+				},
+			});
+			expect(cost.tiers).toBeUndefined();
+		}
+		for (const id of [
+			"example.anthropic.claude-sonnet-5-5",
+			"anthropic.claude-sonnet-5-5-alias",
+			"anthropic.claude-sonnet-4-5-20250929-v1:0",
+			"constructor",
+		])
+			expect(catalogueCost(entry("amazon-bedrock", id)).assessment?.status).toBe("unknown");
+		expect(catalogueCost(entry("example-provider", "global.anthropic.claude-sonnet-5-5")).assessment?.status).toBe(
+			"unknown",
+		);
+		const haiku = catalogueCost(entry("amazon-bedrock", "global.anthropic.claude-haiku-5-5"));
+		expect(costRates(haiku, 100000).input).toBe(0.1);
+		expect(costRates(haiku, 100001)).toMatchObject({
+			input: 0.5,
+			output: 2.5,
+			cacheRead: 0.05,
+			cacheWrite: 0.625,
+			cacheWrite1h: 1,
+		});
+		expect(
+			estimateTokenCost({ cost: haiku }, { ...zero, cacheWrite: 100001, cacheWrite1h: 100001 }).cost?.cacheWrite,
+		).toBeCloseTo(0.100001);
+	});
 	it("keeps Gemini storage charges separate and does not assume Vertex parity", () => {
 		expect(catalogueCost(entry("google", "gemini-2.5-pro")).assessment).toMatchObject({
 			status: "verified",
@@ -214,6 +254,34 @@ describe("request arithmetic", () => {
 	});
 	it.each([NaN, Infinity, -1])("rejects invalid rates %s", (input) => {
 		expect(estimateTokenCost({ cost: { ...sol, input } }, zero).reason).toContain("Invalid");
+	});
+	it("fails closed on malformed remote assessments and tier metadata", () => {
+		for (const patch of [
+			{ status: "invalid" },
+			{ unit: "per-image" },
+			{ source: 0 },
+			{ source: "" },
+			{ conditions: 0 },
+			{ conditions: "" },
+			{ checkedAt: 0 },
+			{ checkedAt: "yesterday" },
+			{ unavailable: "input" },
+			{ unavailable: ["bogus"] },
+		]) {
+			const cost = { ...sol, assessment: { ...sol.assessment, ...patch } } as unknown as ModelCost;
+			expect(estimateTokenCost({ cost }, zero).cost).toBeNull();
+		}
+		for (const tiers of ["invalid", [null], [{ inputTokensAbove: 0.5 }], [{ inputTokensAbove: -1 }]])
+			expect(estimateTokenCost({ cost: { ...sol, tiers } as unknown as ModelCost }, zero).cost).toBeNull();
+		expect(estimateTokenCost({ cost: sol }, { ...zero, input: Number.MAX_SAFE_INTEGER, output: 1 }).reason).toContain(
+			"counter",
+		);
+		expect(
+			estimateTokenCost(
+				{ cost: { ...free, input: 1, tiers: [{ ...zero, inputTokensAbove: 1 }] } },
+				{ ...zero, input: 2 },
+			).cost,
+		).toBeNull();
 	});
 	it("rejects nonzero rates labelled free", () => {
 		expect(estimateTokenCost({ cost: { ...free, input: 1 } }, zero).reason).toContain("inconsistent");

@@ -163,6 +163,61 @@ export function catalogueCost(model: Pick<AnyModel, "provider" | "id" | "type" |
 				"Standard, global first-party; 5m or 1h writes. Batch and US-only inference uplift excluded.",
 			);
 	}
+	if (type === "chat" && model.provider === "amazon-bedrock") {
+		// Normalize only AWS's public profile prefixes and exact physical IDs, never fuzzy aliases.
+		const id = model.id.replace(/^(global|us|eu|apac|au|jp|in|ca)\./, "");
+		// Independent AWS Global Cross-region Inference table, not direct Anthropic substitution.
+		const baseline: Record<string, ModelCost> = {
+			"anthropic.claude-sonnet-5-5": { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5, cacheWrite1h: 4 },
+			"anthropic.claude-opus-5-5": { input: 4, output: 20, cacheRead: 0.2, cacheWrite: 5, cacheWrite1h: 8 },
+			"anthropic.claude-fable-5-2": { input: 8, output: 40, cacheRead: 0.2, cacheWrite: 10, cacheWrite1h: 16 },
+			"anthropic.claude-fable-5-1": { input: 10, output: 50, cacheRead: 0.25, cacheWrite: 12.5, cacheWrite1h: 20 },
+			"anthropic.claude-fable-5": { input: 10, output: 50, cacheRead: 1, cacheWrite: 12.5, cacheWrite1h: 20 },
+			"anthropic.claude-sonnet-5": { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5, cacheWrite1h: 4 },
+			"anthropic.claude-sonnet-4-6": { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75, cacheWrite1h: 6 },
+			"anthropic.claude-opus-5": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25, cacheWrite1h: 10 },
+			"anthropic.claude-opus-4-8": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25, cacheWrite1h: 10 },
+			"anthropic.claude-opus-4-7": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25, cacheWrite1h: 10 },
+			"anthropic.claude-opus-4-6-v1": { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25, cacheWrite1h: 10 },
+			"anthropic.claude-opus-4-5-20251101-v1:0": {
+				input: 5,
+				output: 25,
+				cacheRead: 0.5,
+				cacheWrite: 6.25,
+				cacheWrite1h: 10,
+			},
+			"anthropic.claude-haiku-4-5-20251001-v1:0": {
+				input: 1,
+				output: 5,
+				cacheRead: 0.1,
+				cacheWrite: 1.25,
+				cacheWrite1h: 2,
+			},
+			"anthropic.claude-haiku-5-5": {
+				input: 0.1,
+				output: 0.5,
+				cacheRead: 0.01,
+				cacheWrite: 0.125,
+				cacheWrite1h: 0.2,
+				tiers: [
+					{
+						inputTokensAbove: 100000,
+						input: 0.5,
+						output: 2.5,
+						cacheRead: 0.05,
+						cacheWrite: 0.625,
+						cacheWrite1h: 1,
+					},
+				],
+			},
+		};
+		if (Object.hasOwn(baseline, id))
+			return verified(
+				baseline[id],
+				"https://aws.amazon.com/bedrock/pricing/",
+				"Published baseline: USD per 1M tokens, Standard/on-demand, Global Cross-region Inference table, US East (N. Virginia) selector. All listed profile IDs are normalized to this baseline, NOT actual regional/profile invoice prices. 5m/1h writes; Batch, Flex, Priority, Reserved, discounts and regional uplifts excluded.",
+			);
+	}
 	if (type === "chat" && model.provider === "google" && model.id === "gemini-2.5-pro") {
 		return verified(
 			{
@@ -185,7 +240,7 @@ export function catalogueCost(model: Pick<AnyModel, "provider" | "id" | "type" |
 				type === "image"
 					? "Non-token image charges are not supported by token valuation."
 					: model.provider === "amazon-bedrock"
-						? "Official region, inference profile and service mode are unresolved."
+						? "No verified exact physical-model mapping to the published Bedrock baseline."
 						: "Official rates or exact alias mapping have not been verified.",
 		},
 	};
@@ -240,11 +295,33 @@ export function estimateTokenCost(
 	model: Pick<AnyModel, "type" | "cost"> | undefined,
 	tokens: PricingTokens,
 ): CostEstimate {
-	if (!model) return { cost: null, reason: "Model or exact alias mapping is unavailable." };
+	if (!model?.cost) return { cost: null, reason: "Model or exact alias mapping is unavailable." };
 	if (model.type === "image") return { cost: null, reason: "Non-token image accounting is unsupported." };
 	const assessment = model.cost.assessment;
 	if (!assessment || assessment.status === "unknown")
 		return { cost: null, reason: assessment?.reason ?? "Rates have not been verified." };
+	if (
+		(assessment.status !== "verified" && assessment.status !== "free") ||
+		assessment.unit !== "usd-per-million-tokens" ||
+		typeof assessment.source !== "string" ||
+		!assessment.source ||
+		typeof assessment.conditions !== "string" ||
+		!assessment.conditions ||
+		typeof assessment.checkedAt !== "string" ||
+		!/^\d{4}-\d{2}-\d{2}$/.test(assessment.checkedAt)
+	)
+		return { cost: null, reason: "Invalid pricing assessment." };
+	if (
+		(assessment.unavailable !== undefined &&
+			(!Array.isArray(assessment.unavailable) ||
+				assessment.unavailable.some((field) => !["input", "output", "cacheRead", "cacheWrite"].includes(field)))) ||
+		(model.cost.tiers !== undefined &&
+			(!Array.isArray(model.cost.tiers) ||
+				model.cost.tiers.some(
+					(tier) => !tier || !Number.isSafeInteger(tier.inputTokensAbove) || tier.inputTokensAbove < 0,
+				)))
+	)
+		return { cost: null, reason: "Invalid pricing metadata." };
 	if (assessment.unavailable?.some((field) => tokens[field] > 0))
 		return { cost: null, reason: "A consumed token category has no applicable token rate." };
 	const counts = [
@@ -255,7 +332,10 @@ export function estimateTokenCost(
 		tokens.cacheWrite1h ?? 0,
 		tokens.cacheWrite12h ?? 0,
 	];
-	if (counts.some((count) => !Number.isSafeInteger(count) || count < 0))
+	if (
+		counts.some((count) => !Number.isSafeInteger(count) || count < 0) ||
+		!Number.isSafeInteger(tokens.input + tokens.output + tokens.cacheRead + tokens.cacheWrite)
+	)
 		return { cost: null, reason: "Invalid token counters." };
 	const oneHour = tokens.cacheWrite1h ?? 0;
 	const twelveHour = tokens.cacheWrite12h ?? 0;
@@ -266,14 +346,14 @@ export function estimateTokenCost(
 	const rates = costRates(model.cost, tokens.input + tokens.cacheRead + tokens.cacheWrite);
 	if ((oneHour > 0 && rates.cacheWrite1h === undefined) || (twelveHour > 0 && rates.cacheWrite12h === undefined))
 		return { cost: null, reason: "Cache-write lifetime price is unavailable." };
-	const values = [
-		rates.input,
-		rates.output,
-		rates.cacheRead,
-		rates.cacheWrite,
-		rates.cacheWrite1h ?? 0,
-		rates.cacheWrite12h ?? 0,
-	];
+	const values = [model.cost, ...(model.cost.tiers ?? [])].flatMap((rate) => [
+		rate.input,
+		rate.output,
+		rate.cacheRead,
+		rate.cacheWrite,
+		rate.cacheWrite1h === undefined ? 0 : rate.cacheWrite1h,
+		rate.cacheWrite12h === undefined ? 0 : rate.cacheWrite12h,
+	]);
 	if (
 		values.some((rate) => !Number.isFinite(rate) || rate < 0) ||
 		(assessment.status === "free" && values.some((rate) => rate !== 0))

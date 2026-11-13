@@ -2864,7 +2864,10 @@ async function generateModels() {
 		// Cloudflare AI Gateway passes OpenAI usage through at OpenAI list prices.
 		if (candidate.provider === "cloudflare-ai-gateway") {
 			const standardCost = OPENAI_STANDARD_COSTS[candidate.id];
-			if (standardCost) candidate.cost = withOpenAiLongContextPricing(standardCost);
+			if (standardCost)
+				candidate.cost = OPENAI_LONG_CONTEXT_PRICING_MODEL_IDS.has(candidate.id)
+					? withOpenAiLongContextPricing(standardCost)
+					: standardCost;
 		}
 		// models.dev reports gpt-5-pro output as 272000 (a duplicate of the input sub-limit);
 		// the actual max output is 128000. Also propagates to the derived Azure clone.

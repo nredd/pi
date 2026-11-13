@@ -105,7 +105,7 @@ Events cover resource discovery, sessions, agent and message lifecycle, provider
 
 `message_end` can replace a finalized message while preserving its role. `tool_call` can mutate input or block execution. `tool_result` handlers compose, with each handler seeing prior changes.
 
-`tool_not_found` fires when the model calls a tool that is not available, which never reaches `tool_call`. It carries `toolName`, `toolCallId`, and `parentToolCallId` for nested calls. Return `{ message }` to replace the default error text the model sees, for example to say a deferred tool must be loaded with `tool_search`; the first non-empty message wins, and without one the default text stays. The result is always an error.
+`tool_not_found` fires when the model calls a tool that is not available, which never reaches `tool_call`. It carries `toolName`, `toolCallId`, and `parentToolCallId` for nested calls. Return `{ message }` to replace the default error text the model sees, for example to say a deferred tool must be loaded first; the first non-empty message wins, and without one the default text stays. The result is always an error.
 
 <a id="provider_stream_event"></a>
 

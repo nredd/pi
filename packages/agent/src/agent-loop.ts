@@ -695,7 +695,7 @@ type ExecutedToolCallOutcome = {
 
 type FinalizedToolCallOutcome = AgentToolCallOutcome;
 
-/** The `beforeToolCall` and `afterToolCall` hooks of {@link AgentLoopConfig}. */
+/** The `beforeToolCall`, `afterToolCall` and `getToolNotFoundMessage` hooks of {@link AgentLoopConfig}. */
 export type ToolCallHooks = Pick<AgentLoopConfig, "beforeToolCall" | "afterToolCall" | "getToolNotFoundMessage">;
 
 type ToolUpdateSink = (partialResult: AgentToolResult<any>) => Promise<void> | void;

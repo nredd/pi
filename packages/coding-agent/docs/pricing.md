@@ -41,7 +41,8 @@ Source audit, checked 2026-11-12:
 
 - Official OpenAI Standard table [here](https://developers.openai.com/api/docs/pricing):
   `OPENAI_STANDARD_COSTS` in `packages/ai/src/catalog-pricing.ts` records the exact base
-  table. Its explicitly listed long-context models use the published >272K tier. The
+  table. Its explicitly listed long-context models use the published >272K tier; generation
+  and runtime share both eligibility and tier construction, including `gpt-6.1-terra`. The
   table's absent cache categories are unavailable, not free. Batch/Flex/Fast/Ultrafast,
   regional/FedRAMP uplift and promotional expiry are not inferred from old records.
 - Official Anthropic table [here](https://platform.claude.com/docs/en/about-claude/pricing):

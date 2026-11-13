@@ -37,7 +37,8 @@ export const OPENAI_STANDARD_COSTS: Record<string, ModelCost> = {
 	o3: { input: 2, output: 8, cacheRead: 0.5, cacheWrite: 0 },
 };
 
-const OPENAI_LONG_CONTEXT_IDS = new Set([
+export const OPENAI_LONG_CONTEXT_INPUT_THRESHOLD = 272000;
+export const OPENAI_LONG_CONTEXT_PRICING_MODEL_IDS = new Set([
 	"gpt-5.4",
 	"gpt-5.4-pro",
 	"gpt-5.5",
@@ -62,6 +63,23 @@ const CODEX_API_EQUIVALENT_IDS = new Set([
 	"gpt-6-luna",
 	"gpt-6.1-sol",
 ]);
+
+/** Published OpenAI Standard long-context policy, shared by generation and runtime correction. */
+export function withOpenAiLongContextPricing(cost: ModelCost): ModelCost {
+	return {
+		...cost,
+		tiers: [
+			{
+				inputTokensAbove: OPENAI_LONG_CONTEXT_INPUT_THRESHOLD,
+				input: Number((cost.input * 2).toFixed(6)),
+				output: Number((cost.output * 1.5).toFixed(6)),
+				cacheRead: Number((cost.cacheRead * 2).toFixed(6)),
+				cacheWrite: Number((cost.cacheWrite * 2).toFixed(6)),
+				...(cost.cacheWrite12h !== undefined ? { cacheWrite12h: Number((cost.cacheWrite12h * 2).toFixed(6)) } : {}),
+			},
+		],
+	};
+}
 
 function verified(
 	cost: ModelCost,
@@ -99,23 +117,9 @@ export function catalogueCost(model: Pick<AnyModel, "provider" | "id" | "type" |
 	) {
 		const base = Object.hasOwn(OPENAI_STANDARD_COSTS, model.id) ? OPENAI_STANDARD_COSTS[model.id] : undefined;
 		if (base) {
+			const cost = { ...base, ...(base.cacheWrite > 0 ? { cacheWrite12h: base.cacheWrite * 2 } : {}) };
 			return verified(
-				{
-					...base,
-					...(base.cacheWrite > 0 ? { cacheWrite12h: base.cacheWrite * 2 } : {}),
-					tiers: OPENAI_LONG_CONTEXT_IDS.has(model.id)
-						? [
-								{
-									inputTokensAbove: 272000,
-									input: base.input * 2,
-									output: base.output * 1.5,
-									cacheRead: base.cacheRead * 2,
-									cacheWrite: base.cacheWrite * 2,
-									...(base.cacheWrite > 0 ? { cacheWrite12h: base.cacheWrite * 4 } : {}),
-								},
-							]
-						: undefined,
-				},
+				OPENAI_LONG_CONTEXT_PRICING_MODEL_IDS.has(model.id) ? withOpenAiLongContextPricing(cost) : cost,
 				OPENAI_SOURCE,
 				"Standard, global; explicitly listed cache lifetimes only; API-equivalent, not subscription charges. Regional, Batch, Flex, Fast and Ultrafast excluded.",
 				[

@@ -3,7 +3,7 @@
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "fs";
 import { dirname, join, resolve } from "path";
 import { fileURLToPath } from "url";
-import { catalogueCost, OPENAI_STANDARD_COSTS } from "../src/catalog-pricing.ts";
+import { catalogueCost, OPENAI_STANDARD_COSTS, OPENAI_LONG_CONTEXT_INPUT_THRESHOLD, OPENAI_LONG_CONTEXT_PRICING_MODEL_IDS, withOpenAiLongContextPricing } from "../src/catalog-pricing.ts";
 import { getEffortThinkingLevelMap, type ModelsDevReasoningOption } from "./models-dev-reasoning-options.ts";
 import { type AiGatewayPricing, getAiGatewayCost } from "./ai-gateway-pricing.ts";
 import { buildOpenRouterCatalog, type OpenRouterCatalog, type OpenRouterModelListItem } from "./openrouter-catalog.ts";
@@ -400,23 +400,9 @@ const OPENAI_CODEX_ADDITIONAL_TOOLS_MODEL_IDS = new Set([
 // OpenAI documents configuration_update for the GPT-6 family.
 // https://developers.openai.com/api/docs/guides/reasoning
 const OPENAI_MID_CONVO_EFFORT_MODEL_IDS = new Set(["gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol"]);
-const OPENAI_LONG_CONTEXT_INPUT_THRESHOLD = 272000;
 const OPENAI_SHORT_CONTEXT_CAPPED_MODEL_IDS = new Set([
 	"gpt-5.4",
 	"gpt-5.5",
-	"gpt-5.6-sol",
-	"gpt-5.6-terra",
-	"gpt-5.6-luna",
-	"gpt-6-astra",
-	"gpt-6-sol",
-	"gpt-6-luna",
-	"gpt-6.1-sol",
-]);
-const OPENAI_LONG_CONTEXT_PRICING_MODEL_IDS = new Set([
-	"gpt-5.4",
-	"gpt-5.4-pro",
-	"gpt-5.5",
-	"gpt-5.5-pro",
 	"gpt-5.6-sol",
 	"gpt-5.6-terra",
 	"gpt-5.6-luna",
@@ -435,21 +421,6 @@ const DEFAULT_IMAGE_RESIZE = {
 	maxBytes: 4.5 * 1024 * 1024,
 	jpegQuality: 80,
 } as const;
-
-function withOpenAiLongContextPricing(cost: Model<Api>["cost"]): Model<Api>["cost"] {
-	return {
-		...cost,
-		tiers: [
-			{
-				inputTokensAbove: OPENAI_LONG_CONTEXT_INPUT_THRESHOLD,
-				input: roundCost(cost.input * 2),
-				output: roundCost(cost.output * 1.5),
-				cacheRead: roundCost(cost.cacheRead * 2),
-				cacheWrite: roundCost(cost.cacheWrite * 2),
-			},
-		],
-	};
-}
 
 const OPENAI_RESPONSES_NONE_REASONING_MODELS = new Set([
 	"gpt-5.1",

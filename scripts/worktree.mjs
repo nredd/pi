@@ -4,7 +4,7 @@
  * Make a fresh git worktree self-sufficient for the local gate.
  *
  *   node scripts/worktree.mjs setup [--skip-daemon]   idempotent; installs everything below
- *   node scripts/worktree.mjs check                   read-only; exits 1 and says what is missing
+ *   node scripts/worktree.mjs check [--strict]          read-only; exits 1 and says what is missing (--strict also enforces the release stamp)
  *
  * `setup` installs from the lockfile (`npm ci --ignore-scripts`), installs the husky shim
  * (`.husky/_`, which `npm ci --ignore-scripts` never creates), restores the model data of the
@@ -14,6 +14,11 @@
  * `core.hooksPath=.husky/_` is relative and shared by every worktree. Where `.husky/_` is missing
  * git runs no hook at all, so no hook can detect that. `check` is the guard: `npm run check` (the
  * pre-commit gate) runs it first and fails loudly.
+ *
+ * Blocking (`check`, run by `npm run check`): hook dir, `node_modules`, valid model data. Regenerated
+ * but valid data (`npm run build`, release scripts) must never block the gate. The release stamp is
+ * advisory there and only enforced by `check --strict` (`npm run worktree:check`). A missing stamp
+ * (checkouts that predate this script) is only ever a warning.
  */
 
 import { execFileSync } from "node:child_process";
@@ -72,6 +77,27 @@ function stampIsCurrent(root) {
 	return existsSync(stamp) && readFileSync(stamp, "utf8").trim() === expectedStamp(root);
 }
 
+/** Problem text when the stamp exists but no longer matches the data, else undefined. A missing stamp is not a mismatch. */
+function stampMismatch(root) {
+	if (!existsSync(modelDataStampPath(root)) || stampIsCurrent(root)) return undefined;
+	return `model data changed since it was restored from the ${AI_PACKAGE}@${releaseVersion(root)} release (regenerated or another release)`;
+}
+
+/** Error text when the model data fails the repo's own validator, else undefined. */
+function modelDataInvalid(root) {
+	try {
+		execFileSync(process.execPath, [join(root, "packages/ai/scripts/check-model-data.ts")], {
+			cwd: root,
+			encoding: "utf8",
+			stdio: ["ignore", "pipe", "pipe"],
+		});
+		return undefined;
+	} catch (error) {
+		const detail = `${error.stdout ?? ""}${error.stderr ?? ""}`.trim().split("\n")[0];
+		return `model data is invalid: ${detail || String(error.message)}`;
+	}
+}
+
 /** Directory git will run hooks from for this worktree, or undefined when unset. */
 export function configuredHooksDir(root) {
 	let hooksPath;
@@ -85,15 +111,20 @@ export function configuredHooksDir(root) {
 
 /**
  * Problems that make this worktree unable to run its own gate. Empty means ready.
- * Hook and dependency problems are always reported; model data is checked against the stamp.
+ * Hook, dependency and model-data validity problems always block. The release stamp is
+ * advisory (`warnings`) unless `strict`, and a missing stamp is never more than a warning.
+ * `hooks: false` skips the hook directory check (GitHub Actions has no husky shim by design).
  */
-export function findProblems(root) {
+export function inspect(root, { strict = false, hooks = true } = {}) {
 	const problems = [];
+	const warnings = [];
 
-	const hooksDir = configuredHooksDir(root);
-	if (!hooksDir) problems.push("core.hooksPath is unset, so git runs no pre-commit hook");
-	else if (!existsSync(join(hooksDir, "pre-commit"))) {
-		problems.push(`git hook directory ${hooksDir} is missing, so git silently runs NO pre-commit hook`);
+	if (hooks) {
+		const hooksDir = configuredHooksDir(root);
+		if (!hooksDir) problems.push("core.hooksPath is unset, so git runs no pre-commit hook");
+		else if (!existsSync(join(hooksDir, "pre-commit"))) {
+			problems.push(`git hook directory ${hooksDir} is missing, so git silently runs NO pre-commit hook`);
+		}
 	}
 
 	const modules = join(root, "node_modules");
@@ -104,12 +135,25 @@ export function findProblems(root) {
 		problems.push("node_modules lacks @biomejs/wasm-nodejs");
 
 	if (!existsSync(modelDataDir(root))) problems.push("packages/ai/src/providers/data is missing");
-	else if (!stampIsCurrent(root)) {
-		problems.push(
-			`model data was not restored from the ${AI_PACKAGE}@${releaseVersion(root)} release (or changed since)`,
-		);
+	else {
+		const invalid = modelDataInvalid(root);
+		if (invalid) problems.push(invalid);
+		else {
+			const mismatch = stampMismatch(root);
+			if (mismatch) (strict ? problems : warnings).push(mismatch);
+			else if (!existsSync(modelDataStampPath(root))) {
+				warnings.push(
+					`model data has no release stamp (run \`npm run worktree:setup\` to restore ${AI_PACKAGE}@${releaseVersion(root)})`,
+				);
+			}
+		}
 	}
-	return problems;
+	return { problems, warnings };
+}
+
+/** Blocking problems only; see `inspect`. */
+export function findProblems(root, options) {
+	return inspect(root, options).problems;
 }
 
 function run(root, command, args, env = {}) {
@@ -168,23 +212,39 @@ function restoreModelData(root) {
 				stdio: ["ignore", "ignore", "inherit"],
 			},
 		);
-		const tarball = join(scratch, `earendil-works-pi-ai-${version}.tgz`);
-		execFileSync("tar", ["-xzf", tarball, "-C", scratch]);
+		// Relative archive name with cwd=scratch: GNU tar reads `C:\...` as a remote host (`host:path`).
+		execFileSync("tar", ["-xzf", `earendil-works-pi-ai-${version}.tgz`], { cwd: scratch });
 		const source = join(scratch, "package/dist/providers/data");
 		if (!existsSync(source)) throw new Error(`${AI_PACKAGE}@${version} has no dist/providers/data`);
-		const target = modelDataDir(root);
-		const staging = `${target}.restoring`;
-		rmSync(staging, { recursive: true, force: true });
-		mkdirSync(dirname(target), { recursive: true });
-		cpSync(source, staging, { recursive: true });
-		rmSync(target, { recursive: true, force: true });
-		renameSync(staging, target);
+		installValidated(root, source);
 	} finally {
 		rmSync(scratch, { recursive: true, force: true });
 	}
-	// Fail loudly if the release data does not match what this checkout's source expects.
-	run(root, process.execPath, [join(root, "packages/ai/scripts/check-model-data.ts")]);
 	writeFileSync(modelDataStampPath(root), `${expectedStamp(root)}\n`);
+}
+
+/**
+ * Swap `source` in as the model data, validate it, and roll the previous data back on failure so a
+ * bad release never replaces a working set.
+ */
+export function installValidated(root, source) {
+	const target = modelDataDir(root);
+	const staging = `${target}.restoring`;
+	const previous = `${target}.previous`;
+	rmSync(staging, { recursive: true, force: true });
+	rmSync(previous, { recursive: true, force: true });
+	mkdirSync(dirname(target), { recursive: true });
+	cpSync(source, staging, { recursive: true });
+	const hadPrevious = existsSync(target);
+	if (hadPrevious) renameSync(target, previous);
+	renameSync(staging, target);
+	const invalid = modelDataInvalid(root);
+	if (invalid) {
+		rmSync(target, { recursive: true, force: true });
+		if (hadPrevious) renameSync(previous, target);
+		throw new Error(`release model data rejected, previous data restored: ${invalid}`);
+	}
+	rmSync(previous, { recursive: true, force: true });
 }
 
 function buildDaemon(root) {
@@ -203,16 +263,17 @@ export function setup(root, { skipDaemon = false } = {}) {
 	installHuskyShim(root);
 	restoreModelData(root);
 	if (!skipDaemon) buildDaemon(root);
-	const problems = findProblems(root);
+	const problems = findProblems(root, { strict: true });
 	if (problems.length > 0)
 		throw new Error(`setup finished but the worktree is still not ready:\n- ${problems.join("\n- ")}`);
 	console.log("worktree ready");
 }
 
-export function check(root) {
-	// CI installs with --ignore-scripts and restores model data inline; it has no husky shim by design.
-	if (process.env.CI === "true") return 0;
-	const problems = findProblems(root);
+export function check(root, { strict = false } = {}) {
+	// GitHub Actions installs with --ignore-scripts and has no husky shim by design; everything else still applies.
+	const hooks = process.env.GITHUB_ACTIONS !== "true";
+	const { problems, warnings } = inspect(root, { strict, hooks });
+	for (const warning of warnings) console.warn(`warning: ${warning}`);
 	if (problems.length === 0) return 0;
 	console.error(`This worktree cannot run the local gate:\n- ${problems.join("\n- ")}\nRun: npm run worktree:setup`);
 	return 1;
@@ -222,7 +283,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
 	const [command, ...flags] = process.argv.slice(2);
 	try {
 		if (command === "setup") setup(repoRoot, { skipDaemon: flags.includes("--skip-daemon") });
-		else if (command === "check") process.exitCode = check(repoRoot);
+		else if (command === "check") process.exitCode = check(repoRoot, { strict: flags.includes("--strict") });
 		else {
 			console.error("Usage: node scripts/worktree.mjs <setup [--skip-daemon] | check>");
 			process.exitCode = 2;

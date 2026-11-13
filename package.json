@@ -54,7 +54,7 @@
 		"release:major": "node scripts/release.mjs major",
 		"release:fix-links": "node scripts/release-notes.mjs fix-github-releases",
 		"worktree:setup": "node scripts/worktree.mjs setup",
-		"worktree:check": "node scripts/worktree.mjs check",
+		"worktree:check": "node scripts/worktree.mjs check --strict",
 		"prepare": "husky"
 	},
 	"devDependencies": {

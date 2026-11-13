@@ -1,12 +1,21 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { copyFileSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+	copyFileSync,
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { configuredHooksDir, findProblems, modelDataStampPath } from "./worktree.mjs";
+import { check, configuredHooksDir, findProblems, inspect, installValidated, modelDataStampPath } from "./worktree.mjs";
 
 const script = fileURLToPath(new URL("./worktree.mjs", import.meta.url));
 
@@ -25,6 +34,13 @@ function makeReady(root) {
 	writeFileSync(join(root, ".husky/_/pre-commit"), "");
 	mkdirSync(join(root, "node_modules/@biomejs/wasm-nodejs"), { recursive: true });
 	mkdirSync(join(root, "packages/ai/src/providers/data"), { recursive: true });
+	// Stand-in for packages/ai/scripts/check-model-data.ts: valid unless the manifest says {"invalid":true}.
+	mkdirSync(join(root, "packages/ai/scripts"), { recursive: true });
+	writeFileSync(
+		join(root, "packages/ai/scripts/check-model-data.ts"),
+		`const m = require("node:fs").readFileSync(${JSON.stringify(join(root, "packages/ai/src/providers/data/.manifest.json"))}, "utf8");
+if (m.includes("invalid")) { console.error("Model data is stale"); process.exit(1); }`,
+	);
 	writeFileSync(join(root, "packages/ai/src/providers/data/.manifest.json"), "{}");
 	writeFileSync(modelDataStampPath(root), `9.9.9 ${createHash("sha256").update("{}").digest("hex")}\n`);
 }
@@ -52,18 +68,63 @@ test("rejects borrowed node_modules symlinks", (t) => {
 	assert.match(findProblems(root).join("\n"), /node_modules is a symlink/);
 });
 
-test("rejects model data from another release", (t) => {
+const strict = { strict: true };
+
+test("a stamp mismatch blocks only under --strict", (t) => {
 	const root = makeRepo(t);
 	makeReady(root);
 	writeFileSync(modelDataStampPath(root), "9.9.8 deadbeef\n");
-	assert.match(findProblems(root).join("\n"), /not restored from the @earendil-works\/pi-ai@9\.9\.9 release/);
+	assert.deepEqual(findProblems(root), []);
+	assert.match(inspect(root).warnings.join("\n"), /changed since/);
+	assert.match(findProblems(root, strict).join("\n"), /changed since/);
 });
 
-test("rejects model data regenerated after the restore", (t) => {
+// release:*, prepublishOnly and build regenerate valid data; the gate must keep passing.
+test("regenerated but valid model data does not block the gate", (t) => {
 	const root = makeRepo(t);
 	makeReady(root);
-	writeFileSync(join(root, "packages/ai/src/providers/data/.manifest.json"), '{"live":true}');
-	assert.match(findProblems(root).join("\n"), /changed since/);
+	writeFileSync(join(root, "packages/ai/src/providers/data/.manifest.json"), '{"generatedAt":"later"}');
+	assert.deepEqual(findProblems(root), []);
+	assert.equal(inspect(root).warnings.length, 1);
+	assert.equal(findProblems(root, strict).length, 1);
+});
+
+test("invalid model data always blocks", (t) => {
+	const root = makeRepo(t);
+	makeReady(root);
+	writeFileSync(join(root, "packages/ai/src/providers/data/.manifest.json"), '{"invalid":true}');
+	assert.match(findProblems(root).join("\n"), /model data is invalid: Model data is stale/);
+});
+
+// Checkouts that predate the stamp must not be blocked.
+test("a missing stamp is a warning, even under --strict", (t) => {
+	const root = makeRepo(t);
+	makeReady(root);
+	rmSync(modelDataStampPath(root));
+	assert.deepEqual(findProblems(root, strict), []);
+	assert.match(inspect(root, strict).warnings.join("\n"), /no release stamp/);
+});
+
+test("installValidated swaps in valid data", (t) => {
+	const root = makeRepo(t);
+	makeReady(root);
+	const source = mkdtempSync(join(tmpdir(), "pi-source-"));
+	t.after(() => rmSync(source, { recursive: true, force: true }));
+	writeFileSync(join(source, ".manifest.json"), '{"new":true}');
+	installValidated(root, source);
+	assert.equal(readFileSync(join(root, "packages/ai/src/providers/data/.manifest.json"), "utf8"), '{"new":true}');
+	assert.equal(existsSync(join(root, "packages/ai/src/providers/data.previous")), false);
+});
+
+test("installValidated rolls back when the new data is invalid", (t) => {
+	const root = makeRepo(t);
+	makeReady(root);
+	const source = mkdtempSync(join(tmpdir(), "pi-source-"));
+	t.after(() => rmSync(source, { recursive: true, force: true }));
+	writeFileSync(join(source, ".manifest.json"), '{"invalid":true}');
+	assert.throws(() => installValidated(root, source), /previous data restored/);
+	assert.equal(readFileSync(join(root, "packages/ai/src/providers/data/.manifest.json"), "utf8"), "{}");
+	assert.equal(existsSync(join(root, "packages/ai/src/providers/data.previous")), false);
 });
 
 test("reports an unset core.hooksPath", (t) => {
@@ -73,12 +134,9 @@ test("reports an unset core.hooksPath", (t) => {
 	assert.match(findProblems(root).join("\n"), /core\.hooksPath is unset/);
 });
 
-test("check exits non-zero locally and is skipped in CI", () => {
+test("check exits non-zero locally; GitHub Actions skips only the hook check", () => {
 	const env = { ...process.env };
-	delete env.CI;
-	// The real checkout may or may not be set up; only the CI escape hatch is deterministic.
-	const ci = spawnSync(process.execPath, [script, "check"], { encoding: "utf8", env: { ...env, CI: "true" } });
-	assert.equal(ci.status, 0);
+	delete env.GITHUB_ACTIONS;
 	// #85: a worktree without the shim must fail the gate with exit 1 and the fix.
 	const root = mkdtempSync(join(tmpdir(), "pi-worktree-cli-"));
 	try {
@@ -100,4 +158,24 @@ test("check exits non-zero locally and is skipped in CI", () => {
 	}
 	const usage = spawnSync(process.execPath, [script, "bogus"], { encoding: "utf8", env });
 	assert.equal(usage.status, 2);
+});
+
+test("GITHUB_ACTIONS skips the hook check but keeps node_modules and data checks", (t) => {
+	const root = makeRepo(t);
+	makeReady(root);
+	rmSync(join(root, ".husky"), { recursive: true });
+	const saved = process.env.GITHUB_ACTIONS;
+	const errors = console.error;
+	console.error = () => {};
+	t.after(() => {
+		console.error = errors;
+		if (saved === undefined) delete process.env.GITHUB_ACTIONS;
+		else process.env.GITHUB_ACTIONS = saved;
+	});
+	process.env.GITHUB_ACTIONS = "true";
+	assert.equal(check(root), 0);
+	rmSync(join(root, "node_modules"), { recursive: true });
+	assert.equal(check(root), 1);
+	process.env.GITHUB_ACTIONS = "false";
+	assert.equal(check(root), 1);
 });

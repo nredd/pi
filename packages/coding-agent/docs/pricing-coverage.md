@@ -58,3 +58,20 @@ Public catalogue coverage, checked 2026-11-12:
 | `zai-coding-cn` | 4 | 0 | 0 | 0 | 0 | 4 |
 | `zai` | 7 | 0 | 0 | 0 | 0 | 7 |
 | Total | 1614 | 40 | 60 | 116 | 0 | 1598 |
+
+Source follow-up, checked 2026-11-13:
+
+- The exact `openai-codex/gpt-6.1-terra` selector is now assessed as API-equivalent,
+  using the [public Codex guide](https://developers.openai.com/codex/models),
+  [exact API model card](https://developers.openai.com/api/docs/models/gpt-6.1-terra.md)
+  and [Standard pricing](https://developers.openai.com/api/docs/pricing).
+- USD per million tokens: input `1`, output `5`, cache read `0.05`, 30m write `1.25`,
+  12h write `2.50`. Above `272000` total input tokens, including cached input and
+  writes, input/cache rates double and output is `1.5x` for the whole request.
+- Generated source catalogues include this exact Codex selector with a conservative
+  `272000` default context limit. This does not discover or promise account availability,
+  measure subscription cash, or certify unrelated aliases. Missing retained write TTL
+  still makes an event unpriced; an unsupported one-hour write is not a 30m write.
+- The frozen archive table above remains unchanged: Terra is not an additional operation
+  in that dated archive. This source change does not modify `.11`, publish a release,
+  advance selected pins or activate a new catalogue.

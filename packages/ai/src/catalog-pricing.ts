@@ -88,7 +88,7 @@ function verified(
 	conditions: string,
 	unavailable: ("input" | "output" | "cacheRead" | "cacheWrite")[] = [],
 	checkedAt = PRICING_CHECKED_AT,
-): ModelCost {
+): ModelCost & { assessment: { status: "verified" } } {
 	return {
 		...cost,
 		assessment: {
@@ -103,8 +103,15 @@ function verified(
 }
 
 /** Apply narrow official corrections before user overrides, never infer a provider from a model name. */
-export function catalogueCost(model: Pick<AnyModel, "provider" | "id" | "type" | "cost">): ModelCost {
+export function catalogueCost(
+	model: Pick<AnyModel, "provider" | "id" | "type" | "cost"> & Partial<Pick<AnyModel, "api">>,
+): ModelCost {
 	const type = model.type ?? "chat";
+	const codex53 =
+		type === "chat" &&
+		model.provider === "openai" &&
+		model.id === "gpt-5.3-codex" &&
+		model.api === "openai-responses";
 	const codexTerra = type === "chat" && model.provider === "openai-codex" && model.id === "gpt-6.1-terra";
 	const boundedAnthropicContract =
 		type === "chat" &&
@@ -118,7 +125,7 @@ export function catalogueCost(model: Pick<AnyModel, "provider" | "id" | "type" |
 			"claude-sonnet-4-5",
 			"claude-sonnet-4-5-20250929",
 		].includes(model.id);
-	const checkedAt = codexTerra || boundedAnthropicContract ? "2026-11-13" : PRICING_CHECKED_AT;
+	const checkedAt = codexTerra || codex53 || boundedAnthropicContract ? "2026-11-13" : PRICING_CHECKED_AT;
 	const previous = model.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 	// A newer explicitly assessed catalog must not be frozen at this client's audit date.
 	if (
@@ -127,6 +134,23 @@ export function catalogueCost(model: Pick<AnyModel, "provider" | "id" | "type" |
 		previous.assessment.checkedAt > checkedAt
 	)
 		return previous;
+	if (codex53) {
+		const cost = verified(
+			{ input: 1.75, output: 14, cacheRead: 0.175, cacheWrite: 0 },
+			"https://developers.openai.com/api/docs/models/gpt-5.3-codex.md",
+			"Deprecated Responses API contract; retires 2027-04-01: https://developers.openai.com/api/docs/deprecations. Cache-write price and lifetime not established.",
+			["cacheWrite"],
+			checkedAt,
+		);
+		cost.assessment = {
+			...cost.assessment,
+			maxInputTokens: 272000,
+			maxContextTokens: 400000,
+			maxOutputTokens: 128000,
+			retiredOn: "2027-04-01",
+		};
+		return cost;
+	}
 	if (
 		type === "chat" &&
 		(model.provider === "openai" || (model.provider === "openai-codex" && CODEX_API_EQUIVALENT_IDS.has(model.id)))
@@ -390,7 +414,7 @@ export function estimateTokenCost(
 		new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) === date;
 	if (!validDate(asOf)) return { cost: null, reason: "Invalid evaluation date." };
 	if (asOf < assessment.checkedAt) return { cost: null, reason: "Evaluation date precedes the verified price check." };
-	for (const limit of [assessment.maxContextTokens, assessment.maxOutputTokens])
+	for (const limit of [assessment.maxInputTokens, assessment.maxContextTokens, assessment.maxOutputTokens])
 		if (limit !== undefined && (!Number.isSafeInteger(limit) || limit < 1))
 			return { cost: null, reason: "Invalid pricing metadata." };
 	if (
@@ -400,6 +424,11 @@ export function estimateTokenCost(
 		return { cost: null, reason: "Invalid pricing metadata." };
 	if (assessment.retiredOn && asOf >= assessment.retiredOn)
 		return { cost: null, reason: "Model contract is retired." };
+	if (
+		assessment.maxInputTokens !== undefined &&
+		tokens.input + tokens.cacheRead + tokens.cacheWrite > assessment.maxInputTokens
+	)
+		return { cost: null, reason: "Input exceeds the verified contract." };
 	if (assessment.maxOutputTokens !== undefined && tokens.output > assessment.maxOutputTokens)
 		return { cost: null, reason: "Output exceeds the verified contract." };
 	if (

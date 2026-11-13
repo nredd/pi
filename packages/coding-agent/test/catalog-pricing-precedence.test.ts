@@ -171,6 +171,25 @@ describe("catalogue pricing precedence", () => {
 			expect(globalThis.fetch).toHaveBeenCalledOnce();
 		},
 	);
+	// nredd/pi#54: exact Responses correction precedes explicit user cost overrides.
+	it("preserves the user override after the Codex 5.3 correction", async () => {
+		const model = { ...publicModel, id: "gpt-5.3-codex", contextWindow: 400000 };
+		const source = { ...builtin(), getModels: () => [model], getAllModels: () => [model] };
+		const provider = withRemoteCatalog(source, "https://example.test", 1);
+		expect(provider.getModels()[0]?.cost).toMatchObject({ input: 1.75, assessment: { maxInputTokens: 272000 } });
+		const home = await mkdtemp(join(tmpdir(), "pricing-codex-override-"));
+		try {
+			const path = join(home, "models.json");
+			await writeFile(
+				path,
+				JSON.stringify({ providers: { openai: { modelOverrides: { "gpt-5.3-codex": { cost: { input: 7 } } } } } }),
+			);
+			const composed = composeModelProvider("openai", provider, await ModelConfig.load(path), undefined);
+			expect(composed.getModels()[0]?.cost).toMatchObject({ input: 7, assessment: { status: "unknown" } });
+		} finally {
+			await rm(home, { recursive: true, force: true });
+		}
+	});
 	it("corrects fresh remote costs before the topmost explicit override", async () => {
 		vi.spyOn(globalThis, "fetch").mockResolvedValue(
 			new Response(JSON.stringify([publicModel]), { headers: { "last-modified": "Thu, 12 Nov 2026 00:00:00 GMT" } }),

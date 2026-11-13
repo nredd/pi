@@ -506,10 +506,14 @@ export class AgentSession {
 	 * registered yet, because their servers may still be connecting.
 	 */
 	private _isFirstRunSinceRebuild = true;
+	/** Identifies the runtime whose grace and pending loadout a starting run may consume. */
+	private _toolRuntimeGeneration = 0;
 	/** MCP tools held back by the first run and still unregistered; the next run reports them if still gone. */
 	private _heldBackMcpToolNames = new Set<string>();
 	/** `_heldBackMcpToolNames` for the run being prepared; committed once the run starts, so a failed start reports nothing. */
 	private _stagedHeldBackMcpToolNames = new Set<string>();
+	/** Names in the notice staged by this run, removed from held state only when it starts. */
+	private _stagedReportedToolNames = new Set<string>();
 	private _usesDefaultTools: boolean;
 	private _defaultToolModifiers: string[];
 	/** Matches the `--tools` entries: tool names or patterns. */
@@ -2065,6 +2069,7 @@ export class AgentSession {
 
 	/** Give the next run MCP grace again; see `_isFirstRunSinceRebuild`. */
 	private _markRuntimeRebuilt(): void {
+		this._toolRuntimeGeneration++;
 		this._isFirstRunSinceRebuild = true;
 	}
 
@@ -2095,6 +2100,7 @@ export class AgentSession {
 		this._isAgentRunActive = true;
 		this._agentRunAbortRequested = false;
 		let messages: AgentMessage[];
+		const toolRuntimeGeneration = this._toolRuntimeGeneration;
 		try {
 			messages = await this._prepareRun(trigger, startingMessages);
 			// before_agent_start handlers ran inside _prepareRun; a replay that was paused there
@@ -2129,9 +2135,15 @@ export class AgentSession {
 		this._recordSelection();
 		// The run records the loadout in the transcript; restored tools that did not register by now
 		// are dropped, so a tool that never registers does not stay pending.
-		this._pendingToolNames.clear();
-		this._isFirstRunSinceRebuild = false;
-		this._heldBackMcpToolNames = this._stagedHeldBackMcpToolNames;
+		if (toolRuntimeGeneration === this._toolRuntimeGeneration) {
+			this._pendingToolNames.clear();
+			this._isFirstRunSinceRebuild = false;
+			this._heldBackMcpToolNames = this._stagedHeldBackMcpToolNames;
+		} else {
+			// A reload during preparation owns the next grace run and its pending loadout.
+			for (const name of this._stagedHeldBackMcpToolNames) this._heldBackMcpToolNames.add(name);
+		}
+		for (const name of this._stagedReportedToolNames) this._heldBackMcpToolNames.delete(name);
 		try {
 			await this.agent.prompt(messages);
 			while (!this._agentRunAbortRequested) {
@@ -2192,6 +2204,7 @@ export class AgentSession {
 		);
 		const isHeldBack = (name: string) => hasMcpGrace && isMcpToolName(name) && this._isAllowedTool(name);
 		const missingTools = unregistered.filter((name) => !isHeldBack(name));
+		this._stagedReportedToolNames = new Set(missingTools);
 		this._stagedHeldBackMcpToolNames = new Set(unregistered.filter(isHeldBack));
 		if (missingTools.length > 0) {
 			messages.push({

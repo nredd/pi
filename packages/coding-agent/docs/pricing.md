@@ -86,10 +86,12 @@ Source audit, checked 2026-11-12:
   [Terra](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-1-terra.md)
   publish Standard Global CRIS input/read/output USD per million of `10/1/50`, `2/0.10/10`,
   and `1/0.05/5`. Above 272000 input, the entire request uses double input/read and 1.5x
-  output rates. Only their documented physical, US and global IDs are assessed. Although
-  30-minute write rates are published, the estimator cannot distinguish 30m from another
-  short TTL, so consumed writes remain unavailable. No 12h tariff is inferred. The baseline
-  is not an invoice; region, Ultrafast and other service tiers are excluded.
+  output rates. Only their documented physical, US and global IDs are assessed. The
+  published 30-minute write rates (`12.50`, `2.50`, `1.25`, doubled above 272000) are the
+  only supported explicit TTL: they price writes when the caller states short writes via
+  `shortCacheWrites`, and unknown, 1h or 12h writes stay unpriced. No 12h tariff is
+  inferred. The baseline is not an invoice; region, Ultrafast and other service tiers are
+  excluded.
 - Other generated providers/models retain their source rates for compatibility but are
   explicitly unverified unless an assessment is supplied. This is NOT a completed official
   price verification for every provider. Public source-feed numbers alone are not certified

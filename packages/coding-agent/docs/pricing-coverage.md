@@ -94,3 +94,12 @@ Claude source follow-up, checked 2026-11-13:
 - These are first-party contracts only, not inferred Bedrock prices. The dated archive table
   remains an immutable baseline, not a claim that these source changes have shipped.
 
+Bedrock source follow-up, checked 2026-11-13:
+
+- Exact Nova 2 Lite, Lite, Micro and Pro model-card IDs are assessed at the Standard/on-demand
+  N. Virginia baseline, with the cache-write tariff unavailable. Exact `openai.gpt-6-astra`,
+  `openai.gpt-6.1-sol` and `openai.gpt-6.1-terra` plus their documented `us.` and `global.`
+  IDs are assessed at the Standard Global CRIS baseline, with 30m writes priced only when
+  stated. See [the pricing audit](pricing.md) for rates; regional premiums are not added.
+- The frozen archive table above remains unchanged and is not recounted for these identities.
+  This source change does not modify `.11`, publish a release or advance selected pins.

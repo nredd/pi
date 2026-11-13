@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
 import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { copyFileSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -89,7 +89,10 @@ test("check exits non-zero locally and is skipped in CI", () => {
 		copyFileSync(fileURLToPath(new URL("./npm-command.mjs", import.meta.url)), join(root, "scripts/npm-command.mjs"));
 		writeFileSync(join(root, "packages/coding-agent/package.json"), JSON.stringify({ version: "9.9.9" }));
 		execFileSync("git", ["-C", root, "config", "core.hooksPath", ".husky/_"]);
-		const local = spawnSync(process.execPath, [join(root, "scripts/worktree.mjs"), "check"], { encoding: "utf8", env });
+		const local = spawnSync(process.execPath, [join(root, "scripts/worktree.mjs"), "check"], {
+			encoding: "utf8",
+			env,
+		});
 		assert.equal(local.status, 1);
 		assert.match(local.stderr, /npm run worktree:setup/);
 	} finally {

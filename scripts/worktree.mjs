@@ -16,9 +16,21 @@
  * pre-commit gate) runs it first and fails loudly.
  */
 
-import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import {
+	cpSync,
+	existsSync,
+	lstatSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	renameSync,
+	rmSync,
+	statSync,
+	unlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -86,12 +98,16 @@ export function findProblems(root) {
 
 	const modules = join(root, "node_modules");
 	if (!existsSync(modules)) problems.push("node_modules is missing");
-	else if (lstatSync(modules).isSymbolicLink()) problems.push("node_modules is a symlink (borrowed from another checkout)");
-	else if (!existsSync(join(modules, "@biomejs/wasm-nodejs"))) problems.push("node_modules lacks @biomejs/wasm-nodejs");
+	else if (lstatSync(modules).isSymbolicLink())
+		problems.push("node_modules is a symlink (borrowed from another checkout)");
+	else if (!existsSync(join(modules, "@biomejs/wasm-nodejs")))
+		problems.push("node_modules lacks @biomejs/wasm-nodejs");
 
 	if (!existsSync(modelDataDir(root))) problems.push("packages/ai/src/providers/data is missing");
 	else if (!stampIsCurrent(root)) {
-		problems.push(`model data was not restored from the ${AI_PACKAGE}@${releaseVersion(root)} release (or changed since)`);
+		problems.push(
+			`model data was not restored from the ${AI_PACKAGE}@${releaseVersion(root)} release (or changed since)`,
+		);
 	}
 	return problems;
 }
@@ -137,10 +153,21 @@ function restoreModelData(root) {
 	try {
 		// Same source as .github/workflows/ci.yml: the published release tarball, exact version.
 		// npm verifies the tarball against the registry integrity; the cache is used when warm.
-		execNpmSync(["pack", `${AI_PACKAGE}@${version}`, "--pack-destination", scratch, "--prefer-offline", "--ignore-scripts", "--loglevel=error"], {
-			cwd: root,
-			stdio: ["ignore", "ignore", "inherit"],
-		});
+		execNpmSync(
+			[
+				"pack",
+				`${AI_PACKAGE}@${version}`,
+				"--pack-destination",
+				scratch,
+				"--prefer-offline",
+				"--ignore-scripts",
+				"--loglevel=error",
+			],
+			{
+				cwd: root,
+				stdio: ["ignore", "ignore", "inherit"],
+			},
+		);
 		const tarball = join(scratch, `earendil-works-pi-ai-${version}.tgz`);
 		execFileSync("tar", ["-xzf", tarball, "-C", scratch]);
 		const source = join(scratch, "package/dist/providers/data");
@@ -177,7 +204,8 @@ export function setup(root, { skipDaemon = false } = {}) {
 	restoreModelData(root);
 	if (!skipDaemon) buildDaemon(root);
 	const problems = findProblems(root);
-	if (problems.length > 0) throw new Error(`setup finished but the worktree is still not ready:\n- ${problems.join("\n- ")}`);
+	if (problems.length > 0)
+		throw new Error(`setup finished but the worktree is still not ready:\n- ${problems.join("\n- ")}`);
 	console.log("worktree ready");
 }
 

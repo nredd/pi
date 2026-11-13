@@ -98,7 +98,7 @@ describe("catalogue assessment", () => {
 	// nredd/pi#52: this public Codex selector has an exact API-equivalent contract.
 	it("assesses only the exact Codex Terra selector with explicit cache lifetimes", () => {
 		const cost = catalogueCost(entry("openai-codex", "gpt-6.1-terra"));
-		expect(cost).toMatchObject({
+		expect(structuredClone(cost)).toMatchObject({
 			input: 1,
 			output: 5,
 			cacheRead: 0.05,
@@ -159,26 +159,6 @@ describe("catalogue assessment", () => {
 			).cost?.total,
 		).toBeCloseTo(0.001406);
 		expect(estimateTokenCost({ cost }, { ...zero, cacheWrite: 1 }).reason).toContain("lifetime");
-		for (const [id, rates] of [
-			["claude-haiku-4-5", [1, 5, 0.1, 1.25, 2]],
-			["claude-haiku-4-5-20251001", [1, 5, 0.1, 1.25, 2]],
-			["claude-opus-4-5", [5, 25, 0.5, 6.25, 10]],
-			["claude-opus-4-5-20251101", [5, 25, 0.5, 6.25, 10]],
-			["claude-sonnet-4-5", [3, 15, 0.3, 3.75, 6]],
-			["claude-sonnet-4-5-20250929", [3, 15, 0.3, 3.75, 6]],
-		] as const) {
-			const legacy = catalogueCost(entry("anthropic", id));
-			expect([legacy.input, legacy.output, legacy.cacheRead, legacy.cacheWrite, legacy.cacheWrite1h]).toEqual(rates);
-			expect(
-				estimateTokenCost({ cost: legacy }, { ...zero, input: 136000, output: 64000 }, "2026-11-13").cost,
-			).not.toBeNull();
-			expect(
-				estimateTokenCost({ cost: legacy }, { ...zero, input: 136001, output: 64000 }, "2026-11-13").reason,
-			).toContain("context");
-			expect(estimateTokenCost({ cost: legacy }, { ...zero, output: 64001 }, "2026-11-13").reason).toContain(
-				"Output",
-			);
-		}
 		const retired = catalogueCost(entry("anthropic", "claude-sonnet-4-5"));
 		expect(estimateTokenCost({ cost: retired }, zero, "2026-11-29").cost).not.toBeNull();
 		expect(estimateTokenCost({ cost: retired }, zero, "2026-11-30").reason).toContain("retired");

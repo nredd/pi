@@ -9,23 +9,29 @@ import {
 
 const scenario = process.argv[2];
 if (scenario === "disabled") {
+	const attempts = { builtins: 0, clocks: 0, enumerations: 0, timers: 0 };
 	process.getBuiltinModule = () => {
+		attempts.builtins++;
 		throw new Error("disabled builtin access");
 	};
 	process.hrtime.bigint = () => {
+		attempts.clocks++;
 		throw new Error("disabled clock access");
 	};
 	Object.entries = () => {
+		attempts.enumerations++;
 		throw new Error("disabled enumeration");
 	};
 	Object.defineProperty(globalThis, "setTimeout", {
 		value: () => {
+			attempts.timers++;
 			throw new Error("disabled timer");
 		},
 	});
 	assert.equal(startupTraceEnabled(), false);
 	markStartup("session.bind.ready");
 	assert.equal(await traceStartup("session.handlers", async () => 42), 42);
+	assert.deepEqual(attempts, { builtins: 0, clocks: 0, enumerations: 0, timers: 0 });
 } else if (scenario?.startsWith("closed-")) {
 	process.getBuiltinModule("node:fs").closeSync(Number(scenario.slice("closed-".length)));
 	markStartup("session.bind.ready");

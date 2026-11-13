@@ -80,3 +80,22 @@ Source follow-up, checked 2026-11-13:
 - The frozen archive table above remains unchanged: Terra is not an additional operation
   in that dated archive. This source change does not modify `.11`, publish a release,
   advance selected pins or activate a new catalogue.
+
+Claude source follow-up, checked 2026-11-13:
+
+- [Anthropic pricing](https://platform.claude.com/docs/en/about-claude/pricing) supplies
+  Standard global USD per million token rates for `claude-fable-5-2`: input `8`, output
+  `40`, read `0.2`, 5m write `10`, 1h write `16`.
+- The exact [Haiku 4.5](https://platform.claude.com/docs/en/models/haiku-4-5/overview),
+  [Opus 4.5](https://platform.claude.com/docs/en/models/opus-4-5/overview) and
+  [Sonnet 4.5](https://platform.claude.com/docs/en/models/sonnet-4-5/overview) cards
+  map each alias to its dated snapshot. Their input/output/read/5m/1h rates are respectively
+  `1/5/0.1/1.25/2`, `5/25/0.5/6.25/10`, and `3/15/0.3/3.75/6`.
+- Estimates reject requests above each documented context or output limit; unknown write
+  lifetimes remain unpriced. Sonnet 4.5 is deprecated and retires on 2026-11-30. Since
+  the published date has no time of day, estimates conservatively stop at the start of
+  that UTC date. An optional evaluation date is for current-list-price comparison, not
+  reconstruction of historical billing.
+- These are first-party contracts only, not inferred Bedrock prices. The dated archive table
+  remains an immutable baseline, not a claim that these source changes have shipped.
+

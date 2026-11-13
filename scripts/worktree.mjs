@@ -15,10 +15,11 @@
  * git runs no hook at all, so no hook can detect that. `check` is the guard: `npm run check` (the
  * pre-commit gate) runs it first and fails loudly.
  *
- * Blocking (`check`, run by `npm run check`): hook dir, `node_modules`, valid model data. Regenerated
- * but valid data (`npm run build`, release scripts) must never block the gate. The release stamp is
- * advisory there and only enforced by `check --strict` (`npm run worktree:check`). A missing stamp
- * (checkouts that predate this script) is only ever a warning.
+ * Blocking (`check`, run by `npm run check`): hook dir, `node_modules`, present model data. Regenerated
+ * data (`npm run build`, release scripts) and data stale against src (e.g. after a merge) must never
+ * block the gate, so validator failures and the release stamp are advisory there and only enforced by
+ * `check --strict` (`npm run worktree:check`). A missing stamp (checkouts that predate this script)
+ * is only ever a warning.
  */
 
 import { execFileSync } from "node:child_process";
@@ -83,7 +84,10 @@ function stampMismatch(root) {
 	return `model data changed since it was restored from the ${AI_PACKAGE}@${releaseVersion(root)} release (regenerated or another release)`;
 }
 
-/** Error text when the model data fails the repo's own validator, else undefined. */
+const INVALID_DATA_HINT = "Run `npm run hydrate:model-data` (or `npm run build`) to regenerate it";
+const INVALID_OUTPUT_LINES = 20;
+
+/** Error text (validator output, bounded, plus the fix) when the model data fails the repo's own validator, else undefined. */
 function modelDataInvalid(root) {
 	try {
 		execFileSync(process.execPath, [join(root, "packages/ai/scripts/check-model-data.ts")], {
@@ -93,8 +97,11 @@ function modelDataInvalid(root) {
 		});
 		return undefined;
 	} catch (error) {
-		const detail = `${error.stdout ?? ""}${error.stderr ?? ""}`.trim().split("\n")[0];
-		return `model data is invalid: ${detail || String(error.message)}`;
+		const lines = `${error.stdout ?? ""}${error.stderr ?? ""}`.trim().split("\n");
+		const shown = lines.slice(0, INVALID_OUTPUT_LINES).join("\n  ");
+		const more =
+			lines.length > INVALID_OUTPUT_LINES ? `\n  ... ${lines.length - INVALID_OUTPUT_LINES} more lines` : "";
+		return `model data is invalid:\n  ${shown || String(error.message)}${more}\n${INVALID_DATA_HINT}`;
 	}
 }
 
@@ -111,8 +118,10 @@ export function configuredHooksDir(root) {
 
 /**
  * Problems that make this worktree unable to run its own gate. Empty means ready.
- * Hook, dependency and model-data validity problems always block. The release stamp is
- * advisory (`warnings`) unless `strict`, and a missing stamp is never more than a warning.
+ * Hook, dependency and missing model data always block. Model data that exists but fails the
+ * validator, and the release stamp, are advisory (`warnings`) unless `strict`: `tsc` passes on such
+ * data and the gate never read model data before, so stale-vs-src data must not block commits.
+ * A missing stamp is never more than a warning.
  * `hooks: false` skips the hook directory check (GitHub Actions has no husky shim by design).
  */
 export function inspect(root, { strict = false, hooks = true } = {}) {
@@ -137,7 +146,7 @@ export function inspect(root, { strict = false, hooks = true } = {}) {
 	if (!existsSync(modelDataDir(root))) problems.push("packages/ai/src/providers/data is missing");
 	else {
 		const invalid = modelDataInvalid(root);
-		if (invalid) problems.push(invalid);
+		if (invalid) (strict ? problems : warnings).push(invalid);
 		else {
 			const mismatch = stampMismatch(root);
 			if (mismatch) (strict ? problems : warnings).push(mismatch);
@@ -229,15 +238,25 @@ function restoreModelData(root) {
  */
 export function installValidated(root, source) {
 	const target = modelDataDir(root);
+	// Both are `data.*` siblings (same filesystem, covered by .gitignore) so a crash leaves nothing git sees.
 	const staging = `${target}.restoring`;
 	const previous = `${target}.previous`;
+	// `previous` exists only while the new data is unvalidated, so after a crash it is the last good copy.
+	if (existsSync(previous)) {
+		rmSync(target, { recursive: true, force: true });
+		renameSync(previous, target);
+	}
 	rmSync(staging, { recursive: true, force: true });
-	rmSync(previous, { recursive: true, force: true });
 	mkdirSync(dirname(target), { recursive: true });
 	cpSync(source, staging, { recursive: true });
 	const hadPrevious = existsSync(target);
 	if (hadPrevious) renameSync(target, previous);
-	renameSync(staging, target);
+	try {
+		renameSync(staging, target);
+	} catch (error) {
+		if (hadPrevious) renameSync(previous, target);
+		throw error;
+	}
 	const invalid = modelDataInvalid(root);
 	if (invalid) {
 		rmSync(target, { recursive: true, force: true });
@@ -275,7 +294,10 @@ export function check(root, { strict = false } = {}) {
 	const { problems, warnings } = inspect(root, { strict, hooks });
 	for (const warning of warnings) console.warn(`warning: ${warning}`);
 	if (problems.length === 0) return 0;
-	console.error(`This worktree cannot run the local gate:\n- ${problems.join("\n- ")}\nRun: npm run worktree:setup`);
+	// Invalid data is fixed by regeneration (the problem text says how), never by setup.
+	const setupFixes = problems.some((problem) => !problem.startsWith("model data is invalid"));
+	const footer = setupFixes ? "\nRun: npm run worktree:setup" : "";
+	console.error(`This worktree cannot run the local gate:\n- ${problems.join("\n- ")}${footer}`);
 	return 1;
 }
 

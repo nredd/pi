@@ -1212,7 +1212,7 @@ interface ToolCallEventBase {
 	parentToolCallId?: string;
 }
 
-/** Fired when the model calls a tool that is not available, before any `tool_call` handler (which never runs for it). */
+/** Fired when the model calls a tool that is not available, before any `tool_call` handler (which never runs). */
 export interface ToolNotFoundEvent {
 	type: "tool_not_found";
 	/** The unavailable tool name the model called. */

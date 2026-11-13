@@ -2107,6 +2107,7 @@ export class TuiAltScreen extends TuiBase implements ViewportTUI {
 		}
 		buffer += END_SYNCHRONIZED_OUTPUT;
 		this.terminal.write(buffer);
+		this.reportFrameCommit(screen);
 
 		this.previousScreen = screen;
 		this.previousCopyLines = nextLayout.lines;

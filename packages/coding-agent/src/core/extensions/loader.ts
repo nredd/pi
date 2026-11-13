@@ -18,6 +18,7 @@ import { execCommand } from "../exec.ts";
 import { type McpServerConfig, McpServerRegistry, mcpNamespace, validateMcpServerConfig } from "../mcp-servers.ts";
 import { readPiManifest } from "../pi-manifest.ts";
 import { createSyntheticSourceInfo, getSyntheticPathSource, isSyntheticPath } from "../source-info.ts";
+import { markStartup, traceStartup } from "../startup-trace.ts";
 import { time } from "../timings.ts";
 import type { ModelRouteRequest, VirtualModelDefinition } from "../virtual-models.ts";
 import type {
@@ -560,33 +561,40 @@ async function loadExtensionModule(extensionPath: string, cacheToken?: Extension
 	if (isCurrentCacheToken(cacheToken)) {
 		const cachedFactory = extensionCache.get(extensionPath);
 		if (cachedFactory) {
+			markStartup("extension.import", "cached", extensionPath);
 			return cachedFactory;
 		}
 	}
 
-	const createJitiImpl = await getCreateJiti();
-	// Compiled binaries and the bundled Node distribution use embedded modules.
-	// Source TypeScript reuses host modules and root tsconfig paths. Unbundled
-	// Node builds use dist aliases and do not need the bundled virtual modules.
-	const resolutionOptions = usesEmbeddedModules
-		? { virtualModules: await getVirtualModules(), tryNative: false }
-		: isTypeScriptSourceRuntime
-			? { virtualModules: await getVirtualModules(), tsconfigPaths: true }
-			: { alias: getAliases() };
-	const jiti = createJitiImpl(import.meta.url, {
-		moduleCache: false,
-		...resolutionOptions,
-	});
+	return traceStartup(
+		"extension.import",
+		async () => {
+			const createJitiImpl = await getCreateJiti();
+			// Compiled binaries and the bundled Node distribution use embedded modules.
+			// Source TypeScript reuses host modules and root tsconfig paths. Unbundled
+			// Node builds use dist aliases and do not need the bundled virtual modules.
+			const resolutionOptions = usesEmbeddedModules
+				? { virtualModules: await getVirtualModules(), tryNative: false }
+				: isTypeScriptSourceRuntime
+					? { virtualModules: await getVirtualModules(), tsconfigPaths: true }
+					: { alias: getAliases() };
+			const jiti = createJitiImpl(import.meta.url, {
+				moduleCache: false,
+				...resolutionOptions,
+			});
 
-	const module = await jiti.import(extensionPath, { default: true });
-	const factory = module as ExtensionFactory;
-	if (typeof factory !== "function") {
-		return undefined;
-	}
-	if (isCurrentCacheToken(cacheToken)) {
-		extensionCache.set(extensionPath, factory);
-	}
-	return factory;
+			const module = await jiti.import(extensionPath, { default: true });
+			const factory = module as ExtensionFactory;
+			if (typeof factory !== "function") {
+				return undefined;
+			}
+			if (isCurrentCacheToken(cacheToken)) {
+				extensionCache.set(extensionPath, factory);
+			}
+			return factory;
+		},
+		extensionPath,
+	);
 }
 
 /**
@@ -621,7 +629,13 @@ async function initializeExtension(
 	const extension = createExtension(extensionPath, resolvedPath);
 	const load = createExtensionAPI(extension, runtime, cwd, eventBus);
 	try {
-		await factory(load.api);
+		await traceStartup(
+			"extension.factory",
+			async () => {
+				await factory(load.api);
+			},
+			resolvedPath,
+		);
 		load.commit();
 	} catch (error) {
 		load.discard();
@@ -667,6 +681,7 @@ export async function loadExtensionFromFactory(
 	extensionPath = "<inline>",
 ): Promise<Extension> {
 	const resolvedCwd = resolvePath(cwd);
+	markStartup("extension.import", "skipped", extensionPath);
 	return initializeExtension(factory, extensionPath, extensionPath, resolvedCwd, eventBus, runtime);
 }
 

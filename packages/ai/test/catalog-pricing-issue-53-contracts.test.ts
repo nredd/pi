@@ -27,7 +27,13 @@ it.each([
 		expect(cost.assessment.retiredOn).toBe(retiredOn);
 		const zero = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 		expect(estimateTokenCost({ cost }, { ...zero, output: maxOutput + 1 }, "2026-11-13").reason).toContain("Output");
-		expect(estimateTokenCost({ cost }, { ...zero, input: context + 1 }, "2026-11-13").reason).toContain("context");
+		expect(
+			estimateTokenCost({ cost }, { ...zero, input: context - maxOutput, output: maxOutput }, "2026-11-13").cost,
+		).not.toBeNull();
+		expect(
+			estimateTokenCost({ cost }, { ...zero, input: context - maxOutput + 1, output: maxOutput }, "2026-11-13")
+				.reason,
+		).toContain("context");
 		if (retiredOn) expect(estimateTokenCost({ cost }, zero, retiredOn).reason).toContain("retired");
 		const newer = { ...cost, input: 99, assessment: { ...cost.assessment, checkedAt: "2026-11-14" } };
 		expect(catalogueCost({ provider: "anthropic", id, cost: newer })).toBe(newer);

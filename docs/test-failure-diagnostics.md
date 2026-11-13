@@ -18,6 +18,15 @@ one synchronous `stat` of `tables.list` to retain a baseline before the construc
 returns. This can block on a slow filesystem; subsequent samples remain asynchronous and do
 not overlap. Sampling errors close the watchers and use the existing five-second retry path.
 
+A refresh that starts (from the native watcher or the poll) also adopts the current `tables.list`
+metadata as the poll baseline, so one mutation spawns one git process instead of one per observer.
+
+Instrumenting the debounce test in `footer-data-provider.test.ts` over 40 runs showed the extra
+refresh that once forced a `<=2` ceiling came from late *native* events (`headWatcher` on the
+fixture's `HEAD` write, `reftableWatcher`) delivered during the fake-timer window. The stat poll
+never fired. The test now closes the real watchers (listeners stay attached, so `emit` still drives
+them) and asserts exactly one refresh; a trailing refresh from a coalesced burst fails it.
+
 `footer-data-provider.startup.test.ts` queues real crypto work on the libuv pool before
 constructing and immediately mutating 32 real filesystem fixtures. It needs neither `mkfifo`
 nor a platform skip; only git replies are mocked. The burst amplifies native startup loss,

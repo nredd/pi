@@ -83,6 +83,21 @@ function emitReftableChange(provider: FooterDataProvider): void {
 	reftableWatcher?.emit("change", "change", "tables.list");
 }
 
+/**
+ * Close the real native watchers; their listeners stay attached, so `emit` still drives them.
+ * #69 instrumentation (40 runs): fixture setup writes surface as late native `headWatcher` and
+ * `reftableWatcher` events during the fake-timer window and add one refresh. The stat poll never fired.
+ */
+function silenceNativeWatchers(provider: FooterDataProvider): void {
+	const watchers = provider as unknown as Record<
+		"headWatcher" | "reftableWatcher" | "reftableTablesListWatcher",
+		FSWatcher | null
+	>;
+	for (const watcher of [watchers.headWatcher, watchers.reftableWatcher, watchers.reftableTablesListWatcher]) {
+		watcher?.close();
+	}
+}
+
 async function waitFor(
 	condition: () => boolean,
 	timeoutMs = 3000,
@@ -230,6 +245,7 @@ describe("FooterDataProvider reftable branch detection", () => {
 		process.chdir(worktreeDir);
 
 		const provider = new FooterDataProvider(worktreeDir);
+		silenceNativeWatchers(provider);
 		try {
 			expect(provider.getGitBranch()).toBe("main");
 			vi.mocked(spawnSync).mockClear();
@@ -255,6 +271,7 @@ describe("FooterDataProvider reftable branch detection", () => {
 		process.chdir(worktreeDir);
 
 		const provider = new FooterDataProvider(worktreeDir);
+		silenceNativeWatchers(provider);
 		try {
 			expect(provider.getGitBranch()).toBe("main");
 			vi.mocked(execFile).mockClear();
@@ -267,9 +284,8 @@ describe("FooterDataProvider reftable branch detection", () => {
 			await vi.advanceTimersByTimeAsync(2);
 			expect(vi.mocked(execFile)).toHaveBeenCalledTimes(1);
 			await vi.advanceTimersByTimeAsync(650);
-			// Suspected (not instrumented): under load a real watcher event from fixture setup can add one
-			// refresh. The exact count at 501ms is the coalescing check; this is only a ceiling.
-			expect(vi.mocked(execFile).mock.calls.length).toBeLessThanOrEqual(2);
+			// No trailing refresh: a burst coalesced into the armed timer must not leave a pending one behind.
+			expect(vi.mocked(execFile)).toHaveBeenCalledTimes(1);
 		} finally {
 			provider.dispose();
 			vi.useRealTimers();

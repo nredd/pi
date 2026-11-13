@@ -72,11 +72,9 @@ it("recovers the first reftable update when initial asynchronous stat sampling i
 		const stalled = fixtures.filter(({ provider }) => provider.getGitBranch() !== "foo");
 		expect(stalled.length).toBe(0);
 		for (const fixture of fixtures) {
-			// The native watcher and the stat poll (separate baseline, see `pollReftableTablesList`) can each
-			// observe the one mutation, so one or two refreshes is expected. Zero means the update was lost.
-			const calls = replies.calls.get(fixture.cwd) ?? 0;
-			expect(calls).toBeGreaterThanOrEqual(1);
-			expect(calls).toBeLessThanOrEqual(2);
+			// The native watcher and the stat poll can each observe the one mutation. A starting refresh
+			// adopts the poll baseline, so one mutation is exactly one git process; zero means it was lost.
+			expect(replies.calls.get(fixture.cwd) ?? 0).toBe(1);
 			expect(fixture.provider.getGitBranch()).toBe("foo");
 			expect(fixture.notices).toBe(1);
 		}

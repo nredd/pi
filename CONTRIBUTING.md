@@ -57,7 +57,7 @@ If you send a large volume of issues through automation, your GitHub account wil
 
 Do not open a PR unless you have already been approved by a maintainer using `lgtm` in the command position described above.
 
-Fresh clone or `git worktree add`: run `npm run worktree:setup` first. It installs from the lockfile, installs the husky shim, restores the model data of the matching published release, and builds the `pi-env` daemon. `npm run check` fails with instructions when a worktree has no hook dir, no real `node_modules`, or missing model data (invalid model data only warns, and `npm run worktree:check` enforces it), because git silently skips the pre-commit hook when `.husky/_` is missing. Regenerated but valid model data (`npm run build`, release scripts) does not block it. `npm run worktree:check` additionally enforces that the model data is still the release restored by setup. Checkouts that predate the stamp only get a warning; run `npm run worktree:setup` once to silence it.
+Fresh clone or `git worktree add`: run `npm run worktree:setup` first. It installs from the lockfile, installs the husky shim, installs the model data of the matching published release when none is present (like CI, without validating it; a mismatch with src only warns, `npm run hydrate:model-data` fixes it), and builds the `pi-env` daemon. `npm run check` fails with instructions when a worktree has no hook dir, no real `node_modules`, or missing model data (invalid model data only warns, and `npm run worktree:check` enforces it), because git silently skips the pre-commit hook when `.husky/_` is missing. Regenerated model data (`npm run build`, release scripts) does not block it.
 
 Before submitting a PR:
 

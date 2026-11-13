@@ -1,13 +1,11 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import {
 	copyFileSync,
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
-	renameSync,
 	rmSync,
 	symlinkSync,
 	writeFileSync,
@@ -16,7 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { check, configuredHooksDir, findProblems, inspect, installValidated, modelDataStampPath } from "./worktree.mjs";
+import { check, configuredHooksDir, findProblems, inspect, restoreModelData } from "./worktree.mjs";
 
 const script = fileURLToPath(new URL("./worktree.mjs", import.meta.url));
 
@@ -48,7 +46,6 @@ if (m.includes("invalid")) {
 }`,
 	);
 	writeFileSync(join(root, "packages/ai/src/providers/data/.manifest.json"), "{}");
-	writeFileSync(modelDataStampPath(root), `9.9.9 ${createHash("sha256").update("{}").digest("hex")}\n`);
 }
 
 // #85: a fresh worktree has no .husky/_, so git silently runs no pre-commit hook.
@@ -76,26 +73,8 @@ test("rejects borrowed node_modules symlinks", (t) => {
 
 const strict = { strict: true };
 
-test("a stamp mismatch blocks only under --strict", (t) => {
-	const root = makeRepo(t);
-	makeReady(root);
-	writeFileSync(modelDataStampPath(root), "9.9.8 deadbeef\n");
-	assert.deepEqual(findProblems(root), []);
-	assert.match(inspect(root).warnings.join("\n"), /changed since/);
-	assert.match(findProblems(root, strict).join("\n"), /changed since/);
-});
-
-// release:*, prepublishOnly and build regenerate valid data; the gate must keep passing.
-test("regenerated but valid model data does not block the gate", (t) => {
-	const root = makeRepo(t);
-	makeReady(root);
-	writeFileSync(join(root, "packages/ai/src/providers/data/.manifest.json"), '{"generatedAt":"later"}');
-	assert.deepEqual(findProblems(root), []);
-	assert.equal(inspect(root).warnings.length, 1);
-	assert.equal(findProblems(root, strict).length, 1);
-});
-
 // #85, evidence: `tsc --noEmit` passes on data that fails the validator, and base `check` never read model data.
+// Covers regenerated data and src ahead of the release data alike.
 test("invalid model data only warns in the gate, with the validator output and the right fix", (t) => {
 	const root = makeRepo(t);
 	makeReady(root);
@@ -120,104 +99,20 @@ test("invalid model data blocks under --strict and never recommends worktree:set
 	assert.doesNotMatch(problems, /worktree:setup/);
 });
 
-// Checkouts that predate the stamp must not be blocked.
-test("a missing stamp is a warning, even under --strict", (t) => {
+// Setup must not touch present data: no stamp-driven reinstall, no rollback state, no network.
+test("restoreModelData leaves present data alone, even when invalid", (t) => {
 	const root = makeRepo(t);
 	makeReady(root);
-	rmSync(modelDataStampPath(root));
-	assert.deepEqual(findProblems(root, strict), []);
-	assert.match(inspect(root, strict).warnings.join("\n"), /no release stamp/);
-});
-
-test("installValidated swaps in valid data", (t) => {
-	const root = makeRepo(t);
-	makeReady(root);
-	const source = mkdtempSync(join(tmpdir(), "pi-source-"));
-	t.after(() => rmSync(source, { recursive: true, force: true }));
-	writeFileSync(join(source, ".manifest.json"), '{"new":true}');
-	installValidated(root, source);
-	assert.equal(readFileSync(join(root, "packages/ai/src/providers/data/.manifest.json"), "utf8"), '{"new":true}');
+	const manifest = join(root, "packages/ai/src/providers/data/.manifest.json");
+	writeFileSync(manifest, '{"invalid":true}');
+	const log = console.log;
+	console.log = () => {};
+	t.after(() => {
+		console.log = log;
+	});
+	restoreModelData(root);
+	assert.equal(readFileSync(manifest, "utf8"), '{"invalid":true}');
 	assert.equal(existsSync(join(root, "packages/ai/src/providers/data.previous")), false);
-});
-
-test("installValidated rolls back when the new data is invalid", (t) => {
-	const root = makeRepo(t);
-	makeReady(root);
-	const source = mkdtempSync(join(tmpdir(), "pi-source-"));
-	t.after(() => rmSync(source, { recursive: true, force: true }));
-	writeFileSync(join(source, ".manifest.json"), '{"invalid":true}');
-	assert.throws(() => installValidated(root, source), /previous data restored/);
-	assert.equal(readFileSync(join(root, "packages/ai/src/providers/data/.manifest.json"), "utf8"), "{}");
-	assert.equal(existsSync(join(root, "packages/ai/src/providers/data.previous")), false);
-});
-
-function dataDir(root) {
-	return join(root, "packages/ai/src/providers/data");
-}
-
-function validSource(t, content = '{"new":true}') {
-	const source = mkdtempSync(join(tmpdir(), "pi-source-"));
-	t.after(() => rmSync(source, { recursive: true, force: true }));
-	writeFileSync(join(source, ".manifest.json"), content);
-	return source;
-}
-
-// Crash states: `previous` exists only while the new data is unvalidated, so it is the last good copy.
-test("installValidated recovers an interrupted swap where the target is missing", (t) => {
-	const root = makeRepo(t);
-	makeReady(root);
-	renameSync(dataDir(root), `${dataDir(root)}.previous`);
-	installValidated(root, validSource(t));
-	assert.equal(readFileSync(join(dataDir(root), ".manifest.json"), "utf8"), '{"new":true}');
-	assert.equal(existsSync(`${dataDir(root)}.previous`), false);
-});
-
-test("installValidated keeps the recovered copy when the new data is then rejected", (t) => {
-	const root = makeRepo(t);
-	makeReady(root);
-	renameSync(dataDir(root), `${dataDir(root)}.previous`);
-	assert.throws(() => installValidated(root, validSource(t, '{"invalid":true}')), /previous data restored/);
-	assert.equal(readFileSync(join(dataDir(root), ".manifest.json"), "utf8"), "{}");
-});
-
-test("installValidated restores the last good copy when a crash left unvalidated data and a previous", (t) => {
-	const root = makeRepo(t);
-	makeReady(root);
-	renameSync(dataDir(root), `${dataDir(root)}.previous`);
-	mkdirSync(dataDir(root));
-	writeFileSync(join(dataDir(root), ".manifest.json"), '{"invalid":true}');
-	assert.throws(() => installValidated(root, validSource(t, '{"invalid":true}')), /previous data restored/);
-	assert.equal(readFileSync(join(dataDir(root), ".manifest.json"), "utf8"), "{}");
-});
-
-test("installValidated discards a stale staging directory", (t) => {
-	const root = makeRepo(t);
-	makeReady(root);
-	mkdirSync(`${dataDir(root)}.restoring`);
-	writeFileSync(join(`${dataDir(root)}.restoring`, "junk"), "x");
-	installValidated(root, validSource(t));
-	assert.equal(existsSync(`${dataDir(root)}.restoring`), false);
-	assert.equal(existsSync(join(dataDir(root), "junk")), false);
-});
-
-// #85: a crash while deleting the old data must not leave a partial `previous` that recovery trusts.
-test("installValidated clears a leftover discard directory", (t) => {
-	const root = makeRepo(t);
-	makeReady(root);
-	mkdirSync(`${dataDir(root)}.discard`);
-	writeFileSync(join(`${dataDir(root)}.discard`, "junk"), "x");
-	installValidated(root, validSource(t));
-	assert.equal(existsSync(`${dataDir(root)}.discard`), false);
-	assert.equal(readFileSync(join(dataDir(root), ".manifest.json"), "utf8"), '{"new":true}');
-});
-
-test("the swap directories are ignored by git", () => {
-	const ignored = (path) =>
-		spawnSync("git", ["check-ignore", "-q", path], { cwd: join(fileURLToPath(import.meta.url), "../..") }).status ===
-		0;
-	assert.ok(ignored("packages/ai/src/providers/data.previous/x"));
-	assert.ok(ignored("packages/ai/src/providers/data.restoring/x"));
-	assert.ok(ignored("packages/ai/src/providers/data.discard/x"));
 });
 
 test("reports an unset core.hooksPath", (t) => {

@@ -1,6 +1,6 @@
 # Security dependency assessment
 
-Review date: 2026-10-26. Scope: [nredd/pi#10](https://github.com/nredd/pi/pull/10), the maintained `nredd/v1.3.0` fork.
+Review date: 2026-10-26. Scope: [nredd/pi#10](https://github.com/nredd/pi/pull/10), the maintained fork (now `main`).
 
 The release-note review was completed during PR review, after the initial dependency update and before merge or tagging.
 

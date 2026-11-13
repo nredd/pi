@@ -80,6 +80,21 @@ Source audit, checked 2026-11-12:
   price verification for every provider. Public source-feed numbers alone are not certified
   here; outstanding official-source verification is visible as unknown coverage.
 
+Additional exact contracts, checked 2026-11-13:
+
+- Cerebras Developer shared `gpt-oss-120b` and `qwen-3.8-27b` price cached input at
+  the full input rate. Cache-write token tariffs are not established; trial credits and
+  dedicated pricing are excluded. Model cards and caching terms are linked in the assessments.
+- xAI Standard global `grok-4.7`, `grok-4.6`, `grok-4.5` and `grok-4.3` double
+  input, cached input and output rates for the whole request at 200000 prompt tokens.
+  Batch, Priority, regional uplift, product-only Fast, cache writes and non-token charges
+  are excluded. See the [official table](https://docs.x.ai/developers/pricing).
+- Google paid Standard `gemini-3.5-flash-lite` prices text, image, video and audio input
+  tokens at the same rate. Cache storage is $1 per million token-hours, not a cache-write
+  token tariff; tools and other non-token fees are excluded. No Vertex parity is assumed.
+  Date-dependent promotional contracts, alias reroutes and other unverified IDs remain outside
+  this partial assessment.
+
 Generation and precedence:
 
 - Both bundled shards and the existing JSON catalogue outputs receive an assessment for

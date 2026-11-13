@@ -106,7 +106,14 @@ function verified(
 export function catalogueCost(model: Pick<AnyModel, "provider" | "id" | "type" | "cost">): ModelCost {
 	const type = model.type ?? "chat";
 	const codexTerra = type === "chat" && model.provider === "openai-codex" && model.id === "gpt-6.1-terra";
-	const checkedAt = codexTerra ? "2026-11-13" : PRICING_CHECKED_AT;
+	const checkedAt =
+		codexTerra ||
+		(type === "chat" &&
+			((model.provider === "cerebras" && ["gpt-oss-120b", "qwen-3.8-27b"].includes(model.id)) ||
+				(model.provider === "xai" && ["grok-4.7", "grok-4.6", "grok-4.5", "grok-4.3"].includes(model.id)) ||
+				(model.provider === "google" && model.id === "gemini-3.5-flash-lite")))
+			? "2026-11-13"
+			: PRICING_CHECKED_AT;
 	const previous = model.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 	// A newer explicitly assessed catalog must not be frozen at this client's audit date.
 	if (
@@ -229,6 +236,66 @@ export function catalogueCost(model: Pick<AnyModel, "provider" | "id" | "type" |
 				"https://aws.amazon.com/bedrock/pricing/",
 				"Published baseline: USD per 1M tokens, Standard/on-demand, Global Cross-region Inference table, US East (N. Virginia) selector. All listed profile IDs are normalized to this baseline, NOT actual regional/profile invoice prices. 5m/1h writes; Batch, Flex, Priority, Reserved, discounts and regional uplifts excluded.",
 			);
+	}
+	if (type === "chat" && model.provider === "cerebras") {
+		const rates: Record<string, { input: number; output: number; source: string }> = {
+			"gpt-oss-120b": {
+				input: 0.35,
+				output: 0.75,
+				source: "https://inference-docs.cerebras.ai/models/openai-oss.md",
+			},
+			"qwen-3.8-27b": {
+				input: 0.99,
+				output: 1.49,
+				source: "https://inference-docs.cerebras.ai/models/qwen-3.8-27b.md",
+			},
+		};
+		const rate = Object.hasOwn(rates, model.id) ? rates[model.id] : undefined;
+		if (rate)
+			return verified(
+				{ input: rate.input, output: rate.output, cacheRead: rate.input, cacheWrite: 0 },
+				rate.source,
+				"Developer shared inference; cached input is billed at the full input rate (https://inference-docs.cerebras.ai/capabilities/prompt-caching.md). Dedicated pricing and promotional credits excluded; no separate cache-write tariff established.",
+				["cacheWrite"],
+				checkedAt,
+			);
+	}
+	if (type === "chat" && model.provider === "xai") {
+		const rates: Record<string, ModelCost> = {
+			"grok-4.7": { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 },
+			"grok-4.6": { input: 2, output: 6, cacheRead: 0.5, cacheWrite: 0 },
+			"grok-4.5": { input: 2, output: 6, cacheRead: 0.3, cacheWrite: 0 },
+			"grok-4.3": { input: 1.25, output: 2.5, cacheRead: 0.2, cacheWrite: 0 },
+		};
+		const rate = Object.hasOwn(rates, model.id) ? rates[model.id] : undefined;
+		if (rate)
+			return verified(
+				{
+					...rate,
+					tiers: [
+						{
+							inputTokensAbove: 199999,
+							input: rate.input * 2,
+							output: rate.output * 2,
+							cacheRead: rate.cacheRead * 2,
+							cacheWrite: 0,
+						},
+					],
+				},
+				"https://docs.x.ai/developers/pricing",
+				"Standard global token rates; 200000 or more prompt tokens doubles all rates for the whole request. Batch, Priority, regional, product-only Fast and non-token charges excluded; cache writes unavailable.",
+				["cacheWrite"],
+				checkedAt,
+			);
+	}
+	if (type === "chat" && model.provider === "google" && model.id === "gemini-3.5-flash-lite") {
+		return verified(
+			{ input: 0.3, output: 2.5, cacheRead: 0.03, cacheWrite: 0 },
+			GOOGLE_SOURCE,
+			"Paid Standard; input token rates cover text, image, video and audio. Cache storage is $1 per million token-hours, not a token-write price; tools and other non-token charges excluded. No Vertex substitution.",
+			["cacheWrite"],
+			checkedAt,
+		);
 	}
 	if (type === "chat" && model.provider === "google" && model.id === "gemini-2.5-pro") {
 		return verified(

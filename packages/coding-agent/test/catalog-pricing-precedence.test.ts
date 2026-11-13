@@ -65,6 +65,43 @@ afterEach(() => vi.restoreAllMocks());
 
 // nredd/pi#46: bundled corrections must survive dynamic sources, but not override user prices.
 describe("catalogue pricing precedence", () => {
+	it.each([false, true])("preserves projected model identities and live metadata, personalized=%s", (personalized) => {
+		const chat = { ...publicModel, cost: { ...publicModel.cost } };
+		const models: AnyModel[] = [
+			chat,
+			{ ...publicModel, id: "synthetic-image", type: "image", api: "openrouter-images", output: ["image"] },
+			{ ...publicModel, id: "synthetic-classifier", type: "classifier", api: "typesafe-system-one" },
+		];
+		const source = { ...builtin(), getModels: () => [chat], getAllModels: () => models };
+		const provider = personalized
+			? withPersonalizedCatalog(source, async (models) => models)
+			: withRemoteCatalog(source, "https://example.test", 1);
+		const first = provider.getAllModels?.() ?? [];
+		expect(first).toHaveLength(3);
+		for (const [index, model] of (provider.getAllModels?.() ?? []).entries()) expect(model).toBe(first[index]);
+		chat.name = "Updated synthetic metadata";
+		chat.cost = { ...chat.cost, input: 999 };
+		chat.promptCache = { short: 60 };
+		const updated = provider.getModels()[0];
+		expect(updated).toBe(first[0]);
+		expect(updated).toMatchObject({ name: chat.name, cost: { input: 2 }, promptCache: { short: 60 } });
+		expect(chat.cost.input).toBe(999);
+		delete chat.promptCache;
+		expect(provider.getModels()[0]?.promptCache).toBeUndefined();
+		chat.cost = {
+			...chat.cost,
+			input: 7,
+			assessment: {
+				status: "verified",
+				source: "https://example.test/pricing",
+				checkedAt: "2026-11-13",
+				unit: "usd-per-million-tokens",
+				conditions: "Synthetic newer assessment",
+			},
+		};
+		expect(provider.getModels()[0]).toBe(first[0]);
+		expect(provider.getModels()[0]?.cost.input).toBe(7);
+	});
 	it.each([false, true])("corrects bundled and restored data, personalized=%s", async (personalized) => {
 		vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
 			throw new Error("Offline");

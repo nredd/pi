@@ -89,6 +89,8 @@ Generation and precedence:
 - Runtime remote and personalized catalogues apply the same narrow official corrections
   after restoring or fetching data, before user configuration. A newer explicitly assessed
   catalogue is not frozen at this client's checked date. Unknown entries remain unknown.
+  Pricing projection preserves stable model identities across repeated reads without
+  mutating source entries; in-place metadata and price updates are still observed.
 - Explicit `models.json` cost overrides are topmost. An override without its own assessment
   clears inherited verification, so custom prices cannot keep a stale official-source badge.
   Custom model/extension definitions can supply an assessment through the existing cost schema.

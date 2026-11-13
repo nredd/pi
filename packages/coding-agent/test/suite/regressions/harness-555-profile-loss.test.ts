@@ -363,6 +363,46 @@ test.each(["print", "rpc"] as const)(
 	},
 );
 
+// nredd/pi-harness#634: reload while reporting must not resurrect an already reported tool.
+test.each(["print", "rpc"] as const)("reload during %s reporting does not duplicate the MCP notice", async (mode) => {
+	const entered = Promise.withResolvers<void>();
+	const release = Promise.withResolvers<void>();
+	let park = false;
+	const extension: ExtensionFactory = (pi) => {
+		pi.on("before_agent_start", async () => {
+			if (!park) return;
+			entered.resolve();
+			await release.promise;
+		});
+	};
+	const harness = await resume([extension]);
+	let running: Promise<void> | undefined;
+	try {
+		await harness.session.bindExtensions({ mode });
+		const mcpNotices = () => noticeTexts(harness.session).filter((text) => text.includes(MCP_TOOL));
+		await prompt(harness, "initial grace");
+		expect(mcpNotices()).toHaveLength(0);
+		park = true;
+		running = prompt(harness, "reporting run");
+		await entered.promise;
+		await harness.session.reload();
+		release.resolve();
+		await running;
+		expect(mcpNotices()).toHaveLength(1);
+		await prompt(harness, "first after reload");
+		expect(mcpNotices()).toHaveLength(1);
+		await prompt(harness, "second after reload");
+		expect(mcpNotices()).toHaveLength(1);
+	} finally {
+		release.resolve();
+		try {
+			await running;
+		} finally {
+			harness.cleanup();
+		}
+	}
+});
+
 // nredd/pi-harness#634: the old run must not drop the reload's pending active loadout.
 test("reload during preparation keeps late deferred tools pending for activation", async () => {
 	const entered = Promise.withResolvers<void>();

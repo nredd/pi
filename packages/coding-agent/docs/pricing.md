@@ -75,6 +75,8 @@ Source audit, checked 2026-11-12:
   Sonnet 5.5's exact physical/global/geo IDs and 1M context are documented [here](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-5-5.html).
   Assessed Sonnet/Opus 4.6+ and Fable models do not inherit an older 200K premium.
   Older unassessed Sonnet models remain unknown until their applicable tiers are verified.
+- The anonymous [Radius list](https://radius.pi.dev/v1/model-pricing) and its [operation contract](https://radius.pi.dev/v1/meta/operations/models.pricing.list), checked 2026-11-13, supply exact archived chat selectors and their strict context tiers. This public list is not an organization's routing or observed charges. Cache-write lifetimes are not established and consumed writes remain unpriced.
+- [OpenCode paygo](https://opencode.ai/docs/zen/), checked 2026-11-13, supplies exact endpoint-to-price joins for fixed token rows and context tiers. Retired aliases, free trials and promotional rates remain unknown. Cache-write lifetimes are unverified. Credit-purchase processing fees are not token rates; Go allowance value is not subscription cash.
 - Other generated providers/models retain their source rates for compatibility but are
   explicitly unverified unless an assessment is supplied. This is NOT a completed official
   price verification for every provider. Public source-feed numbers alone are not certified

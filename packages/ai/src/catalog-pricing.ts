@@ -1,3 +1,4 @@
+import brokerPrices from "./broker-pricing-data.json" with { type: "json" };
 import type { AnyModel, ModelCost, ModelCostRates, Usage } from "./types.ts";
 
 /** Official standard/global list prices checked on this date, not request-date bills. */
@@ -102,6 +103,52 @@ function verified(
 	};
 }
 
+type BrokerRates = { input: number; output: number; cacheRead: number; cacheWrite?: number };
+type BrokerRow = BrokerRates & { tiers?: (BrokerRates & { inputTokensAbove: number })[] };
+
+// Public source snapshots contain only exact archived catalogue selectors, not account routes.
+function brokerCost(provider: string, id: string, previous: ModelCost): ModelCost | undefined {
+	const radius = brokerPrices.radius as Record<string, { free: boolean; cost: BrokerRow }>;
+	const opencode = brokerPrices.opencode as Record<string, BrokerRow>;
+	const entry = provider === "radius" && Object.hasOwn(radius, id) ? radius[id] : undefined;
+	const row = entry?.cost ?? (provider === "opencode" && Object.hasOwn(opencode, id) ? opencode[id] : undefined);
+	if (!row || (entry && typeof entry.free !== "boolean")) return undefined;
+	const tiers = row.tiers ?? [];
+	if (!Array.isArray(tiers)) return undefined;
+	if (entry && !entry.free && [row.input, row.output, row.cacheRead, row.cacheWrite].every((value) => value === 0))
+		return undefined;
+	let threshold = -1;
+	for (const rate of [row, ...tiers]) {
+		if (!rate || typeof rate !== "object" || Array.isArray(rate)) return undefined;
+		const values = [rate.input, rate.output, rate.cacheRead, ...(entry ? [rate.cacheWrite] : [])];
+		if (values.some((value) => typeof value !== "number" || !Number.isFinite(value) || value < 0)) return undefined;
+		if (entry?.free && values.some((value) => value !== 0)) return undefined;
+		if ("inputTokensAbove" in rate) {
+			if (!Number.isSafeInteger(rate.inputTokensAbove) || rate.inputTokensAbove <= threshold) return undefined;
+			threshold = rate.inputTokensAbove;
+		}
+	}
+	const rates = (rate: BrokerRates): ModelCostRates => ({
+		input: rate.input,
+		output: rate.output,
+		cacheRead: rate.cacheRead,
+		cacheWrite: rate.cacheWrite ?? previous.cacheWrite,
+	});
+	const cost: ModelCost = {
+		...rates(row),
+		...(tiers.length
+			? { tiers: tiers.map((tier) => ({ ...rates(tier), inputTokensAbove: tier.inputTokensAbove })) }
+			: {}),
+	};
+	const source = entry ? "https://radius.pi.dev/v1/model-pricing" : "https://opencode.ai/docs/zen/";
+	const conditions = entry
+		? "Anonymous Radius public list, not organization pricing; cache-write retention is unverified."
+		: "OpenCode pay-as-you-go token rates; cache-write retention and credit-purchase fees are excluded.";
+	const assessed = verified(cost, source, conditions, ["cacheWrite"], "2026-11-13");
+	if (entry?.free && assessed.assessment?.status === "verified") assessed.assessment.status = "free";
+	return assessed;
+}
+
 /** Apply narrow official corrections before user overrides, never infer a provider from a model name. */
 export function catalogueCost(model: Pick<AnyModel, "provider" | "id" | "type" | "cost">): ModelCost {
 	const type = model.type ?? "chat";
@@ -118,8 +165,9 @@ export function catalogueCost(model: Pick<AnyModel, "provider" | "id" | "type" |
 			"claude-sonnet-4-5",
 			"claude-sonnet-4-5-20250929",
 		].includes(model.id);
-	const checkedAt = codexTerra || boundedAnthropicContract ? "2026-11-13" : PRICING_CHECKED_AT;
 	const previous = model.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+	const broker = type === "chat" ? brokerCost(model.provider, model.id, previous) : undefined;
+	const checkedAt = codexTerra || boundedAnthropicContract || broker ? "2026-11-13" : PRICING_CHECKED_AT;
 	// A newer explicitly assessed catalog must not be frozen at this client's audit date.
 	if (
 		previous.assessment?.status !== "unknown" &&
@@ -127,6 +175,7 @@ export function catalogueCost(model: Pick<AnyModel, "provider" | "id" | "type" |
 		previous.assessment.checkedAt > checkedAt
 	)
 		return previous;
+	if (broker) return broker;
 	if (
 		type === "chat" &&
 		(model.provider === "openai" || (model.provider === "openai-codex" && CODEX_API_EQUIVALENT_IDS.has(model.id)))

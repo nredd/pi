@@ -103,7 +103,6 @@ Source audit, checked 2026-11-12:
   explicitly unverified unless an assessment is supplied. This is NOT a completed official
   price verification for every provider. Public source-feed numbers alone are not certified
   here; outstanding official-source verification is visible as unknown coverage.
-
 - Exact OpenRouter and AI Gateway published token-baseline slices checked 2026-11-13,
   source hashes, cache-lifetime exclusions and remaining unknown dimensions are documented
   [here](pricing-feeds.md). They do not certify either complete provider catalogue.
@@ -116,7 +115,10 @@ Source audit, checked 2026-11-12:
   malformed: compatibility arithmetic falls back to 0 and the feed is never certified. A
   malformed AI Gateway bracket rate keeps the tier's base rate, as for OpenRouter overrides.
   AI Gateway evaluation (classifier) rates use the same parser.
-- An older verified pi.dev assessment for an OpenRouter or AI Gateway id outside the archived feed now becomes unknown (estimate null; `calculateCost` rates unchanged).
+- An older verified pi.dev assessment for an OpenRouter or AI Gateway id outside the archived
+  feed becomes unknown (estimate null; `calculateCost` rates unchanged). "Older" means checked
+  on or before the client audit date (`PRICING_CHECKED_AT`, 2026-11-12); an assessment checked
+  later is kept as is.
 
 Additional exact contracts, checked 2026-11-13:
 

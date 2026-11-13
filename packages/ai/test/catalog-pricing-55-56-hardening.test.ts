@@ -313,3 +313,36 @@ describe("provider-live origin is OpenRouter-only", () => {
 		);
 	});
 });
+
+// An off-feed id has no archived contract. A verified previous assessment is older than this client's audit
+// (PRICING_CHECKED_AT, 2026-11-12) when checked on or before that date, so it is replaced by unknown. One
+// checked later is newer and is kept as is, even though the 2026-11-13 feed archive lacks the id.
+describe.each(["openrouter", "vercel-ai-gateway"] as const)("%s id outside the archived feed", (provider) => {
+	const verifiedOn = (checkedAt: string): ModelCost => ({
+		...legacy,
+		assessment: {
+			status: "verified",
+			checkedAt,
+			source: "synthetic",
+			unit: "usd-per-million-tokens",
+			conditions: "synthetic",
+		},
+	});
+	const row = (checkedAt: string): Parameters<typeof catalogueCost>[0] => ({
+		provider,
+		id: "synthetic/not-in-feed",
+		type: "chat",
+		cost: verifiedOn(checkedAt),
+	});
+
+	it("turns a verified assessment checked on the client audit date into unknown", () => {
+		const cost = catalogueCost(row("2026-11-12"));
+		expect(cost.assessment?.status).toBe("unknown");
+		expect(cost.assessment).toMatchObject({ reason: expect.stringContaining("No admitted exact archived") });
+	});
+
+	it("keeps a verified assessment checked after the client audit date unchanged", () => {
+		const input = row("2026-11-13");
+		expect(catalogueCost(input)).toBe(input.cost);
+	});
+});

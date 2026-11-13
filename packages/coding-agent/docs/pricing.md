@@ -88,7 +88,10 @@ Source audit, checked 2026-11-12:
   and `1/0.05/5`. Above 272000 input, the entire request uses double input/read and 1.5x
   output rates. Only their documented physical, US and global IDs are assessed. The
   published 30-minute write rates (`12.50`, `2.50`, `1.25`, doubled above 272000) are the
-  only supported explicit TTL: they price writes when the caller states short writes via
+  only supported explicit TTL (model cards and the AWS
+  [prompt caching guide](https://docs.aws.amazon.com/bedrock/latest/userguide/prompt-caching.html),
+  which lists 30 minutes as the sole `prompt_cache_options.ttl` value and notes Converse
+  does not support explicit caching for these models): they price writes when the caller states short writes via
   `shortCacheWrites`, and unknown, 1h or 12h writes stay unpriced. No 12h tariff is
   inferred. The baseline is not an invoice; region, Ultrafast and other service tiers are
   excluded.

@@ -98,7 +98,7 @@ describe("catalogue assessment", () => {
 	// nredd/pi#52: this public Codex selector has an exact API-equivalent contract.
 	it("assesses only the exact Codex Terra selector with explicit cache lifetimes", () => {
 		const cost = catalogueCost(entry("openai-codex", "gpt-6.1-terra"));
-		expect(cost).toMatchObject({
+		expect(structuredClone(cost)).toMatchObject({
 			input: 1,
 			output: 5,
 			cacheRead: 0.05,

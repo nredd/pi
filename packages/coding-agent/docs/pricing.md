@@ -75,6 +75,21 @@ Source audit, checked 2026-11-12:
   Sonnet 5.5's exact physical/global/geo IDs and 1M context are documented [here](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-5-5.html).
   Assessed Sonnet/Opus 4.6+ and Fable models do not inherit an older 200K premium.
   Older unassessed Sonnet models remain unknown until their applicable tiers are verified.
+- AWS Nova 2 Lite, Lite, Micro and Pro use only the physical and profile IDs in their
+  respective model cards, with the Standard/on-demand N. Virginia baseline checked 2026-11-13.
+  Input/read/output USD per million are respectively `0.30/0.075/2.50`, `0.06/0.015/0.24`,
+  `0.035/0.00875/0.14` and `0.80/0.20/3.20`. The write tariff is unavailable; implicit
+  reuse does not create cache-read counters. Neither geographic profiles nor this baseline
+  establish actual deployment routing or invoice cost.
+- AWS model cards for [Astra](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-astra.md),
+  [Sol](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-1-sol.md) and
+  [Terra](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-openai-gpt-6-1-terra.md)
+  publish Standard Global CRIS input/read/output USD per million of `10/1/50`, `2/0.10/10`,
+  and `1/0.05/5`. Above 272000 input, the entire request uses double input/read and 1.5x
+  output rates. Only their documented physical, US and global IDs are assessed. Although
+  30-minute write rates are published, the estimator cannot distinguish 30m from another
+  short TTL, so consumed writes remain unavailable. No 12h tariff is inferred. The baseline
+  is not an invoice; region, Ultrafast and other service tiers are excluded.
 - Other generated providers/models retain their source rates for compatibility but are
   explicitly unverified unless an assessment is supplied. This is NOT a completed official
   price verification for every provider. Public source-feed numbers alone are not certified

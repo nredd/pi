@@ -200,7 +200,8 @@ test("installValidated discards a stale staging directory", (t) => {
 	assert.equal(existsSync(join(dataDir(root), "junk")), false);
 });
 
-test("installValidated discards a half-deleted previous only after the target is final", (t) => {
+// #85: a crash while deleting the old data must not leave a partial `previous` that recovery trusts.
+test("installValidated clears a leftover discard directory", (t) => {
 	const root = makeRepo(t);
 	makeReady(root);
 	mkdirSync(`${dataDir(root)}.discard`);

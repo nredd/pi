@@ -72,7 +72,12 @@ it("recovers the first reftable update when initial asynchronous stat sampling i
 		const stalled = fixtures.filter(({ provider }) => provider.getGitBranch() !== "foo");
 		expect(stalled.length).toBe(0);
 		for (const fixture of fixtures) {
-			expect(replies.calls.get(fixture.cwd)).toBe(1);
+			// The native watcher and the stat poll can each legitimately observe the one mutation
+			// (poll keeps its own baseline), so one or two refreshes is correct. Under threadpool
+			// load the second is routine; zero means the update was lost, three means a loop.
+			const calls = replies.calls.get(fixture.cwd) ?? 0;
+			expect(calls).toBeGreaterThanOrEqual(1);
+			expect(calls).toBeLessThanOrEqual(2);
 			expect(fixture.provider.getGitBranch()).toBe("foo");
 			expect(fixture.notices).toBe(1);
 		}

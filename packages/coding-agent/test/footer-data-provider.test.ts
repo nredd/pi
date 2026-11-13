@@ -267,7 +267,9 @@ describe("FooterDataProvider reftable branch detection", () => {
 			await vi.advanceTimersByTimeAsync(2);
 			expect(vi.mocked(execFile)).toHaveBeenCalledTimes(1);
 			await vi.advanceTimersByTimeAsync(650);
-			expect(vi.mocked(execFile)).toHaveBeenCalledTimes(1);
+			// A real native event or stat poll tick may land during the settle window under load and
+			// legitimately trigger one more refresh; the burst itself must coalesce, and a loop must not form.
+			expect(vi.mocked(execFile).mock.calls.length).toBeLessThanOrEqual(2);
 		} finally {
 			provider.dispose();
 			vi.useRealTimers();

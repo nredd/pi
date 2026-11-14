@@ -1,26 +1,27 @@
 name: Upstream drift canary
 
 # Not a required check and never runs on pull requests. Read-only toward upstream: it only
-# fetches, trial-merges in a scratch worktree, and reports through one rolling issue.
+# fetches and trial-merges in a scratch worktree. Two jobs keep the token away from upstream code:
+# `trial` executes the merged tree with `contents: read` only and uploads a tiny JSON artifact;
+# `report` has `issues: write`, never executes upstream code, validates the artifact, regenerates
+# every fact from git, and updates the one rolling issue. Hosted runners only, no cache anywhere.
 on:
   schedule:
     - cron: "23 6 * * *"
   workflow_dispatch:
 
-permissions:
-  contents: read
-  issues: write
+permissions: {}
 
 concurrency:
   group: upstream-drift
   cancel-in-progress: false
 
 jobs:
-  drift:
+  trial:
     runs-on: ubuntu-latest
     timeout-minutes: 120
-    env:
-      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    permissions:
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -44,24 +45,13 @@ jobs:
           git remote set-url --push upstream DISABLED
           git fetch --no-tags upstream main
 
-      - name: Load rolling issue
-        id: issue
-        env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
-        run: |
-          mkdir -p "$WORK_DIR"
-          gh issue list --label upstream-drift --state open --limit 1 --json number,body > "$WORK_DIR/issue.json"
-          echo "number=$(jq -r '.[0].number // empty' "$WORK_DIR/issue.json")" >> "$GITHUB_OUTPUT"
-          jq -r '.[0].body // empty' "$WORK_DIR/issue.json" > "$WORK_DIR/previous.md"
-
       - name: Analyze drift and trial merge
         id: analyze
         run: |
+          mkdir -p "$WORK_DIR"
           node scripts/upstream-drift.mjs analyze \
             --repo . --local-ref HEAD --upstream-ref upstream/main \
             --trial-dir "$TRIAL_DIR" --keep-trial \
-            --previous-body "$WORK_DIR/previous.md" \
             --out "$WORK_DIR/report.json"
           echo "clean=$(jq -r '.merge.clean' "$WORK_DIR/report.json")" >> "$GITHUB_OUTPUT"
 
@@ -77,7 +67,7 @@ jobs:
 
       - name: Trial install
         id: install
-        if: steps.analyze.outputs.clean == 'true'
+        if: steps.deps.outcome == 'success'
         continue-on-error: true
         timeout-minutes: 10
         working-directory: ${{ env.TRIAL_DIR }}
@@ -131,7 +121,8 @@ jobs:
         working-directory: ${{ env.TRIAL_DIR }}
         run: ./test.sh
 
-      - name: Record trial outcomes
+      # Trusted checkout code (not the merged tree) packs the outcomes into the validated artifact.
+      - name: Pack artifact
         if: steps.analyze.outcome == 'success'
         env:
           DEPS: ${{ steps.deps.outcome }}
@@ -146,22 +137,93 @@ jobs:
             --arg check "$CHECK" --arg daemon "$DAEMON" --arg test "$TEST" \
             '{deps: $deps, install: $install, models: $models, build: $build, check: $check, daemon: $daemon, test: $test}' \
             > "$WORK_DIR/trial.json"
+          node scripts/upstream-drift.mjs pack \
+            --report "$WORK_DIR/report.json" --trial "$WORK_DIR/trial.json" --out "$WORK_DIR/artifact.json"
+
+      - name: Upload artifact
+        if: steps.analyze.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: upstream-drift-artifact
+          path: ${{ env.WORK_DIR }}/artifact.json
+          if-no-files-found: error
+          retention-days: 3
+
+  report:
+    needs: trial
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      # Our own main only. No upstream code is checked out, installed, built or executed here.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+
+      - name: Prepare scratch paths
+        run: |
+          echo "WORK_DIR=$RUNNER_TEMP/drift" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/drift"
+
+      - name: Download trial artifact
+        id: download
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: upstream-drift-artifact
+          path: ${{ env.WORK_DIR }}/artifact
+
+      # Fetch refs only (no checkout, no build). Pin to the sha the trial tested when there is one.
+      - name: Fetch upstream refs (read-only)
+        run: |
+          git remote add upstream https://github.com/earendil-works/pi.git
+          git remote set-url --push upstream DISABLED
+          artifact="$WORK_DIR/artifact/artifact.json"
+          if [ -f "$artifact" ]; then
+            sha="$(jq -r '.upstreamSha // empty' "$artifact")"
+            printf '%s' "$sha" | grep -Eq '^[0-9a-f]{40}$'
+            git fetch --no-tags upstream "$sha"
+          else
+            git fetch --no-tags upstream main
+          fi
+          git update-ref refs/remotes/upstream/main FETCH_HEAD
+
+      - name: Load rolling issue
+        id: issue
+        run: |
+          gh issue list --label upstream-drift --state open --limit 1 --json number,body > "$WORK_DIR/issue.json"
+          echo "number=$(jq -r '.[0].number // empty' "$WORK_DIR/issue.json")" >> "$GITHUB_OUTPUT"
+          jq -r '.[0].body // empty' "$WORK_DIR/issue.json" > "$WORK_DIR/previous.md"
 
       - name: Render summary and decide trips
-        if: steps.analyze.outcome == 'success'
         run: |
+          artifact_args=()
+          if [ -f "$WORK_DIR/artifact/artifact.json" ]; then
+            artifact_args=(--artifact "$WORK_DIR/artifact/artifact.json")
+          fi
           node scripts/upstream-drift.mjs finalize \
-            --report "$WORK_DIR/report.json" --trial "$WORK_DIR/trial.json" \
+            --repo . --local-ref HEAD --upstream-ref upstream/main "${artifact_args[@]}" \
             --previous-body "$WORK_DIR/previous.md" \
             --body-out "$WORK_DIR/body.md" --comment-out "$WORK_DIR/comment.md" \
             --run-url "$RUN_URL"
           cat "$WORK_DIR/body.md" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Update rolling issue
-        if: steps.analyze.outcome == 'success'
         env:
-          GH_TOKEN: ${{ github.token }}
-          GH_REPO: ${{ github.repository }}
           ISSUE_NUMBER: ${{ steps.issue.outputs.number }}
         run: |
           if [ -z "$ISSUE_NUMBER" ]; then

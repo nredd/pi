@@ -4,11 +4,15 @@
 //
 //   node scripts/upstream-drift.mjs analyze  --repo . --local-ref HEAD --upstream-ref upstream/main \
 //       --out report.json [--trial-dir DIR [--keep-trial]] [--previous-body prev.md]
-//   node scripts/upstream-drift.mjs finalize --report report.json [--trial trial.json] \
-//       [--previous-body prev.md] --body-out body.md --comment-out comment.md [--run-url URL]
+//   node scripts/upstream-drift.mjs pack --report report.json --trial trial.json --out artifact.json
+//   node scripts/upstream-drift.mjs finalize --repo . --local-ref HEAD --upstream-ref REF \
+//       [--artifact artifact.json] [--previous-body prev.md] --body-out body.md \
+//       --comment-out comment.md [--run-url URL]
 //
-// `analyze` collects the facts. `finalize` folds in the trial build results, decides which
-// thresholds tripped, renders the rolling issue body, and writes a comment only for new trips.
+// The trial job (runs upstream code, no issue scope) runs `analyze` and `pack`. The report job
+// (issue scope, runs no upstream code) runs `finalize`: it validates the artifact, regenerates every
+// fact from git, decides which thresholds tripped, renders the rolling issue body, and writes a
+// comment only for new trips. All upstream-controlled text is rendered through `code()`.
 
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -25,6 +29,10 @@ const MAX_TEXT = 160;
 const MAX_COMMENT_BREAKING = 5;
 const TRIAL_STEPS = ["deps", "install", "models", "build", "check", "daemon", "test"];
 const RED_OUTCOMES = new Set(["failure", "cancelled", "timed_out"]);
+const ARTIFACT_OUTCOMES = new Set(["success", "failure", "cancelled", "skipped"]);
+const MAX_CONFLICTS = 5000;
+const MAX_PATH = 500;
+const ZERO_WIDTH = "\u200b";
 
 /**
  * Run git and return trimmed-at-the-end stdout. With `allowFail`, a non-zero exit returns the
@@ -106,6 +114,19 @@ export function clip(text, max = MAX_TEXT) {
 	return flat.length > max ? `${flat.slice(0, max - 3)}...` : flat;
 }
 
+/**
+ * Render untrusted text as an inert markdown code span: backticks and control characters are
+ * stripped, whitespace collapsed, length capped, and `@`, `#`, `<` get a zero-width space so
+ * mentions, issue references and HTML comments (including a fake state marker) cannot form.
+ */
+export function code(text, max = MAX_TEXT) {
+	const safe = clip(String(text).replace(/`/g, "'").replace(/\p{C}/gu, " "), max).replace(
+		/[@#<]/g,
+		(char) => `${char}${ZERO_WIDTH}`,
+	);
+	return `\`${safe}\``;
+}
+
 function lines(text) {
 	return text.split("\n").filter(Boolean);
 }
@@ -114,14 +135,21 @@ function revCount(repo, range) {
 	return Number.parseInt(git(repo, ["rev-list", "--count", range]).stdout.trim(), 10);
 }
 
-/** Read the machine-readable state marker from a previous issue body, or `undefined`. */
+/**
+ * Read the machine-readable state marker from a previous issue body, or `undefined`. Only the
+ * LAST marker counts and it must end the body, so earlier look-alikes are ignored.
+ */
 export function parseState(body) {
 	if (!body) return undefined;
-	const match = new RegExp(`<!--\\s*${STATE_MARKER}:\\s*(\\{.*?\\})\\s*-->`, "s").exec(body);
+	const start = body.lastIndexOf(`<!-- ${STATE_MARKER}:`);
+	if (start < 0) return undefined;
+	const match = new RegExp(`^<!-- ${STATE_MARKER}:\\s*(\\{[^\\n]*\\})\\s*-->\\s*$`).exec(body.slice(start));
 	if (!match) return undefined;
 	try {
 		const state = JSON.parse(match[1]);
-		return state && typeof state === "object" ? state : undefined;
+		if (!state || typeof state !== "object" || !Array.isArray(state.tripped)) return undefined;
+		if (!state.tripped.every((id) => typeof id === "string")) return undefined;
+		return state;
 	} catch {
 		return undefined;
 	}
@@ -242,8 +270,14 @@ export function analyze({
 	};
 }
 
-/** True when a trial result has any red step. Missing or skipped steps are not red. */
+/** The apt step failed, so later results prove nothing about upstream. */
+export function trialIsInconclusive(trial) {
+	return RED_OUTCOMES.has(trial?.deps);
+}
+
+/** True when a conclusive trial has any red step. Missing or skipped steps are not red. */
 export function trialIsRed(trial) {
+	if (trialIsInconclusive(trial)) return false;
 	return TRIAL_STEPS.some((step) => RED_OUTCOMES.has(trial?.[step]));
 }
 
@@ -269,7 +303,7 @@ export function evaluate(report, trial, previousBody) {
 	for (const entry of report.breaking) {
 		trips.push({
 			id: `breaking:${createHash("sha256").update(`${entry.path}\n${entry.text}`).digest("hex").slice(0, 8)}`,
-			reason: `breaking change in \`${entry.path}\` (${entry.version}): ${clip(entry.text)}`,
+			reason: `breaking change in ${code(entry.path)} (${code(entry.version, 40)}): ${code(entry.text)}`,
 		});
 	}
 	const previous = new Set(parseState(previousBody)?.tripped ?? []);
@@ -297,6 +331,7 @@ function truncateList(items, render, limit = MAX_LISTED) {
 function trialSummary(report, trial) {
 	if (report.merge.clean === undefined) return "not attempted";
 	if (!report.merge.clean) return "skipped (conflicts)";
+	if (trialIsInconclusive(trial)) return "inconclusive (system dependency install failed, nothing was tested)";
 	return TRIAL_STEPS.map((step) => `${step}: ${trial?.[step] ?? "not run"}`).join(", ");
 }
 
@@ -312,7 +347,7 @@ export function renderBody(report, decision, { trial, runUrl, now = new Date().t
 	out.push("");
 	out.push("Drift:");
 	out.push(
-		`- \`${report.localRef}\` ${report.localSha.slice(0, 10)} vs \`${report.upstreamRef}\` ${report.upstreamSha.slice(0, 10)}, merge base ${report.mergeBase.slice(0, 10)}`,
+		`- ${code(report.localRef, 60)} ${report.localSha.slice(0, 10)} vs ${code(report.upstreamRef, 60)} ${report.upstreamSha.slice(0, 10)}, merge base ${report.mergeBase.slice(0, 10)}`,
 	);
 	out.push(`- behind ${report.behind}, ahead ${report.ahead} (threshold ${report.behindThreshold})`);
 	if (report.newSinceLastRun !== undefined)
@@ -320,12 +355,12 @@ export function renderBody(report, decision, { trial, runUrl, now = new Date().t
 	out.push("");
 	out.push("Upstream commits by area (a commit counts once per area it touches):");
 	if (report.areas.length === 0) out.push("- none");
-	out.push(...truncateList(report.areas, (entry) => `- \`${entry.area}\`: ${entry.commits}`, MAX_AREAS));
+	out.push(...truncateList(report.areas, (entry) => `- ${code(entry.area)}: ${entry.commits}`, MAX_AREAS));
 	out.push("");
 	out.push(
 		`Trial merge: ${report.merge.clean === undefined ? "not attempted" : report.merge.clean ? "clean" : "conflicts"}`,
 	);
-	out.push(...truncateList(report.merge.conflicts, (path) => `- \`${path}\``));
+	out.push(...truncateList(report.merge.conflicts, (path) => `- ${code(path)}`));
 	out.push(`Trial steps: ${trialSummary(report, trial)}`);
 	out.push("");
 	out.push(
@@ -335,13 +370,18 @@ export function renderBody(report, decision, { trial, runUrl, now = new Date().t
 	out.push(
 		...truncateList(
 			report.patchedTouches,
-			(touch) => `- ${touch.sha.slice(0, 10)} ${clip(touch.subject)} (${touch.files.length} file(s))`,
+			(touch) => `- ${touch.sha.slice(0, 10)} ${code(touch.subject)} (${touch.files.length} file(s))`,
 		),
 	);
 	out.push("");
 	out.push(`New \`### Breaking Changes\` entries (${report.breaking.length}):`);
 	if (report.breaking.length === 0) out.push("- none");
-	out.push(...truncateList(report.breaking, (entry) => `- \`${entry.path}\` ${entry.version}: ${clip(entry.text)}`));
+	out.push(
+		...truncateList(
+			report.breaking,
+			(entry) => `- ${code(entry.path)} ${code(entry.version, 40)}: ${code(entry.text)}`,
+		),
+	);
 	out.push("");
 	const state = { upstreamSha: report.upstreamSha, tripped: decision.trips.map((trip) => trip.id) };
 	out.push(`<!-- ${STATE_MARKER}: ${JSON.stringify(state)} -->`);
@@ -354,6 +394,49 @@ export function renderComment(decision, { runUrl } = {}) {
 	out.push(...tripLines(decision.newTrips, MAX_COMMENT_BREAKING));
 	if (runUrl) out.push("", `Run: ${runUrl}`);
 	return `${out.join("\n")}\n`;
+}
+
+function plainObject(value) {
+	return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+/**
+ * Validate the untrusted artifact from the trial job (which ran upstream code). Only a sha, the
+ * conflicted paths and step outcomes cross the boundary; everything else is regenerated from git.
+ */
+export function validateArtifact(raw) {
+	if (!plainObject(raw)) throw new Error("artifact: not an object");
+	const keys = Object.keys(raw).sort().join();
+	if (keys !== "merge,trial,upstreamSha") throw new Error(`artifact: unexpected keys ${keys}`);
+	if (typeof raw.upstreamSha !== "string" || !/^[0-9a-f]{40}$/.test(raw.upstreamSha)) {
+		throw new Error("artifact: upstreamSha must be a 40 hex sha");
+	}
+	if (!plainObject(raw.merge) || Object.keys(raw.merge).sort().join() !== "clean,conflicts") {
+		throw new Error("artifact: bad merge");
+	}
+	if (typeof raw.merge.clean !== "boolean") throw new Error("artifact: merge.clean must be boolean");
+	const { conflicts } = raw.merge;
+	if (!Array.isArray(conflicts) || conflicts.length > MAX_CONFLICTS) throw new Error("artifact: bad conflicts list");
+	for (const path of conflicts) {
+		if (typeof path !== "string" || path.length === 0 || path.length > MAX_PATH || /\p{C}/u.test(path)) {
+			throw new Error("artifact: bad conflict path");
+		}
+	}
+	if (!plainObject(raw.trial)) throw new Error("artifact: bad trial");
+	for (const [step, outcome] of Object.entries(raw.trial)) {
+		if (!TRIAL_STEPS.includes(step)) throw new Error(`artifact: unknown trial step ${step}`);
+		if (!ARTIFACT_OUTCOMES.has(outcome)) throw new Error(`artifact: bad outcome for ${step}`);
+	}
+	return raw;
+}
+
+/** Reduce an `analyze` report plus trial outcomes to the minimal artifact, validated. */
+export function packArtifact(report, trial) {
+	return validateArtifact({
+		upstreamSha: report.upstreamSha,
+		merge: { clean: report.merge.clean, conflicts: report.merge.conflicts },
+		trial,
+	});
 }
 
 function readOptional(path) {
@@ -374,6 +457,7 @@ function main(argv) {
 			"behind-threshold": { type: "string", default: String(DEFAULT_BEHIND_THRESHOLD) },
 			out: { type: "string" },
 			report: { type: "string" },
+			artifact: { type: "string" },
 			trial: { type: "string" },
 			"body-out": { type: "string" },
 			"comment-out": { type: "string" },
@@ -399,11 +483,37 @@ function main(argv) {
 		else process.stdout.write(json);
 		return;
 	}
-	if (command === "finalize") {
-		if (!values.report || !values["body-out"]) throw new Error("finalize needs --report and --body-out");
+	if (command === "pack") {
+		if (!values.report || !values.trial || !values.out) throw new Error("pack needs --report, --trial and --out");
 		const report = JSON.parse(readFileSync(values.report, "utf8"));
-		const trialText = readOptional(values.trial);
-		const trial = trialText ? JSON.parse(trialText) : undefined;
+		const trial = JSON.parse(readFileSync(values.trial, "utf8"));
+		writeFileSync(values.out, `${JSON.stringify(packArtifact(report, trial))}\n`);
+		return;
+	}
+	if (command === "finalize") {
+		if (!values["body-out"]) throw new Error("finalize needs --body-out");
+		const threshold = Number.parseInt(values["behind-threshold"], 10);
+		if (!Number.isInteger(threshold) || threshold < 0)
+			throw new Error("--behind-threshold must be a non-negative integer");
+		const artifactText = readOptional(values.artifact);
+		const artifact = artifactText ? validateArtifact(JSON.parse(artifactText)) : undefined;
+		// Facts come from git here, never from the untrusted artifact.
+		const report = analyze({
+			repo: resolve(values.repo),
+			localRef: values["local-ref"],
+			upstreamRef: values["upstream-ref"],
+			previousBody,
+			behindThreshold: threshold,
+		});
+		if (artifact) {
+			if (artifact.upstreamSha !== report.upstreamSha) {
+				throw new Error(
+					`artifact is for upstream ${artifact.upstreamSha}, but ${report.upstreamRef} is ${report.upstreamSha}`,
+				);
+			}
+			report.merge = { clean: artifact.merge.clean, conflicts: artifact.merge.conflicts, kept: false };
+		}
+		const trial = artifact?.trial;
 		const decision = evaluate(report, trial, previousBody);
 		writeFileSync(values["body-out"], renderBody(report, decision, { trial, runUrl: values["run-url"] }));
 		const commentOut = values["comment-out"];
@@ -417,7 +527,7 @@ function main(argv) {
 		);
 		return;
 	}
-	throw new Error("usage: upstream-drift.mjs <analyze|finalize> [options]");
+	throw new Error("usage: upstream-drift.mjs <analyze|pack|finalize> [options]");
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

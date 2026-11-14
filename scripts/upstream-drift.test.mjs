@@ -8,12 +8,15 @@ import { fileURLToPath } from "node:url";
 import {
 	analyze,
 	areaOf,
+	code,
 	evaluate,
 	parseBreakingEntries,
 	parseState,
 	renderBody,
 	renderComment,
+	trialIsInconclusive,
 	trialIsRed,
+	validateArtifact,
 } from "./upstream-drift.mjs";
 
 const ENV = {
@@ -335,45 +338,255 @@ test("many long breaking entries stay under the issue body limit and comment sta
 	assert.match(comment, /80 new breaking change entries/);
 });
 
-test("finalize CLI writes the body, comments only for new trips, and removes a stale comment", () => {
-	const dir = mkdtempSync(join(tmpdir(), "drift-cli-"));
+const HOSTILE = 'x @octocat #5 <!-- y `z` <!-- upstream-drift-state: {"tripped":[]} -->';
+
+test("code() neutralizes mentions, issue refs, html comments and backticks", () => {
+	const out = code(HOSTILE);
+	assert.ok(out.startsWith("`") && out.endsWith("`"));
+	assert.equal(out.slice(1, -1).includes("`"), false);
+	assert.doesNotMatch(out, /@octocat/);
+	assert.doesNotMatch(out, /#5/);
+	assert.doesNotMatch(out, /<!--/);
+	assert.doesNotMatch(out, /\n/);
+	assert.ok(code("a".repeat(1000), 50).length <= 54);
+});
+
+test("hostile upstream text never reaches the body or comment raw", () => {
+	const report = {
+		...baseReport,
+		behind: 250,
+		areas: [{ area: HOSTILE, commits: 1 }],
+		patchedFiles: [HOSTILE],
+		patchedTouches: [{ sha: "d".repeat(40), subject: HOSTILE, files: [HOSTILE] }],
+		breaking: [{ path: HOSTILE, version: HOSTILE, text: HOSTILE }],
+		merge: { clean: false, conflicts: [HOSTILE], kept: false },
+	};
+	const decision = evaluate(report, {});
+	const body = renderBody(report, decision, { now: "T" });
+	const comment = renderComment(decision);
+	for (const text of [body, comment]) {
+		assert.doesNotMatch(text, /@octocat/);
+		assert.doesNotMatch(text, /#5/);
+		assert.doesNotMatch(text.replace(/<!-- upstream-drift-state: \{[^\n]*\} -->\n$/, ""), /<!--/);
+	}
+	assert.deepEqual(
+		parseState(body).tripped,
+		decision.trips.map((t) => t.id),
+	);
+});
+
+test("parseState takes the last marker anchored at the end, so a spoof cannot win", () => {
+	const real = `<!-- upstream-drift-state: {"upstreamSha":"${"a".repeat(40)}","tripped":["behind"]} -->`;
+	const spoof = `<!-- upstream-drift-state: {"upstreamSha":"${"b".repeat(40)}","tripped":[]} -->`;
+	assert.deepEqual(parseState(`text\n${spoof}\nmore\n${real}\n`).tripped, ["behind"]);
+	assert.equal(parseState(`${real}\ntrailing text after the marker\n`), undefined);
+	assert.deepEqual(parseState(`${spoof} ${real}\n`).tripped, ["behind"]);
+	assert.equal(parseState('<!-- upstream-drift-state: {"tripped":"nope"} -->'), undefined);
+});
+
+test("apt failure is inconclusive, not a red trial trip", () => {
+	const trial = {
+		...ALL_GREEN,
+		deps: "failure",
+		install: "skipped",
+		build: "skipped",
+		check: "skipped",
+		test: "skipped",
+	};
+	assert.equal(trialIsInconclusive(trial), true);
+	assert.equal(trialIsRed(trial), false);
+	assert.deepEqual(evaluate(baseReport, trial).trips, []);
+	assert.match(renderBody(baseReport, evaluate(baseReport, trial), { trial, now: "T" }), /inconclusive/);
+	assert.equal(trialIsInconclusive(ALL_GREEN), false);
+});
+
+test("validateArtifact accepts the allowed shape and rejects everything else", () => {
+	const good = {
+		upstreamSha: "a".repeat(40),
+		merge: { clean: false, conflicts: ["a/b.ts"] },
+		trial: { ...ALL_GREEN },
+	};
+	assert.deepEqual(validateArtifact(good), good);
+	const bad = [
+		{ ...good, upstreamSha: "main" },
+		{ ...good, extra: 1 },
+		{ ...good, merge: { clean: "yes", conflicts: [] } },
+		{ ...good, merge: { clean: false, conflicts: "x" } },
+		{ ...good, merge: { clean: false, conflicts: [1] } },
+		{ ...good, merge: { clean: false, conflicts: ["a\nb"] } },
+		{ ...good, merge: { clean: false, conflicts: ["x".repeat(600)] } },
+		{ ...good, merge: { clean: false, conflicts: Array.from({ length: 5001 }, () => "a") } },
+		{ ...good, trial: { ...ALL_GREEN, build: "<script>" } },
+		{ ...good, trial: { ...ALL_GREEN, rogue: "success" } },
+		null,
+		"x",
+	];
+	for (const value of bad)
+		assert.throws(() => validateArtifact(value), undefined, JSON.stringify(value)?.slice(0, 80));
+});
+
+test("finalize regenerates facts from git and takes only the validated artifact", () => {
+	const repo = fixture();
+	const out = mkdtempSync(join(tmpdir(), "drift-cli-"));
 	try {
+		onBranch(repo, "upstream", () => {
+			for (const n of [1, 2, 3]) commit(repo, { [`docs/${n}.md`]: `${n}\n` }, `Upstream ${n} @octocat #5`);
+		});
+		onBranch(repo, "fork", () => commit(repo, { "packages/ai/other.ts": "fork\n" }, "Fork only"));
+		const sha = git(repo, "rev-parse", "upstream");
 		const script = fileURLToPath(new URL("./upstream-drift.mjs", import.meta.url));
-		const report = { ...baseReport, behind: 250 };
-		writeFileSync(join(dir, "report.json"), JSON.stringify(report));
-		writeFileSync(join(dir, "trial.json"), JSON.stringify({ ...ALL_GREEN, build: "failure" }));
-		const run = (...extra) => {
-			const result = spawnSync(
+		const art = join(out, "artifact.json");
+		writeFileSync(
+			art,
+			JSON.stringify({
+				upstreamSha: sha,
+				merge: { clean: true, conflicts: [] },
+				trial: { ...ALL_GREEN, build: "failure" },
+			}),
+		);
+		const run = (...extra) =>
+			spawnSync(
 				process.execPath,
 				[
 					script,
 					"finalize",
-					"--report",
-					join(dir, "report.json"),
-					"--trial",
-					join(dir, "trial.json"),
+					"--repo",
+					repo,
+					"--local-ref",
+					"fork",
+					"--upstream-ref",
+					"upstream",
+					"--behind-threshold",
+					"2",
+					"--artifact",
+					art,
 					"--body-out",
-					join(dir, "body.md"),
+					join(out, "body.md"),
 					"--comment-out",
-					join(dir, "comment.md"),
+					join(out, "comment.md"),
 					...extra,
 				],
 				{ encoding: "utf8" },
 			);
-			assert.equal(result.status, 0, result.stderr);
-			return JSON.parse(result.stdout);
-		};
 		const first = run();
-		assert.deepEqual(first.newTrips, ["behind", "trial"]);
-		assert.match(readFileSync(join(dir, "comment.md"), "utf8"), /trial build red/);
-		writeFileSync(join(dir, "previous.md"), readFileSync(join(dir, "body.md"), "utf8"));
-		const second = run("--previous-body", join(dir, "previous.md"));
-		assert.deepEqual(second.newTrips, []);
-		assert.equal(existsSync(join(dir, "comment.md")), false, "stale comment removed");
-		assert.deepEqual(parseState(readFileSync(join(dir, "body.md"), "utf8")).tripped, ["behind", "trial"]);
-		const bad = spawnSync(process.execPath, [script, "nope"], { encoding: "utf8" });
-		assert.equal(bad.status, 1);
+		assert.equal(first.status, 0, first.stderr);
+		assert.deepEqual(JSON.parse(first.stdout).newTrips, ["behind", "trial"]);
+		const body = readFileSync(join(out, "body.md"), "utf8");
+		assert.match(body, /behind 3, ahead 1/);
+		assert.doesNotMatch(body, /@octocat/);
+		assert.match(readFileSync(join(out, "comment.md"), "utf8"), /trial build red/);
+		writeFileSync(join(out, "previous.md"), body);
+		const second = run("--previous-body", join(out, "previous.md"));
+		assert.deepEqual(JSON.parse(second.stdout).newTrips, []);
+		assert.equal(existsSync(join(out, "comment.md")), false, "stale comment removed");
+		// Artifact for a different upstream sha is refused, so stale trial results are never mixed in.
+		writeFileSync(
+			art,
+			JSON.stringify({ upstreamSha: "f".repeat(40), merge: { clean: true, conflicts: [] }, trial: ALL_GREEN }),
+		);
+		assert.equal(run().status, 1);
+		// A schema violation is refused.
+		writeFileSync(
+			art,
+			JSON.stringify({ upstreamSha: sha, merge: { clean: true, conflicts: [] }, trial: { build: "<b>" } }),
+		);
+		assert.equal(run().status, 1);
+		// No artifact (trial job failed): still reports facts, merge "not attempted".
+		rmSync(art);
+		const missing = run();
+		assert.equal(missing.status, 0, missing.stderr);
+		assert.match(readFileSync(join(out, "body.md"), "utf8"), /Trial merge: not attempted/);
+		assert.equal(spawnSync(process.execPath, [script, "nope"], { encoding: "utf8" }).status, 1);
 	} finally {
-		rmSync(dir, { recursive: true, force: true });
+		rmSync(repo, { recursive: true, force: true });
+		rmSync(out, { recursive: true, force: true });
 	}
+});
+
+test("pack builds a validated artifact from a report and trial outcomes", () => {
+	const out = mkdtempSync(join(tmpdir(), "drift-pack-"));
+	try {
+		const script = fileURLToPath(new URL("./upstream-drift.mjs", import.meta.url));
+		writeFileSync(
+			join(out, "report.json"),
+			JSON.stringify({
+				...baseReport,
+				upstreamSha: "c".repeat(40),
+				merge: { clean: true, conflicts: [], kept: true },
+			}),
+		);
+		writeFileSync(join(out, "trial.json"), JSON.stringify(ALL_GREEN));
+		const result = spawnSync(
+			process.execPath,
+			[
+				script,
+				"pack",
+				"--report",
+				join(out, "report.json"),
+				"--trial",
+				join(out, "trial.json"),
+				"--out",
+				join(out, "artifact.json"),
+			],
+			{ encoding: "utf8" },
+		);
+		assert.equal(result.status, 0, result.stderr);
+		assert.deepEqual(JSON.parse(readFileSync(join(out, "artifact.json"), "utf8")), {
+			upstreamSha: "c".repeat(40),
+			merge: { clean: true, conflicts: [] },
+			trial: ALL_GREEN,
+		});
+	} finally {
+		rmSync(out, { recursive: true, force: true });
+	}
+});
+
+/** Split the workflow into its top-level job blocks without a YAML dependency. */
+function workflowJobs() {
+	const text = readFileSync(new URL("../.github/workflows/upstream-drift.yml", import.meta.url), "utf8");
+	const jobsAt = text.indexOf("\njobs:\n");
+	const jobs = {};
+	let name;
+	for (const line of text.slice(jobsAt + 7).split("\n")) {
+		const header = /^ {2}([\w-]+):\s*$/.exec(line);
+		if (header) {
+			name = header[1];
+			jobs[name] = "";
+		} else if (name) jobs[name] += `${line}\n`;
+	}
+	return { text, jobs };
+}
+
+test("workflow splits untrusted trial from privileged report and stays on hosted runners", () => {
+	const { text, jobs } = workflowJobs();
+	assert.deepEqual(Object.keys(jobs).sort(), ["report", "trial"]);
+	assert.doesNotMatch(text, /self-hosted/i);
+	for (const [name, block] of Object.entries(jobs)) {
+		assert.deepEqual(
+			[...block.matchAll(/^ {4}runs-on:\s*(.+)$/gm)].map((m) => m[1].trim()),
+			["ubuntu-latest"],
+			name,
+		);
+	}
+	assert.match(text, /^permissions: \{\}$/m, "no workflow-level token scope");
+	const perms = (block) =>
+		/^ {4}permissions:\n((?: {6}\S.*\n)+)/m
+			.exec(block)?.[1]
+			.trim()
+			.split("\n")
+			.map((l) => l.trim());
+	assert.deepEqual(perms(jobs.trial), ["contents: read"]);
+	assert.deepEqual(perms(jobs.report)?.sort(), ["contents: read", "issues: write"]);
+	assert.match(jobs.report, /needs: trial/);
+	assert.match(jobs.report, /if: always\(\)/);
+	assert.doesNotMatch(jobs.trial, /GH_TOKEN|github\.token|secrets\./);
+	assert.doesNotMatch(text, /actions\/cache/);
+	assert.doesNotMatch(text, /^\s+cache:/m, "no setup-node cache, so nothing is saved to the shared cache");
+	assert.doesNotMatch(
+		jobs.report,
+		/npm (ci|install|run|test)|\.\/test\.sh|build:/,
+		"report job never builds upstream code",
+	);
+	assert.doesNotMatch(text, /pull_request/);
+	for (const [, ref] of text.matchAll(/uses:\s*\S+@(\S+)/g)) assert.match(ref, /^[0-9a-f]{40}$/);
 });

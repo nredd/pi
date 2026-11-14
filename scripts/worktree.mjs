@@ -28,6 +28,7 @@ import {
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
+	realpathSync,
 	rmSync,
 	statSync,
 	unlinkSync,
@@ -238,7 +239,8 @@ export function check(root, { strict = false } = {}) {
 	return 1;
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+// Compare real paths: argv[1] keeps a symlinked prefix (e.g. macOS /tmp -> /private/tmp) that import.meta.url resolves.
+if (process.argv[1] && realpathSync(resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url))) {
 	const [command, ...flags] = process.argv.slice(2);
 	try {
 		if (command === "setup")

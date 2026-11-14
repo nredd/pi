@@ -170,7 +170,9 @@ export function trialMerge(repo, { localRef, upstreamRef, dir, keep }) {
 		git(repo, ["worktree", "prune"], { allowFail: true });
 	};
 	try {
-		const result = git(dir, ["merge", "--no-commit", "--no-ff", upstreamRef], { allowFail: true });
+		// Hosted runners and isolated test homes have no git identity, and `merge` insists on one even with `--no-commit`.
+		const identity = ["-c", "user.name=upstream-drift", "-c", "user.email=upstream-drift@example.invalid"];
+		const result = git(dir, [...identity, "merge", "--no-commit", "--no-ff", upstreamRef], { allowFail: true });
 		const conflicts = lines(git(dir, ["diff", "--name-only", "--diff-filter=U"]).stdout).sort();
 		if (result.status !== 0 && conflicts.length === 0) {
 			throw new Error(`trial merge failed without conflicts: ${(result.stderr || result.stdout).trim()}`);

@@ -694,6 +694,14 @@ test("sandbox wrapper is unprivileged, minimal and mounts only the trial tree", 
 	);
 	assert.equal([...wrapper.matchAll(/(?:-v|--volume|--mount)\b/g)].length, 1, "exactly one mount");
 	assert.match(wrapper, /-v "\$tree:\/work"/);
+	assert.ok(wrapper.includes('--user "$(id -u):$(id -g)"'), "never runs as root");
+	assert.ok(wrapper.includes("--init"));
+	assert.ok(wrapper.includes("bash -euo pipefail -c"));
+	for (const bad of ["relative/dir", "/tmp/a:b", ""]) {
+		const result = spawnSync("bash", [fileURLToPath(SANDBOX), bad, "true"], { encoding: "utf8" });
+		assert.notEqual(result.status, 0, bad);
+		assert.doesNotMatch(result.stderr, /docker/i, `${bad} must fail before docker`);
+	}
 	// Env into the container is an explicit short allowlist; nothing is inherited from the runner.
 	const envs = [...wrapper.matchAll(/(?:-e|--env) ([A-Z_]+)=/g)].map((m) => m[1]).sort();
 	assert.deepEqual(envs, ["CARGO_HOME", "CI", "HOME"]);
@@ -706,4 +714,48 @@ test("sandbox image is pinned by digest and the Dockerfile only copies from pinn
 	assert.ok(froms.length >= 2);
 	for (const from of froms) assert.match(from, /@sha256:[0-9a-f]{64}$/, from);
 	assert.doesNotMatch(dockerfile, /^COPY (?!--from)/m, "no build context is used");
+});
+
+test("trial merge works with no git identity (hosted runners, isolated test homes)", () => {
+	const repo = fixture();
+	const out = mkdtempSync(join(tmpdir(), "drift-noid-"));
+	try {
+		onBranch(repo, "upstream", () => commit(repo, { "docs/d.md": "d\n" }, "Upstream docs"));
+		onBranch(repo, "fork", () => commit(repo, { "packages/ai/other.ts": "fork\n" }, "Fork only"));
+		const script = fileURLToPath(new URL("./upstream-drift.mjs", import.meta.url));
+		const result = spawnSync(
+			process.execPath,
+			[
+				script,
+				"analyze",
+				"--repo",
+				repo,
+				"--local-ref",
+				"fork",
+				"--upstream-ref",
+				"upstream",
+				"--trial-dir",
+				join(out, "trial"),
+				"--out",
+				join(out, "r.json"),
+			],
+			{
+				encoding: "utf8",
+				env: {
+					PATH: process.env.PATH,
+					HOME: out,
+					GIT_CONFIG_NOSYSTEM: "1",
+					GIT_CONFIG_GLOBAL: "/dev/null",
+					GIT_CONFIG_COUNT: "1",
+					GIT_CONFIG_KEY_0: "user.useConfigOnly",
+					GIT_CONFIG_VALUE_0: "true",
+				},
+			},
+		);
+		assert.equal(result.status, 0, result.stderr);
+		assert.equal(JSON.parse(readFileSync(join(out, "r.json"), "utf8")).merge.clean, true);
+	} finally {
+		rmSync(repo, { recursive: true, force: true });
+		rmSync(out, { recursive: true, force: true });
+	}
 });

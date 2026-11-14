@@ -45,7 +45,7 @@ function delayNextRefreshUntil(runtime: ModelRuntime, stale: Promise<unknown>) {
 }
 
 describe("ModelRuntime availability passes", () => {
-	// nredd/pi#101 (nredd/pi-harness#911)
+	// #101
 	it("keeps a provider registered with registerProvider while an older pass is in flight", async () => {
 		const { credentials, runtime } = await createRuntime();
 		const pass = holdNextPass(credentials);
@@ -65,7 +65,7 @@ describe("ModelRuntime availability passes", () => {
 		expect(runtime.hasConfiguredAuth("late")).toBe(true);
 	});
 
-	// nredd/pi#101 (nredd/pi-harness#911)
+	// #101
 	it("keeps a provider registered with registerNativeProvider while an older pass is in flight", async () => {
 		// A native provider is provisionally configured when the earlier pass saw a stored credential for it.
 		const faux = fauxProvider({ models: [{ id: "small", contextWindow: 1000, maxTokens: 100, input: ["text"] }] });

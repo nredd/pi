@@ -327,7 +327,7 @@ describe("createAgentSession with virtual models", () => {
 	});
 
 	it("starts on the saved virtual default registered while an older availability pass is in flight", async () => {
-		// nredd/pi-harness#911: a pass that listed providers before the registration must not clear it.
+		// #101: a pass that listed providers before the registration must not clear it.
 		const credentials = AuthStorage.inMemory();
 		const runtime = await ModelRuntime.create({
 			credentials,

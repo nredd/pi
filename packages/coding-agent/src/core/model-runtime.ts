@@ -99,15 +99,15 @@ import {
 	withVirtualModels,
 } from "./virtual-models.ts";
 
+/** Most newer availability passes one awaited refresh waits for before resolving. */
+const MAX_SUPERSEDING_PASS_WAITS = 4;
+
 /**
  * A provider rejecting the request's credentials: HTTP 401/403 from `onResponse`, or, when an
  * SDK adapter throws before a response, the status it leads its message with or names, or a
  * provider's auth error code (Anthropic `authentication_error` / `permission_error`, OpenAI
  * `invalid_api_key`). Bare words like "unauthorized" are not enough: proxies and models say them.
  */
-/** Most newer availability passes one awaited refresh waits for before resolving. */
-const MAX_SUPERSEDING_PASS_WAITS = 4;
-
 const AUTH_REJECTION_RE =
 	/^\s*(?:401|403)\b|\bstatus(?: code)?:?\s*(?:401|403)\b|\b(?:authentication_error|permission_error|invalid_api_key)\b/;
 
@@ -454,7 +454,7 @@ export class ModelRuntime implements Models {
 			const latest = this.latestAvailabilityPass;
 			if (!latest || latest.seq <= waitedSeq) return;
 			waitedSeq = latest.seq;
-			await latest.settled;
+			await raceWithAbortSignal(latest.settled, signal);
 		}
 	}
 
@@ -1167,7 +1167,7 @@ export class ModelRuntime implements Models {
 	/**
 	 * Mark a provider configured ahead of its availability check. A full pass already in flight listed
 	 * providers before this one existed and would write a snapshot without it, so it is invalidated;
-	 * the caller's own refresh replaces this entry (nredd/pi-harness#911).
+	 * the caller's own refresh replaces this entry (#101).
 	 */
 	private markConfigured(providerId: string, check: AuthCheck): void {
 		++this.availabilityRefreshSeq;

@@ -49,9 +49,7 @@ describe("processLock", () => {
 	});
 });
 
-// Each test boots real child processes (one TypeScript import graph each), and boot time scales with host load: five
-// boots took 2.5s on a quiet box and passed 5s under load 40 (#95). No assertion depends on elapsed time, so the
-// vitest timeout only bounds a hang and is set well above any loaded boot.
+// #95: real child boots scale with host load and no assertion depends on elapsed time, so this only bounds a hang.
 describe("host manager (real child processes)", { timeout: 60_000 }, () => {
 	// A child host that forks its own children used to pass its CHORD2_LOCK on, so they failed with "locked".
 	it("a child without a lock does not inherit the parent's lock", async () => {

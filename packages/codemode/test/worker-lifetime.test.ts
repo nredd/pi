@@ -224,7 +224,10 @@ function runExitFixture(command: string, how: string, awaitExit: boolean): Promi
 			clearTimeout(deadline);
 			child.kill("SIGKILL");
 			if (error) reject(error);
-			else resolve(stdout.trim().split(/\r?\n/));
+			else {
+				const lines = stdout.trim().split(/\r?\n/);
+				resolve(awaitExit ? lines : lines.slice(0, 1));
+			}
 		};
 		const deadline = setTimeout(() => finish(new Error(`fixture timed out; stdout: ${stdout}`)), 20000);
 		child.stdout.setEncoding("utf8");

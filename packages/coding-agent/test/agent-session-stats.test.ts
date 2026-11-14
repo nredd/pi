@@ -241,6 +241,7 @@ describe("AgentSession.getSessionStats", () => {
 		}
 	});
 
+	// nredd/pi#83
 	it("excludes unpriced usage from cost and reports the counts", async () => {
 		const { session, sessionManager } = await createSession();
 		try {

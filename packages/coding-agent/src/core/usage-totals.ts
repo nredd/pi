@@ -32,7 +32,13 @@ export function addUsageToTotals(totals: UsageTotals, usage: Usage): void {
 	totals.cacheRead += usage.cacheRead;
 	totals.cacheWrite += usage.cacheWrite;
 	if (usage.cost.unpriced) {
-		totals.unpricedCount += 1;
+		// An aggregate (`combineUsage`, summed tool usage) carries the priced part of its total and a
+		// count; a single unpriced request has total 0 and counts once.
+		totals.unpricedCount += usage.cost.unpricedCalls ?? 1;
+		if (usage.cost.total > 0) {
+			totals.cost += usage.cost.total;
+			totals.pricedCount += 1;
+		}
 	} else {
 		totals.cost += usage.cost.total;
 		totals.pricedCount += 1;
@@ -61,6 +67,18 @@ export function formatUsageCostNote(cost: Usage["cost"]): string {
 	return spend ? ` (${spend})` : "";
 }
 
+/** The marker for a sum of two costs: a priced subtotal plus how many summed requests were unpriced. */
+function combinedUnpriced(
+	first: Usage["cost"],
+	second: Usage["cost"],
+): Pick<Usage["cost"], "unpriced" | "reason" | "unpricedCalls"> {
+	const unpricedCalls =
+		(first.unpriced ? (first.unpricedCalls ?? 1) : 0) + (second.unpriced ? (second.unpricedCalls ?? 1) : 0);
+	if (unpricedCalls === 0) return {};
+	const reason = first.reason ?? second.reason;
+	return { unpriced: true, unpricedCalls, ...(reason !== undefined ? { reason } : {}) };
+}
+
 /** Sum of two usages, keeping the optional token splits when either side reports them. */
 export function combineUsage(first: Usage, second: Usage): Usage {
 	return {
@@ -81,15 +99,7 @@ export function combineUsage(first: Usage, second: Usage): Usage {
 			cacheRead: first.cost.cacheRead + second.cost.cacheRead,
 			cacheWrite: first.cost.cacheWrite + second.cost.cacheWrite,
 			total: first.cost.total + second.cost.total,
-			// The sum is a priced subtotal when either side was unpriced.
-			...(first.cost.unpriced || second.cost.unpriced
-				? {
-						unpriced: true as const,
-						...((first.cost.reason ?? second.cost.reason) !== undefined
-							? { reason: (first.cost.reason ?? second.cost.reason) as string }
-							: {}),
-					}
-				: {}),
+			...combinedUnpriced(first.cost, second.cost),
 		},
 	};
 }

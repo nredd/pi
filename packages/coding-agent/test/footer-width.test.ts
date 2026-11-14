@@ -254,6 +254,7 @@ describe("FooterComponent width handling", () => {
 		expect(stripAnsi(footer.render(120)[1])).toContain("$1.234 (sub)");
 	});
 
+	// nredd/pi#83
 	const pricedUsage = { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: { total: 0.5 } };
 	const unpricedUsage = { ...pricedUsage, cost: { total: 0, unpriced: true as const } };
 

@@ -146,7 +146,7 @@ describe("detectCacheMiss", () => {
 			cost: catalogueCost({ provider: "anthropic", id: "claude-sonnet-4-5", type: "chat", cost: zeroRates }),
 		} as AnyModel;
 		const retired = assistant({ cacheWrite: 110_000, timestamp: 600_000 });
-		retired.usage.cost = calculateCost(retiredModel, retired.usage, "2026-12-01") as typeof retired.usage.cost;
+		retired.usage.cost = calculateCost(retiredModel, retired.usage, "2026-12-01");
 		expect(retired.usage.cost.unpriced).toBe(true);
 
 		const miss = detectCacheMiss([entry(turn1), entry(turn2)], retired, models);
@@ -156,7 +156,7 @@ describe("detectCacheMiss", () => {
 
 		// Same usage before retirement is priced and has a real miss cost.
 		const priced = assistant({ cacheWrite: 110_000, timestamp: 600_000 });
-		priced.usage.cost = calculateCost(retiredModel, priced.usage, "2026-11-29") as typeof priced.usage.cost;
+		priced.usage.cost = calculateCost(retiredModel, priced.usage, "2026-11-29");
 		const pricedMiss = detectCacheMiss([entry(turn1), entry(turn2)], priced, models);
 		expect(pricedMiss?.costUnknown).toBeUndefined();
 		expect(pricedMiss?.missedCost).toBeGreaterThan(0);

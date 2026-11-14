@@ -58,6 +58,7 @@ describe("codemode renderer", () => {
 		expect(text).toBe('✓ read {"path":"a"} 5ms\n\nhello');
 	});
 
+	// nredd/pi#83
 	it("shows unpriced model calls instead of $0 and counts them in the total", () => {
 		const call = { name: "models.classify", args: "scorer/judge", status: "ok" as const, durationMs: 5 };
 		const details = (calls: CodemodeToolDetails["calls"]) => ({

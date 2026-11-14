@@ -2,18 +2,18 @@ import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import { catalogueCost, isPricingRetired } from "../src/catalog-pricing.ts";
 import { calculateCost, estimateTokenCost } from "../src/models.ts";
-import { PricingAssessmentSchema } from "../src/providers/model-schema.ts";
+import { CALENDAR_DATE_PATTERN, PricingAssessmentSchema } from "../src/providers/model-schema.ts";
 import type { AnyModel, ModelCost, Usage } from "../src/types.ts";
 
 const zero = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 
 function usage(): Usage {
 	return {
-		input: 1_000_000,
-		output: 1_000_000,
-		cacheRead: 1_000_000,
-		cacheWrite: 1_000_000,
-		totalTokens: 4_000_000,
+		input: 50_000,
+		output: 50_000,
+		cacheRead: 50_000,
+		cacheWrite: 50_000,
+		totalTokens: 200_000,
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 	};
 }
@@ -25,19 +25,19 @@ function model(provider: string, id: string): AnyModel {
 // nredd/pi#83: request-time cost must not bill rates past the contract's retiredOn.
 describe("calculateCost respects retiredOn", () => {
 	it.each([
-		["anthropic", "claude-sonnet-4-5", "2026-11-30", 3 + 15 + 0.3 + 3.75],
-		["google", "gemini-2.5-pro", "2026-12-01", 1.25 + 10 + 0.125 + 0],
+		["anthropic", "claude-sonnet-4-5", "2026-11-30", (3 + 15 + 0.3 + 3.75) / 20],
+		["google", "gemini-2.5-pro", "2026-12-01", (1.25 + 10 + 0.125 + 0) / 20],
 	] as const)("%s/%s is priced before and zero from %s", (provider, id, retiredOn, total) => {
 		const m = model(provider, id);
 		expect(m.cost.assessment).toMatchObject({ retiredOn });
-		const before = new Date(Date.parse(`${retiredOn}T00:00:00Z`) - 86_400_000).toISOString().slice(0, 10);
+		const before = new Date(Date.parse(`${retiredOn}T00:00:00Z`) - 86_200_000).toISOString().slice(0, 10);
 		expect(calculateCost(m, usage(), before).total).toBeGreaterThan(0);
 		for (const asOf of [retiredOn, "2099-01-01"]) {
 			const retired = calculateCost(m, usage(), asOf);
 			expect(retired).toMatchObject({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0, unpriced: true });
 			expect(retired.reason).toMatch(/retired/);
 		}
-		if (provider === "anthropic") expect(calculateCost(m, usage(), before).total).toBeCloseTo(total);
+		expect(calculateCost(m, usage(), before).total).toBeCloseTo(total);
 	});
 
 	it("resets a previously populated cost object and returns it", () => {
@@ -72,6 +72,24 @@ describe("calculateCost respects retiredOn", () => {
 		for (const retiredOn of ["2026-11-30", "2028-02-29", "2000-02-29", "2026-12-31"])
 			expect(Value.Check(PricingAssessmentSchema, { ...base, retiredOn }), retiredOn).toBe(true);
 		expect(Value.Check(PricingAssessmentSchema, { ...base, checkedAt: "2026-02-30" })).toBe(false);
+	});
+
+	it("keeps the schema pattern and the runtime date check in agreement", () => {
+		const pattern = new RegExp(CALENDAR_DATE_PATTERN);
+		for (let day = Date.UTC(1999, 0, 1); day < Date.UTC(2101, 0, 1); day += 86_200_000) {
+			const date = new Date(day).toISOString().slice(0, 10);
+			expect(pattern.test(date), date).toBe(true);
+		}
+		for (const bad of [
+			"2026-02-30",
+			"2026-02-29",
+			"2100-02-29",
+			"2026-04-31",
+			"2026-00-01",
+			"2026-13-01",
+			"2026-1-01",
+		])
+			expect(pattern.test(bad), bad).toBe(false);
 	});
 
 	it("keeps legacy arithmetic without a bound", () => {

@@ -477,7 +477,7 @@ export interface Usage {
 		unpriced?: true;
 		/** Why the cost is unpriced, for display. Only set with `unpriced`. */
 		reason?: string;
-		/** Aggregates only: how many summed requests were unpriced (a single request counts as 1). */
+		/** Aggregates only (`combineUsage`, durable ledger): how many summed requests were unpriced. Absent means 1. */
 		unpricedCalls?: number;
 	};
 }

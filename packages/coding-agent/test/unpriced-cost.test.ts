@@ -40,6 +40,7 @@ function usage(asOf: string): Usage {
 const priced = () => usage("2026-11-30");
 const unpriced = () => usage("2026-12-01");
 
+// nredd/pi#83
 describe("usage totals with unpriced entries", () => {
 	it("calculateCost produces the marker only past retiredOn", () => {
 		expect(priced().cost.unpriced).toBeUndefined();
@@ -55,6 +56,21 @@ describe("usage totals with unpriced entries", () => {
 		expect(totals.cost).toBeCloseTo(1.125);
 		expect(totals).toMatchObject({ pricedCount: 1, unpricedCount: 2 });
 		expect(totals.input).toBe(300_000);
+	});
+
+	// nredd/pi#83: an aggregate keeps its priced spend and counts its unpriced requests.
+	it("sums aggregates by their priced part and per-call unpriced count", () => {
+		const aggregate = combineUsage(combineUsage(priced(), unpriced()), unpriced());
+		expect(aggregate.cost).toMatchObject({ unpriced: true, unpricedCalls: 2 });
+		const totals = createUsageTotals();
+		addUsageToTotals(totals, aggregate);
+		expect(totals.cost).toBeCloseTo(1.125);
+		expect(totals).toMatchObject({ pricedCount: 1, unpricedCount: 2 });
+		expect(formatUsageTotalsCost(totals)).toBe("$1.125 + 2 unpriced");
+		// Aggregating only unpriced requests has no priced part: unknown, not $0.
+		const only = createUsageTotals();
+		addUsageToTotals(only, combineUsage(unpriced(), unpriced()));
+		expect(formatUsageTotalsCost(only)).toBe("unknown");
 	});
 
 	it("formats priced, mixed, all-unpriced, and empty totals", () => {
@@ -108,6 +124,7 @@ describe("usage totals with unpriced entries", () => {
 	});
 });
 
+// nredd/pi#83
 describe("session file round trip", () => {
 	const dirs: string[] = [];
 	afterEach(() => {
@@ -161,6 +178,7 @@ describe("session file round trip", () => {
 	});
 });
 
+// nredd/pi#83
 describe("HTML export header", () => {
 	const template = readFileSync(new URL("../src/core/export-html/template.js", import.meta.url), "utf-8");
 

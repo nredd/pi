@@ -1214,7 +1214,7 @@ export function hasApi<TApi extends Api>(model: AnyModel, api: TApi): model is M
  */
 export function calculateCost(model: AnyModel, usage: Usage, asOf?: string): Usage["cost"] {
 	if (isPricingRetired(model.cost, asOf)) {
-		usage.cost = {
+		Object.assign(usage.cost, {
 			input: 0,
 			output: 0,
 			cacheRead: 0,
@@ -1222,9 +1222,13 @@ export function calculateCost(model: AnyModel, usage: Usage, asOf?: string): Usa
 			total: 0,
 			unpriced: true,
 			reason: "Price contract retired; the successor contract is not assessed.",
-		};
+		});
 		return usage.cost;
 	}
+	// A reused cost object must not keep a stale marker from an earlier retired call.
+	delete usage.cost.unpriced;
+	delete usage.cost.reason;
+	delete usage.cost.unpricedCalls;
 	return calculateTokenCost(model.cost, usage);
 }
 

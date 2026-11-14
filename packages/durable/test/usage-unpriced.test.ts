@@ -20,6 +20,7 @@ function usage(total: number, unpriced = false): Usage {
 	};
 }
 
+// nredd/pi#83
 describe("durable usage ledger with unpriced entries", () => {
 	it("adds nothing to cost but keeps the marker and a count", () => {
 		const total = structuredClone(usage(1));

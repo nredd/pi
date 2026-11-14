@@ -390,9 +390,9 @@ export class CacheWarmer {
 		const miss = price(model, model.cost.cacheWrite > 0 ? { cacheWrite: promptTokens } : { input: promptTokens });
 		const warm = price(model, { cacheRead: promptTokens, output: 1 });
 		const unpriced = hit.unpriced || miss.unpriced || warm.unpriced;
-		const cacheHitCost = hit.cost;
-		const cacheMissCost = miss.cost;
-		const warmCost = warm.cost;
+		const { cost: cacheHitCost } = hit;
+		const { cost: cacheMissCost } = miss;
+		const { cost: warmCost } = warm;
 		const missCost = Math.max(0, cacheMissCost - cacheHitCost);
 		const continuationProbability = run.phase === "idle" ? IDLE_CONTINUATION_PROBABILITY : 1;
 		const economicsAvailable = !unpriced && promptTokens > 0 && (cacheHitCost > 0 || cacheMissCost > 0);

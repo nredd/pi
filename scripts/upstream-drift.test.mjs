@@ -95,7 +95,7 @@ test("clean merge: counts, areas, patched-file overlap, no conflicts", () => {
 			commit(repo, { "packages/ai/other.ts": "fork\n" }, "Fork only");
 			commit(repo, { "packages/tui/t.ts": "fork\nt\n" }, "Fork patches tui");
 		});
-		const trialDir = join(repo, "..", `${repo.split("/").pop()}-trial`);
+		const trialDir = `${repo}-trial`;
 		const report = analyze({ repo, localRef: "fork", upstreamRef: "upstream", trialDir });
 		assert.equal(report.behind, 2);
 		assert.equal(report.ahead, 2);

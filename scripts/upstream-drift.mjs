@@ -231,10 +231,6 @@ export function analyze({
 	};
 }
 
-function shortHash(text) {
-	return createHash("sha1").update(text).digest("hex").slice(0, 8);
-}
-
 /** True when a trial result has any red step. Missing or skipped steps are not red. */
 export function trialIsRed(trial) {
 	return TRIAL_STEPS.some((step) => RED_OUTCOMES.has(trial?.[step]));
@@ -257,7 +253,7 @@ export function evaluate(report, trial, previousBody) {
 		trips.push({ id: "trial", reason: `trial ${red.join(", ")} red on a clean merge` });
 	}
 	for (const entry of report.breaking) {
-		trips.push({ id: `breaking:${shortHash(`${entry.path}\n${entry.text}`)}`, reason: `breaking change in \`${entry.path}\` (${entry.version}): ${clip(entry.text)}` });
+		trips.push({ id: `breaking:${createHash("sha256").update(`${entry.path}\n${entry.text}`).digest("hex").slice(0, 8)}`, reason: `breaking change in \`${entry.path}\` (${entry.version}): ${clip(entry.text)}` });
 	}
 	const previous = new Set(parseState(previousBody)?.tripped ?? []);
 	const newTrips = trips.filter((trip) => !previous.has(trip.id));

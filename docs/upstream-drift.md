@@ -18,7 +18,7 @@ Results go to ONE rolling issue labelled `upstream-drift`. Each run rewrites the
 - trial install, build, check or tests red on a clean merge
 - a new breaking change entry
 
-State for "new trip" and "since last run" lives in an HTML comment at the end of the issue body. Closing the issue makes the next run open a fresh one.
+State for "new trip" and "since last run" lives in an HTML comment at the end of the issue body. Closing the issue makes the next run open a fresh one (and re-comment its trips once). A failed run (git error, merge failure without conflicts) updates nothing; the red Actions run is the signal. A trial install skipped by a failed apt step is not hidden: the install and build steps still run and go red.
 
 Run it locally:
 

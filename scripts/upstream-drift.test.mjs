@@ -541,7 +541,7 @@ test("pack builds a validated artifact from a report and trial outcomes", () => 
 	}
 });
 
-/** Split the workflow into its top-level job blocks without a YAML dependency. */
+/** Split the workflow into its top-level job blocks without a YAML dependency (assumes 2-space job keys, 4-space job fields, 6-space step list). */
 function workflowJobs() {
 	const text = readFileSync(new URL("../.github/workflows/upstream-drift.yml", import.meta.url), "utf8");
 	const jobsAt = text.indexOf("\njobs:\n");
@@ -589,4 +589,40 @@ test("workflow splits untrusted trial from privileged report and stays on hosted
 	);
 	assert.doesNotMatch(text, /pull_request/);
 	for (const [, ref] of text.matchAll(/uses:\s*\S+@(\S+)/g)) assert.match(ref, /^[0-9a-f]{40}$/);
+});
+
+test("a missing trial carries previous conflict and trial trips forward without re-commenting", () => {
+	const conflicted = { ...baseReport, merge: { clean: false, conflicts: ["x"], kept: false } };
+	const previousBody = renderBody(conflicted, evaluate(conflicted, undefined), { now: "T" });
+	const unavailable = { ...baseReport, merge: { clean: undefined, conflicts: [], kept: false } };
+	const decision = evaluate(unavailable, undefined, previousBody);
+	assert.deepEqual(
+		decision.trips.map((t) => t.id),
+		["conflicts"],
+	);
+	assert.deepEqual(decision.newTrips, []);
+	assert.match(decision.trips[0].reason, /carried from the previous run/);
+	assert.deepEqual(evaluate(baseReport, ALL_GREEN, previousBody).trips, [], "a real clean result clears it");
+});
+
+test("parseState rejects a non-sha upstreamSha so it cannot become a git option", () => {
+	const body = '<!-- upstream-drift-state: {"upstreamSha":"--output=x","tripped":[]} -->';
+	assert.equal(parseState(body)?.upstreamSha, undefined);
+});
+
+test("code() never returns an empty span", () => {
+	assert.equal(code(""), "`(empty)`");
+	assert.equal(code("\u0000\u0001"), "`(empty)`");
+});
+
+test("report job holds the token only in the issue steps and checks out the default branch", () => {
+	const { jobs } = workflowJobs();
+	const header = jobs.report.slice(0, jobs.report.indexOf("    steps:"));
+	assert.doesNotMatch(header, /GH_TOKEN/);
+	assert.match(jobs.report, /ref: \$\{\{ github\.event\.repository\.default_branch \}\}/);
+	for (const step of jobs.report.split(/\n {6}- /)) {
+		const usesToken = /GH_TOKEN/.test(step);
+		const allowed = /name: (Load rolling issue|Update rolling issue)/.test(step);
+		assert.equal(usesToken, allowed, step.split("\n")[0]);
+	}
 });

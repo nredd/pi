@@ -25,7 +25,7 @@ Results go to ONE rolling issue labelled `upstream-drift`. Each run rewrites the
 - any trial step red on a clean merge (inconclusive when system deps failed)
 - a new breaking change entry
 
-State for "new trip" and "since last run" lives in an HTML comment at the end of the issue body. Closing the issue makes the next run open a fresh one (and re-comment its trips once). A failed run (git error, merge failure without conflicts) updates nothing; the red Actions run is the signal.
+State for "new trip" and "since last run" lives in an HTML comment at the end of the issue body. Closing the issue makes the next run open a fresh one (and re-comment its trips once). A failed `report` job (git error, invalid artifact, sha mismatch) updates nothing; the red Actions run is the signal. A failed `trial` job (no artifact) still updates the issue with the git facts and "Trial merge: not attempted", and carries any standing `conflicts` or `trial` trip forward so it neither clears nor re-comments. The `report` job checks out the default branch, even for a `workflow_dispatch` from another ref, and only the two `gh` steps hold the token.
 
 Run it locally:
 

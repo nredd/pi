@@ -28,7 +28,7 @@ const MAX_AREAS = 15;
 const MAX_TEXT = 160;
 const MAX_COMMENT_BREAKING = 5;
 const TRIAL_STEPS = ["deps", "install", "models", "build", "check", "daemon", "test"];
-const RED_OUTCOMES = new Set(["failure", "cancelled", "timed_out"]);
+const RED_OUTCOMES = new Set(["failure", "cancelled"]);
 const ARTIFACT_OUTCOMES = new Set(["success", "failure", "cancelled", "skipped"]);
 const MAX_CONFLICTS = 5000;
 const MAX_PATH = 500;
@@ -124,7 +124,7 @@ export function code(text, max = MAX_TEXT) {
 		/[@#<]/g,
 		(char) => `${char}${ZERO_WIDTH}`,
 	);
-	return `\`${safe}\``;
+	return `\`${safe || "(empty)"}\``;
 }
 
 function lines(text) {
@@ -149,6 +149,9 @@ export function parseState(body) {
 		const state = JSON.parse(match[1]);
 		if (!state || typeof state !== "object" || !Array.isArray(state.tripped)) return undefined;
 		if (!state.tripped.every((id) => typeof id === "string")) return undefined;
+		if (typeof state.upstreamSha !== "string" || !/^[0-9a-f]{40}$/.test(state.upstreamSha)) {
+			state.upstreamSha = undefined;
+		}
 		return state;
 	} catch {
 		return undefined;
@@ -307,6 +310,15 @@ export function evaluate(report, trial, previousBody) {
 		});
 	}
 	const previous = new Set(parseState(previousBody)?.tripped ?? []);
+	if (report.merge.clean === undefined) {
+		// No trial result this run (trial job failed): keep standing trial trips instead of silently clearing them.
+		for (const id of ["conflicts", "trial"]) {
+			if (previous.has(id)) {
+				const what = id === "conflicts" ? "trial merge conflicts" : "trial red";
+				trips.push({ id, reason: `${what} (carried from the previous run, trial unavailable this run)` });
+			}
+		}
+	}
 	const newTrips = trips.filter((trip) => !previous.has(trip.id));
 	return { trips, newTrips };
 }

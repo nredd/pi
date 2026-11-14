@@ -157,6 +157,12 @@ export class Triage {
 		return Object.values(usage.models).reduce((sum, model) => sum + (model.cost?.total ?? 0), 0);
 	}
 
+	/** Requests the catalogue could not price (retired contract); `usageCost()` excludes them. */
+	async usageUnpriced(): Promise<number> {
+		const usage = await this.harness.usage(context);
+		return Object.values(usage.models).reduce((sum, model) => sum + (model.cost?.unpricedCalls ?? 0), 0);
+	}
+
 	queueSize(): { queued: number; running: number } {
 		return { queued: this.queue.length, running: this.active };
 	}

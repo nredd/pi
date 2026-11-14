@@ -17,7 +17,7 @@
 		"build:native:darwin": "npm --prefix packages/tui run build:native:darwin",
 		"build:native:linux": "npm --prefix packages/tui run build:native:linux",
 		"build:native:win32": "npm --prefix packages/tui run build:native:win32",
-		"check": "node scripts/biome-check.mjs --write && npm run check:binary-release && npm run check:pinned-deps && npm run check:runtime-deps && npm run check:ts-imports && npm run check:entry-graphs && npm run check:install-lock:coding-agent && tsc --noEmit && npm run check:browser-smoke",
+		"check": "node scripts/worktree.mjs check && node scripts/biome-check.mjs --write && npm run check:binary-release && npm run check:pinned-deps && npm run check:runtime-deps && npm run check:ts-imports && npm run check:entry-graphs && npm run check:install-lock:coding-agent && tsc --noEmit && npm run check:browser-smoke",
 		"check:binary-release": "tsc --ignoreConfig --allowJs --checkJs --noEmit --module nodenext --target es2022 --types node --skipLibCheck scripts/binary-release-contract.mjs scripts/binary-release-contract.test.mjs scripts/binary-release-workflow.test.mjs scripts/smoke-test-memory-binary.mjs scripts/smoke-test-memory-binary.test.mjs",
 		"check:browser-smoke": "node scripts/check-browser-smoke.mjs",
 		"check:pinned-deps": "node scripts/check-pinned-deps.mjs",
@@ -37,7 +37,7 @@
 		"profile:tui": "node scripts/profile-coding-agent-node.mjs --mode tui",
 		"profile:rpc": "node scripts/profile-coding-agent-node.mjs --mode rpc",
 		"test": "npm run test:scripts && npm run test --workspaces --if-present",
-		"test:scripts": "node --test scripts/*.test.mjs scripts/*.test.ts",
+		"test:scripts": "node --conditions=source --test scripts/*.test.mjs scripts/*.test.ts",
 		"test:mcp-conformance": "node packages/coding-agent/test/mcp-conformance/run.ts",
 		"version:patch": "npm version patch --workspaces --no-git-tag-version --no-workspaces-update && node scripts/sync-versions.js && npm install --package-lock-only --ignore-scripts",
 		"version:minor": "npm version minor --workspaces --no-git-tag-version --no-workspaces-update && node scripts/sync-versions.js && npm install --package-lock-only --ignore-scripts",
@@ -53,6 +53,8 @@
 		"release:minor": "node scripts/release.mjs minor",
 		"release:major": "node scripts/release.mjs major",
 		"release:fix-links": "node scripts/release-notes.mjs fix-github-releases",
+		"worktree:setup": "node scripts/worktree.mjs setup",
+		"worktree:check": "node scripts/worktree.mjs check --strict",
 		"prepare": "husky"
 	},
 	"devDependencies": {

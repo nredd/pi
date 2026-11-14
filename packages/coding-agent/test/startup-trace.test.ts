@@ -1,5 +1,15 @@
 import { spawnSync } from "node:child_process";
-import { closeSync, fchmodSync, fstatSync, mkdtempSync, openSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import {
+	closeSync,
+	existsSync,
+	fchmodSync,
+	fstatSync,
+	mkdtempSync,
+	openSync,
+	readFileSync,
+	realpathSync,
+	rmSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -95,7 +105,10 @@ function launch(
 }
 
 // nredd/pi#51: the producer must never expose source data or turn incomplete measurements into zero.
-describe("startup trace producer", () => {
+// Exercises the compiled bundle. Local runs after only `npm run worktree:setup` have no `dist`, so skip
+// there; CI always builds first and must fail, never skip, when the bundle is missing.
+const skipUnbuilt = !existsSync(launcher) && !process.env.CI;
+describe.skipIf(skipUnbuilt)("startup trace producer", () => {
 	it("does no builtin, descriptor, clock, enumeration or timer work when disabled", () => {
 		expect(launch("disabled", {}, { disabled: true }).raw).toBe("");
 	});

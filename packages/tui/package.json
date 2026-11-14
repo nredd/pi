@@ -5,8 +5,14 @@
 	"type": "module",
 	"main": "dist/index.js",
 	"exports": {
-		".": { "types": "./dist/index.d.ts", "import": "./dist/index.js", "default": "./dist/index.js" },
+		".": {
+			"source": "./src/index.ts",
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js",
+			"default": "./dist/index.js"
+		},
 		"./testing": {
+			"source": "./src/testing/index.ts",
 			"types": "./dist/testing/index.d.ts",
 			"import": "./dist/testing/index.js",
 			"default": "./dist/testing/index.js"
@@ -21,7 +27,7 @@
 		"build:native:darwin": "native/darwin/build.sh",
 		"build:native:linux": "native/linux/build.sh",
 		"build:native:win32": "node native/win32/build.mjs",
-		"test": "node --test --test-reporter=dot --test-reporter-destination=stdout test/*.test.ts",
+		"test": "node --conditions=source --test --test-reporter=dot --test-reporter-destination=stdout test/*.test.ts",
 		"prepublishOnly": "npm run clean && npm run build"
 	},
 	"files": [

@@ -33,12 +33,19 @@
 - Never run `npm run build` or `npm test` unless requested by the user.
 - Never run the full vitest suite directly: it includes e2e tests that activate when endpoint/auth env vars are present. For all non-e2e tests, run `./test.sh` from the repo root. Otherwise run specific tests from the package root:
   - Vitest: `node "$(git rev-parse --show-toplevel)/node_modules/vitest/dist/cli.js" --run test/specific.test.ts`
-  - `packages/tui` (`node:test`): `node --test test/specific.test.ts`
+  - `packages/tui` (`node:test`): `node --conditions=source --test test/specific.test.ts` (`source` resolves sibling packages from `src`, no `dist` needed). Suites that exercise the compiled bundle (e.g. `packages/coding-agent/test/startup-trace.test.ts`) skip locally without `npm run build` and fail under `CI`
 - If you create or modify a test file, run it and iterate on test or implementation until it passes.
 - For `packages/coding-agent/test/suite/`, use `test/suite/harness.ts` + the faux provider. No real provider APIs, keys, or paid tokens.
 - When regressions tests for fixing a github issue, add a comment with the github issue number next to the test.
 - For ad-hoc scripts, `write` them to a temp file (e.g. `/tmp`), run, edit if needed, remove when done. Don't embed multi-line scripts in `bash` commands.
 - Never commit unless the user asks.
+
+## Fresh Worktrees
+
+- Run `npm run worktree:setup` once in every new `git worktree`, before anything else. It is idempotent and does: `npm ci --ignore-scripts --prefer-offline`, the husky shim (`.husky/_`), the model data of the published `@earendil-works/pi-ai@<version>` release, only when none is present (same source as CI, never live data, not validated; `--force` reinstalls). Invalid data (e.g. src ahead of the release, or after a merge) only warns, in setup and `npm run check` (`tsc` passes on it), and fails `npm run worktree:check`; fix with `node scripts/worktree.mjs setup --force` (CI-parity release data), or `npm run hydrate:model-data` when src is ahead of the release. Only missing data blocks `check`. Setup builds the `packages/env` daemon via its `build:daemon` script (cargo offline first, network only for missing crates). Installs use the npm cache first, so the network is touched only for what the cache lacks. Use `--skip-daemon` via `node scripts/worktree.mjs setup --skip-daemon` without a Rust toolchain.
+- Never borrow or symlink `node_modules`, `packages/ai/src/providers/data`, or `.husky/_` from another worktree.
+- `core.hooksPath=.husky/_` is relative and shared. Where `.husky/_` is missing, git runs NO hook and cannot warn. `npm run check` fails loudly in that case (missing hook dir, missing or symlinked `node_modules`, or missing model data; invalid model data only warns), so run it before committing. The GitHub Actions run skips just the hook-dir check.
+- Run Vitest from the package directory, not the repo root (root runs stale `dist`).
 
 ## Dependency and Install Security
 

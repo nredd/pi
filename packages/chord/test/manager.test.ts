@@ -3,7 +3,7 @@ import { mkdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, it } from "vitest";
+import { describe, it, vi } from "vitest";
 import { createHost, ipcLink, isChordError } from "../src/index.ts";
 import { type ControlMessage, createHostManager, type Driver, forkDriver, processLock } from "../src/manager.ts";
 import { Echo } from "./fixtures/echo.ts";
@@ -18,6 +18,11 @@ const alive = (pid: number): boolean => {
 	} catch {
 		return false;
 	}
+};
+
+/** Polls until the process is gone. The kill is already sent; this only waits out the OS reaping it, so the bound is generous. */
+const waitDead = async (pid: number): Promise<void> => {
+	for (let i = 0; i < 500 && alive(pid); i++) await new Promise((resolve) => setTimeout(resolve, 20));
 };
 
 const driver = (env: Record<string, string> = {}, lock?: string): Driver =>
@@ -44,7 +49,8 @@ describe("processLock", () => {
 	});
 });
 
-describe("host manager (real child processes)", () => {
+// #95: real child boots scale with host load and no assertion depends on elapsed time, so this only bounds a hang.
+describe("host manager (real child processes)", { timeout: 60_000 }, () => {
 	// A child host that forks its own children used to pass its CHORD2_LOCK on, so they failed with "locked".
 	it("a child without a lock does not inherit the parent's lock", async () => {
 		const name = `chord2-test-${process.pid}-inherited`;
@@ -78,8 +84,25 @@ describe("host manager (real child processes)", () => {
 		await server.close();
 	});
 
-	it("a child-owned kernel lock admits one live process; replace waits for the exit before the next start", async () => {
+	// #95: split from one five-boot test so each case boots at most three children.
+	it("a child-owned kernel lock admits one live process", async () => {
 		const lock = `chord2-test-${process.pid}-lock`;
+		const first = createHostManager({ driver: driver({}, lock) });
+		const second = createHostManager({ driver: driver({}, lock) });
+		try {
+			await first.start();
+			// Both managers race for the same lock; only the kernel decides, so the second child cannot start.
+			await assert.rejects(
+				second.start(),
+				(error) => isChordError(error, "unavailable") && error.reason === "locked",
+			);
+		} finally {
+			await first.stop();
+		}
+	});
+
+	it("replace waits for the exit before the next start", async () => {
+		const lock = `chord2-test-${process.pid}-replace`;
 		const pids: number[] = [];
 		const base = driver({}, lock);
 		const watched: Driver = {
@@ -91,16 +114,27 @@ describe("host manager (real child processes)", () => {
 				return instance;
 			},
 		};
-		const first = createHostManager({ driver: watched });
+		const manager = createHostManager({ driver: watched });
+		try {
+			const a = await manager.start();
+			const b = await manager.replace();
+			assert.notEqual(a.pid, b.pid);
+		} finally {
+			await manager.stop();
+		}
+	});
+
+	it("the child-owned kernel lock is released when its process exits", async () => {
+		const lock = `chord2-test-${process.pid}-released`;
+		const first = createHostManager({ driver: driver({}, lock) });
 		const second = createHostManager({ driver: driver({}, lock) });
-		const a = await first.start();
-		// Both managers race for the same lock; only the kernel decides, so the second child cannot start.
-		await assert.rejects(second.start(), (error) => isChordError(error, "unavailable") && error.reason === "locked");
-		const b = await first.replace();
-		assert.notEqual(a.pid, b.pid);
-		await first.stop();
-		await second.start();
-		await second.stop();
+		try {
+			await first.start();
+			await first.stop();
+			await second.start();
+		} finally {
+			await second.stop();
+		}
 	});
 
 	it("a graceful exit still takes the child's descendants with it", async () => {
@@ -111,7 +145,7 @@ describe("host manager (real child processes)", () => {
 		const grandchild = Number(readFileSync(file, "utf8"));
 		assert.ok(alive(grandchild));
 		await manager.stop();
-		for (let i = 0; i < 50 && alive(grandchild); i++) await new Promise((resolve) => setTimeout(resolve, 20));
+		await waitDead(grandchild);
 		assert.ok(!alive(grandchild));
 		rmSync(file, { force: true });
 	});
@@ -136,11 +170,19 @@ describe("host manager (real child processes)", () => {
 		for (let i = 0; i < 20 && listeners.size === 0; i++) await new Promise((resolve) => setImmediate(resolve));
 		emit({ type: "ready" });
 		await started;
-		emit({ type: "status", activeCalls: 1 });
-		await new Promise((resolve) => setTimeout(resolve, 120));
-		assert.equal(manager.liveness.idleFor, 0);
-		emit({ type: "status", activeCalls: 0 });
-		assert.ok(manager.liveness.idleFor < 60, `idleFor ${manager.liveness.idleFor}`);
+		// Fake clock: `idleFor` is `Date.now()` arithmetic, so wall-clock sleeps only add load-dependent error (#95).
+		vi.useFakeTimers({ toFake: ["Date"] });
+		try {
+			emit({ type: "status", activeCalls: 1 });
+			vi.advanceTimersByTime(120);
+			assert.equal(manager.liveness.idleFor, 0);
+			emit({ type: "status", activeCalls: 0 });
+			assert.equal(manager.liveness.idleFor, 0);
+			vi.advanceTimersByTime(50);
+			assert.equal(manager.liveness.idleFor, 50);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 
 	it("kills the process tree when a child ignores shutdown past the grace period", async () => {
@@ -155,7 +197,7 @@ describe("host manager (real child processes)", () => {
 		assert.ok(alive(grandchild));
 		await manager.stop();
 		assert.equal((await instance.exited).signal, "SIGKILL");
-		for (let i = 0; i < 50 && alive(grandchild); i++) await new Promise((resolve) => setTimeout(resolve, 20));
+		await waitDead(grandchild);
 		assert.ok(!alive(grandchild));
 		rmSync(file, { force: true });
 	});
@@ -168,15 +210,21 @@ describe("host manager (real child processes)", () => {
 
 	it("stops an idle child when keepAlive says so", async () => {
 		const exits: unknown[] = [];
+		let exited: () => void = () => {};
+		const stopped = new Promise<void>((resolve) => {
+			exited = resolve;
+		});
 		const manager = createHostManager({
 			driver: driver(),
 			keepAlive: (liveness) => !liveness.booting && liveness.idleFor < 150,
 			checkInterval: 50,
-			onExit: (exit) => exits.push(exit),
+			onExit: (exit) => {
+				exits.push(exit);
+				exited();
+			},
 		});
 		await manager.start();
-		for (let i = 0; i < 100 && manager.status !== "stopped"; i++)
-			await new Promise((resolve) => setTimeout(resolve, 20));
+		await stopped;
 		assert.equal(manager.status, "stopped");
 		assert.equal(exits.length, 1);
 	});

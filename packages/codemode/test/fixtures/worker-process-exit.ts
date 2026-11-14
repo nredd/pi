@@ -8,12 +8,11 @@ process.on("exit", () => {
 });
 const controller = new AbortController();
 let timer: ReturnType<typeof setTimeout> | undefined;
-let workerExited = false;
 const sandbox = new CodemodeSandbox({
 	memoryLimitBytes: 256 * 1024 * 1024,
 	onWorkerStarted: (exited) => {
 		void exited.then(() => {
-			workerExited = true;
+			console.log(JSON.stringify({ type: "workerExited", elapsedMs: performance.now() - started }));
 		});
 	},
 	tools: [
@@ -42,7 +41,6 @@ try {
 			type: "result",
 			kind: result.error.kind,
 			elapsedMs: performance.now() - started,
-			workerExited,
 		}),
 	);
 } finally {

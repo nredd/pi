@@ -1,6 +1,5 @@
-import { execFile, spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
 import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { type CodemodeResult, CodemodeSandbox } from "../src/index.ts";
@@ -207,23 +206,84 @@ const runtimes = [
 	{ name: "Bun", command: "bun", available: spawnSync("bun", ["--version"], { timeout: 5000 }).status === 0 },
 ];
 
+const FIXTURE_BOUND_MS = 60_000;
+
+interface FixtureLine {
+	type: string;
+	kind?: string;
+	elapsedMs: number;
+}
+
+/**
+ * Runs the exit fixture and resolves with its parsed JSON lines.
+ * Node must exit on its own, so its lines are read at exit. Bun 1.4 keeps the process alive while terminate() is
+ * pending behind the fixture's non-interruptible built-in, which takes seconds of CPU and so races any exit deadline
+ * under load. There the `result` line is the promptness signal, and the fixture's separate `workerExited` line (the
+ * `onWorkerStarted` promise settling) proves the stopped worker eventually exits. Neither is timing-asserted beyond
+ * the generous bound; the process is killed once both have arrived instead of waiting for its own exit.
+ */
+function runExitFixture(command: string, how: string, awaitExit: boolean): Promise<FixtureLine[]> {
+	const fixture = fileURLToPath(new URL("./fixtures/worker-process-exit.ts", import.meta.url));
+	return new Promise((resolve, reject) => {
+		const child = spawn(command, [fixture, how], { stdio: ["ignore", "pipe", "inherit"] });
+		let stdout = "";
+		let settled = false;
+		const parse = (): FixtureLine[] =>
+			stdout
+				.split(/\r?\n/)
+				.filter((line) => line.trim() !== "")
+				.map((line) => JSON.parse(line) as FixtureLine);
+		const finish = (error?: Error): void => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(deadline);
+			child.kill("SIGKILL");
+			if (error) reject(error);
+			else resolve(parse());
+		};
+		const deadline = setTimeout(() => finish(new Error(`fixture timed out; stdout: ${stdout}`)), FIXTURE_BOUND_MS);
+		child.stdout.setEncoding("utf8");
+		child.stdout.on("data", (chunk: string) => {
+			stdout += chunk;
+			if (awaitExit) return;
+			try {
+				const types = new Set(
+					stdout
+						.split("\n")
+						.slice(0, -1)
+						.map((line) => (JSON.parse(line) as FixtureLine).type),
+				);
+				if (types.has("result") && types.has("workerExited")) finish();
+			} catch (error) {
+				finish(new Error(`fixture wrote non-JSON stdout: ${stdout}`, { cause: error }));
+			}
+		});
+		child.on("error", finish);
+		child.on("close", () => finish());
+	});
+}
+
 describe.each(runtimes)("$name process lifetime", ({ name, command, available }) => {
+	// #95: the Bun case also requires the worker to eventually exit, with a generous bound instead of a timing assert.
 	// #10748: verify both prompt cancellation and, on Node, prompt process exit with a real worker.
 	// Bun 1.4.0's pending terminate() keeps the process alive even after unref(), independently of codemode.
 	it.skipIf(!available).each(["abort", "timeout", "close"] as const)(
 		name === "Node" ? "exits promptly after %s with a real worker" : "settles %s promptly with a real worker",
 		async (how) => {
-			const fixture = fileURLToPath(new URL("./fixtures/worker-process-exit.ts", import.meta.url));
-			const { stdout } = await promisify(execFile)(command, [fixture, how], { timeout: 20000 });
-			const lines = stdout.trim().split(/\r?\n/);
-			expect(lines).toHaveLength(2);
-			const result = JSON.parse(lines[0]) as { type: string; kind: string; elapsedMs: number };
-			const exit = JSON.parse(lines[1]) as { type: string; elapsedMs: number };
+			const lines = await runExitFixture(command, how, name === "Node");
+			const result = lines.find((line) => line.type === "result");
 			expect(result).toMatchObject({ type: "result", kind: how === "timeout" ? "timeout" : "aborted" });
-			expect(exit.type).toBe("exit");
-			expect(result.elapsedMs).toBeLessThan(1000);
-			if (name === "Node") expect(exit.elapsedMs - result.elapsedMs).toBeLessThan(1000);
+			expect(result?.elapsedMs).toBeLessThan(1000);
+			if (name === "Bun") {
+				// The stopped worker must eventually exit (no timing bound beyond the fixture bound).
+				expect(lines.some((line) => line.type === "workerExited")).toBe(true);
+			} else {
+				const exit = lines.find((line) => line.type === "exit");
+				expect(exit).toBeDefined();
+				expect((exit?.elapsedMs ?? 0) - (result?.elapsedMs ?? 0)).toBeLessThan(1000);
+			}
 		},
-		25000,
+		// Bun may take seconds of CPU under load for the worker to exit; the fixture bound caps the wait.
+		FIXTURE_BOUND_MS + 5000,
 	);
 });

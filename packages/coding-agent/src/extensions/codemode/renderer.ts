@@ -58,7 +58,7 @@ export function formatModelCallsCost(calls: readonly CodemodeNestedCall[]): stri
 	if (unpriced > 0 && priced.length === 0) return `unknown (${unpriced} unpriced)`;
 	const total = priced.reduce((sum, call) => sum + (call.cost ?? 0), 0);
 	if (unpriced > 0) return `${formatCost(total)} + ${unpriced} unpriced`;
-	return priced.length > 1 ? formatCost(total) : undefined;
+	return priced.length > 1 && total > 0 ? formatCost(total) : undefined;
 }
 
 function formatCall(call: CodemodeNestedCall, theme: Theme, expanded: boolean): string {

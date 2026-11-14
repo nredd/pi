@@ -89,6 +89,22 @@ describe("codemode renderer", () => {
 		).toContain("Model calls: unknown (2 unpriced)");
 	});
 
+	// nredd/pi#98
+	it("hides an all-free total like the footer", () => {
+		const call = { name: "models.classify", args: "scorer/judge", status: "ok" as const, durationMs: 5 };
+		const out = render({
+			content: [{ type: "text" as const, text: "Script completed\nWall time 0.1 seconds\nOutput:\n" }],
+			details: {
+				calls: [
+					{ ...call, id: "1", priced: true, cost: 0 },
+					{ ...call, id: "2", priced: true, cost: 0 },
+				],
+			},
+		});
+		expect(out).not.toContain("Model calls:");
+	});
+
+	// nredd/pi#98
 	it("counts a free priced call as priced next to an unpriced one", () => {
 		const call = { name: "models.classify", args: "scorer/judge", status: "ok" as const, durationMs: 5 };
 		const out = render({

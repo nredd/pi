@@ -262,6 +262,7 @@ describe("AgentSession.getSessionStats", () => {
 		}
 	});
 
+	// nredd/pi#98
 	it("excludes zero-usage entries from pricedCount", async () => {
 		const { session, sessionManager } = await createSession();
 		try {

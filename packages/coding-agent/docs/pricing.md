@@ -179,14 +179,30 @@ Additional exact contracts, checked 2026-11-13:
   shutdown of 2027-05-07, recommended replacement `gemini-3.5-flash-lite`, no price change announced), `gemini-3-flash-preview` `0.50/3.00/0.05`, and
   `gemini-3.1-pro-preview` plus `gemini-3.1-pro-preview-customtools` `2/12/0.20`, with `4/18/0.40` for the
   whole request above 200000 prompt tokens (`$4.50` per million token-hours storage excluded).
-- Still unassessed, each with evidence: `gemini-3.7-flash` and `gemini-3.5-flash` are documented as routed
-  to `gemini-3.8-flash` and `gemini-3.6-flash`, but no page states they bill at those rates;
-  `gemini-flash-latest` and `gemini-flash-lite-latest` are hot-swapped aliases with no current
-  target stated (the last changelog switch, 2026-01-21, names `gemini-3-flash-preview`); `gemini-3.1-flash-lite-preview` (shut down 2026-05-25) and
-  `gemini-2.5-computer-use-preview-10-2025` (shut down) have no current contract;
-  archived IDs such as `gemini-3-pro-preview` and `gemini-2.5-pro-preview-03-25` are shut down per the deprecation page
-  and absent from the bundled catalogue, so no contract is assessed; the `gemma-4-*` IDs list a free tier and no paid price, so zero rates are not a paid-deployment
-  claim; image-output, live-audio and agent IDs have per-unit meters the counters cannot express.
+- Remaining Gemini IDs stay unassessed. Each was re-checked individually on 2026-11-13 against the
+  [pricing](https://ai.google.dev/gemini-api/docs/pricing), [deprecations](https://ai.google.dev/gemini-api/docs/deprecations),
+  [models](https://ai.google.dev/gemini-api/docs/models) and [changelog](https://ai.google.dev/gemini-api/docs/changelog) pages.
+  Only a published paid Standard rate for that exact ID, with a stated unit and validity, is assessed:
+  - `gemini-3.7-flash`, `gemini-3.5-flash`: deprecations and the 2026-10-08 changelog say requests are
+    "automatically routed" to `gemini-3.8-flash` and `gemini-3.6-flash`. Unlike `gemini-2.5-pro` and
+    `gemini-2.5-flash`, no page says they are billed at the target's rates, and neither has its own
+    pricing section. Routing is not a billing contract.
+  - `gemini-flash-latest`, `gemini-flash-lite-latest`: the models page says a `latest` alias is hot-swapped
+    on a release with 2 weeks email notice. The changelog's only switch (2026-01-21) is `gemini-flash-latest` to
+    `gemini-3-flash-preview`, and `gemini-flash-lite-latest` is never named. No page states a current target
+    or rate, so any price would be a guess that can change silently.
+  - `gemini-3.1-flash-lite-preview`: shut down 2026-05-25 (deprecations, changelog), replaced by `gemini-3.1-flash-lite`.
+    No current pricing section. `gemini-2.5-computer-use-preview-10-2025`: shut down (deprecations list 2026-07-28,
+    models page marks it shut down), no pricing section, and the computer use tool is now billed as ordinary tokens
+    of the selected model. A missing mention is not proof no contract existed, but no official source gives one now.
+  - `gemma-4-*`: the pricing page lists free tier only, with paid input, output and caching "Not available". Zero
+    rates here would not be a paid-deployment claim.
+  - `gemini-2.5-pro` after 2026-12-01: target `gemini-3.8-flash` is itself date-scheduled, so one row cannot
+    carry the schedule. A date-tier model would touch `models.ts` and the request-time cost surface (#83), and
+    time-windowed prices stay unknown by owner decision (#55/#56). Feed `expiration_date`/`deprecated_at` are ignored.
+  - Archived IDs such as `gemini-3-pro-preview`, `gemini-2.5-pro-preview-03-25`, `-05-06`, `-06-05` and the
+    2.0 family are listed as shut down with no pricing section, and are absent from the bundled catalogue.
+  - Image-output, live-audio, TTS, embedding and agent IDs have per-unit meters the counters cannot express.
   `gemini-4-carbon` and `gemini-4-hydrogen` are priced on the page but absent from the bundled catalogue.
 
 Generation and precedence:

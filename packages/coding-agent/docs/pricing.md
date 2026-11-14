@@ -117,8 +117,8 @@ Source audit, checked 2026-11-12:
   AI Gateway evaluation (classifier) rates use the same parser.
 - An older verified pi.dev assessment for an OpenRouter or AI Gateway id outside the archived
   feed becomes unknown (estimate null; `calculateCost` rates unchanged). "Older" means checked
-  on or before the client audit date (`PRICING_CHECKED_AT`, 2026-11-12); an assessment checked
-  later is kept as is.
+  on or before the client audit date (`PRICING_CHECKED_AT`, 2026-11-12), except Gateway `-batch`
+  ids, which use the 2026-11-13 feed date (above); an assessment checked later is kept as is.
 
 Additional exact contracts, checked 2026-11-13:
 

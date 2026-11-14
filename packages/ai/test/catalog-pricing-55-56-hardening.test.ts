@@ -368,6 +368,12 @@ describe("unknown feed results for archived ids compare at the feed date", () =>
 			run: <T>(fn: () => T) => fn(),
 		},
 		{
+			name: "Gateway -batch id absent from the feed archive",
+			provider: "vercel-ai-gateway",
+			id: "synthetic/not-in-feed-batch",
+			run: <T>(fn: () => T) => fn(),
+		},
+		{
 			name: "malformed in-feed OpenRouter row",
 			provider: "openrouter",
 			id: OR_KEY.slice("chat:".length),

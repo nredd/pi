@@ -269,6 +269,58 @@ function perMillion(value: string | number | undefined, fallback = 0): number {
 	return parsed === undefined ? fallback : Number((parsed * 1_000_000).toFixed(6));
 }
 
+const NON_TOKEN_FIELDS = new Set([
+	"image",
+	"image_token",
+	"image_output",
+	"audio",
+	"audio_output",
+	"input_audio_cache",
+	"internal_reasoning",
+	"request",
+	"video_duration_pricing",
+	"video_token_pricing",
+	"image_dimension_quality_pricing",
+	"speech_input_character_cost",
+	"speech_output_cost_per_second",
+	"transcription_duration_cost_per_second",
+	"realtime_session_duration_cost_per_second",
+	"realtime_client_message_cost",
+	"audio_input_token_cost",
+	"audio_output_token_cost",
+	"maps_search",
+]);
+
+/** A precise reason for a published pricing field the token estimator cannot value. */
+function unsupportedFieldReason(provider: "openrouter" | "vercel-ai-gateway", fields: string[]): string {
+	const names = fields.map((field) => `\`${field}\``).join(", ");
+	const reasons: string[] = [];
+	if (fields.includes("varies_by_provider")) reasons.push("the price varies by serving provider");
+	if (fields.includes("peak_pricing")) reasons.push("peak-time pricing applies");
+	const other = fields.filter((field) => field !== "varies_by_provider" && field !== "peak_pricing");
+	if (other.length > 0)
+		reasons.push(
+			other.every((field) => NON_TOKEN_FIELDS.has(field))
+				? "it publishes non-token or separately counted charges"
+				: "it publishes unrecognised pricing fields",
+		);
+	const label = provider === "openrouter" ? "OpenRouter" : "AI Gateway";
+	return `${label} pricing fields ${names} are unsupported (${reasons.join("; ")}); the token baseline would misstate the contract.`;
+}
+
+/** Label published dimensions this baseline does not value, so they are never read as absent. */
+function publishedDimensions(raw: Record<string, unknown>): string {
+	const present = ["regional", "fast", "service_tiers", "web_search"].filter((field) => raw[field] !== undefined);
+	return present.length > 0 ? ` Published but unvalued for this row: ${present.join(", ")}.` : "";
+}
+
+/** True when the base rate and every tier price writes at exactly 1.25x input. */
+function defaultWriteRatio(cost: ModelCost): boolean {
+	return [cost, ...(cost.tiers ?? [])].every(
+		(rate) => (rate.input ?? 0) > 0 && Math.abs((rate.cacheWrite ?? 0) - (rate.input ?? 0) * 1.25) < 1e-6,
+	);
+}
+
 /** Assess only exact archived operation identities, using the existing source normalizers. */
 function feedCost(
 	provider: "openrouter" | "vercel-ai-gateway",
@@ -305,8 +357,8 @@ function feedCost(
 	const allowed = openRouter
 		? [...fields, "input_cache_write_1h", "overrides", "web_search"]
 		: [...fields, ...fields.map((field) => `${field}_tiers`), "regional", "fast", "service_tiers", "web_search"];
-	if (Object.keys(raw).some((key) => !allowed.includes(key)))
-		return unknown("Published non-token, provider-varying or peak pricing needs unsupported counters or conditions.");
+	const extra = Object.keys(raw).filter((key) => !allowed.includes(key));
+	if (extra.length > 0) return unknown(unsupportedFieldReason(provider, extra));
 	const unavailable: ("input" | "output" | "cacheRead" | "cacheWrite")[] = [];
 	for (const [index, field] of fields.entries()) {
 		if (raw[field] === undefined) unavailable.push((["input", "output", "cacheRead", "cacheWrite"] as const)[index]);
@@ -323,10 +375,15 @@ function feedCost(
 		for (const override of pricing.overrides ?? []) {
 			if (!override || typeof override !== "object" || Array.isArray(override))
 				return unknown("Invalid OpenRouter pricing override.");
-			if (
-				Object.keys(override).some((key) => ![...fields, "input_cache_write_1h", "min_prompt_tokens"].includes(key))
-			)
-				return unknown("UTC, weekday or other conditional OpenRouter pricing is unsupported.");
+			const conditional = Object.keys(override).filter(
+				(key) => ![...fields, "input_cache_write_1h", "min_prompt_tokens"].includes(key),
+			);
+			if (conditional.length > 0)
+				return unknown(
+					conditional.every((key) => key.startsWith("utc_"))
+						? `OpenRouter publishes UTC time-window or weekday pricing (${conditional.map((key) => `\`${key}\``).join(", ")}); ModelCost cannot express it, so a flat rate would misstate the contract.`
+						: `OpenRouter publishes unsupported override condition(s) ${conditional.map((key) => `\`${key}\``).join(", ")}.`,
+				);
 			if (!Number.isSafeInteger(override.min_prompt_tokens) || override.min_prompt_tokens! < 0)
 				return unknown("Invalid OpenRouter prompt threshold.");
 			if (Object.entries(override).some(([key, value]) => key !== "min_prompt_tokens" && !valid(value)))
@@ -362,10 +419,15 @@ function feedCost(
 			)
 				return unknown("AI Gateway brackets do not cover the advertised base contract.");
 		}
-		// The REST write field does not establish any short or extended retention.
-		if (!unavailable.includes("cacheWrite")) unavailable.push("cacheWrite");
 	}
 	const cost = openRouter ? openRouterCost(raw as OpenRouterPricing) : getAiGatewayCost(raw as AiGatewayPricing);
+	// The Gateway REST write field carries no lifetime of its own. Gateway documents the Anthropic default
+	// (omitted `cache_ttl`) as a 5 minute entry written at 1.25x base input, so only an `anthropic/` row whose
+	// every bracket matches that ratio admits its write rate, as the default lifetime. 1h writes have no feed
+	// field and stay unavailable (`cacheWrite1h` is never set).
+	const anthropicDefaultWrite =
+		!openRouter && id.startsWith("anthropic/") && !unavailable.includes("cacheWrite") && defaultWriteRatio(cost);
+	if (!openRouter && !anthropicDefaultWrite && !unavailable.includes("cacheWrite")) unavailable.push("cacheWrite");
 	const assessed = verified(
 		cost,
 		openRouter
@@ -375,7 +437,10 @@ function feedCost(
 			"No search, image, audio, request or other non-token charges; regional, Fast, service-tier and account add-ons excluded. " +
 			(openRouter
 				? "Only explicitly published default 5m/1h writes; unknown write TTL unavailable."
-				: "All writes unavailable pending TTL verification."),
+				: anthropicDefaultWrite
+					? "Anthropic default 5m writes only (documented 1.25x base input); 1h writes unavailable."
+					: "All writes unavailable pending TTL verification.") +
+			publishedDimensions(raw),
 		unavailable,
 		"2026-11-13",
 	);

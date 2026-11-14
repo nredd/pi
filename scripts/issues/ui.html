@@ -148,7 +148,7 @@ function render() {
 		q.queued || q.running ? `triaging ${q.running}, ${q.queued} queued` : "",
 		data.sync.running ? "syncing…" : data.sync.lastSync ? `synced ${ago(data.sync.lastSync)} ago` : "",
 		data.sync.lastError ? `<span class="err">sync: ${esc(data.sync.lastError)}</span>` : "",
-		`${esc(data.model)} $${data.cost.toFixed(2)}`,
+		`${esc(data.model)} ${!data.unpricedCalls ? `$${data.cost.toFixed(2)}` : data.cost ? `$${data.cost.toFixed(2)} + ${data.unpricedCalls} unpriced` : `cost unknown (${data.unpricedCalls} unpriced)`}`,
 	].filter(Boolean).join(" · ");
 	let html = "", idx = 0;
 	for (const [name, list] of groups(items)) {

@@ -19,14 +19,8 @@
 		},
 		"./*": "./*"
 	},
-	"peerDependencies": {
-		"@xterm/headless": "5.5.0"
-	},
-	"peerDependenciesMeta": {
-		"@xterm/headless": {
-			"optional": true
-		}
-	},
+	"peerDependencies": { "@xterm/headless": "5.5.0" },
+	"peerDependenciesMeta": { "@xterm/headless": { "optional": true } },
 	"scripts": {
 		"clean": "shx rm -rf dist",
 		"build": "tsc -p tsconfig.build.json",

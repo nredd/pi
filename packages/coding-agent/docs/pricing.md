@@ -77,7 +77,7 @@ Source audit, checked 2026-11-12:
   it (input/output/read). Storage at $4.50 per million tokens/hour is outside token value.
   Google reroutes this alias to `gemini-3.8-flash` billing on 2026-12-01, so its assessment
   carries `retiredOn: 2026-12-01`: priced through 2026-11-30, unpriced from that date. The
-  rerouted contract is not assessed here, so neither `estimateTokenCost` nor `calculateCost`
+  rerouted price is not applied here, so neither `estimateTokenCost` nor `calculateCost`
   prices the old rates past the date (see `retiredOn` above).
 - Official AWS pricing [here](https://aws.amazon.com/bedrock/pricing/) supplies a chosen
   published baseline, not an account-specific invoice. AWS has no universal default region.
@@ -154,8 +154,40 @@ Additional exact contracts, checked 2026-11-13:
   tokens at $0.30/$2.50/$0.03 per million. Image and audio output and tool charges have
   separate units and are not distinguished by these counters. Cache storage is $1 per million token-hours, not a cache-write
   token tariff; tools and other non-token fees are excluded. No Vertex parity is assumed.
-  `gemini-2.5-flash` and other date-dependent contracts, aliases and unverified IDs remain
-  unassessed; the only assessed alias is `gemini-2.5-pro`, bounded at its reroute date.
+  Google's [model](https://ai.google.dev/gemini-api/docs/models) and
+  [deprecation](https://ai.google.dev/gemini-api/docs/deprecations) pages, fetched 2026-11-13,
+  supply lifecycle evidence below. Every Gemini assessment is paid Standard only, never
+  the free-tier column, and Batch, Flex, Priority, grounding and other non-token charges are excluded.
+- Dated Gemini contracts end at `retiredOn` (priced through the day before, unpriced from that UTC
+  date) instead of applying the announced later price early, because one row cannot carry a date
+  schedule. `gemini-4-argon` is `2/10/0.10` (input/output/read) through 2026-11-30 and Google lists
+  `4/20/0.20` from 2026-12-01. `gemini-3.8-flash` and `gemini-3.6-flash` are `0.75/3.75/0.075` through
+  2026-12-31 and Google lists `1.50/7.50/0.15` from 2027-01-01. Argon supports implicit caching only,
+  so its cache-write category is unavailable; Flash cache storage ($0.50 per million token-hours,
+  $1.00 from 2027-01-01) is a separate meter, not a write price.
+  As for `gemini-2.5-pro`, both `estimateTokenCost` and `calculateCost` stop at the date; a call
+  after it is marked `unpriced`, never $0 or the old rate.
+- `gemini-2.5-flash` routes to `gemini-3.5-flash-lite` and bills at its rates from 2026-12-01. Those
+  text, image and video rates (`0.30/2.50/0.03`) equal the alias's own, so the assessment carries
+  no end date and shares the same constant as its target. Audio input (`$1.00`, cached `$0.10`)
+  applies only before the reroute (the target bills audio at `$0.30`), cannot be distinguished by the
+  counters and is excluded. `gemini-2.5-pro` still routes to
+  `gemini-3.8-flash` on 2026-12-01, but that target is itself date-scheduled, so the alias stays
+  bounded rather than priced afterwards.
+- Also assessed from the same table, text/image/video input only (audio rates differ and are excluded):
+  `gemini-2.5-flash-lite` `0.10/0.40/0.01`, `gemini-3.1-flash-lite` `0.25/1.50/0.025` (listed with an earliest
+  shutdown of 2027-05-07, recommended replacement `gemini-3.5-flash-lite`, no price change announced), `gemini-3-flash-preview` `0.50/3.00/0.05`, and
+  `gemini-3.1-pro-preview` plus `gemini-3.1-pro-preview-customtools` `2/12/0.20`, with `4/18/0.40` for the
+  whole request above 200000 prompt tokens (`$4.50` per million token-hours storage excluded).
+- Still unassessed, each with evidence: `gemini-3.7-flash` and `gemini-3.5-flash` are documented as routed
+  to `gemini-3.8-flash` and `gemini-3.6-flash`, but no page states they bill at those rates;
+  `gemini-flash-latest` and `gemini-flash-lite-latest` are hot-swapped aliases with no current
+  target stated (the last changelog switch, 2026-01-21, names `gemini-3-flash-preview`); `gemini-3.1-flash-lite-preview` (shut down 2026-05-25) and
+  `gemini-2.5-computer-use-preview-10-2025` (shut down) have no current contract;
+  archived IDs such as `gemini-3-pro-preview` and `gemini-2.5-pro-preview-03-25` are shut down per the deprecation page
+  and absent from the bundled catalogue, so no contract is assessed; the `gemma-4-*` IDs list a free tier and no paid price, so zero rates are not a paid-deployment
+  claim; image-output, live-audio and agent IDs have per-unit meters the counters cannot express.
+  `gemini-4-carbon` and `gemini-4-hydrogen` are priced on the page but absent from the bundled catalogue.
 
 Generation and precedence:
 

@@ -251,30 +251,36 @@ describe("catalogue assessment", () => {
 		expect(rerouted.cost).toBeNull();
 		expect(rerouted.reason).toContain("retired");
 		expect(estimateTokenCost({ cost }, tokens, "2027-01-01").cost).toBeNull();
-		expect(catalogueCost(entry("google", "gemini-2.5-flash")).assessment?.status).toBe("unknown");
 	});
-	it.each(["2026-11-12", "2026-11-13", "2026-11-20"])(
-		"bounds a gemini-2.5-pro row checked %s that lacks the reroute bound",
-		(checkedAt) => {
-			const stale = {
-				input: 1.25,
-				output: 10,
-				cacheRead: 0.125,
-				cacheWrite: 0,
-				assessment: {
-					status: "verified" as const,
-					checkedAt,
-					source: "x",
-					unit: "usd-per-million-tokens" as const,
-					conditions: "x",
-				},
-			};
-			const cost = catalogueCost({ ...entry("google", "gemini-2.5-pro"), cost: stale });
-			expect(cost.assessment).toMatchObject({ retiredOn: "2026-12-01", checkedAt });
-			const tokens = { input: 100000, output: 100000, cacheRead: 0, cacheWrite: 0 };
-			expect(estimateTokenCost({ cost }, tokens, "2026-12-05").cost).toBeNull();
-		},
-	);
+	it.each(
+		[
+			["gemini-2.5-pro", "2026-12-01"],
+			["gemini-4-argon", "2026-12-01"],
+			["gemini-3.8-flash", "2027-01-01"],
+			["gemini-3.6-flash", "2027-01-01"],
+		].flatMap(([id, retiredOn]) =>
+			["2026-11-12", "2026-11-13", "2026-11-20"].map((checkedAt) => [id, retiredOn, checkedAt] as const),
+		),
+	)("bounds a %s row at %s when checked %s and lacking the bound", (id, retiredOn, checkedAt) => {
+		const stale = {
+			input: 1.25,
+			output: 10,
+			cacheRead: 0.125,
+			cacheWrite: 0,
+			assessment: {
+				status: "verified" as const,
+				checkedAt,
+				source: "x",
+				unit: "usd-per-million-tokens" as const,
+				conditions: "x",
+			},
+		};
+		const cost = catalogueCost({ ...entry("google", id), cost: stale });
+		// A row older than this code's own audit is superseded by it, so only the bound is invariant.
+		expect(cost.assessment).toMatchObject({ status: "verified", retiredOn });
+		const tokens = { input: 100000, output: 100000, cacheRead: 0, cacheWrite: 0 };
+		expect(estimateTokenCost({ cost }, tokens, "2027-01-05").cost).toBeNull();
+	});
 	it("prices gemini-2.5-pro on its audit date and bounds at the reroute", () => {
 		const cost = catalogueCost(entry("google", "gemini-2.5-pro"));
 		expect(cost.assessment).toMatchObject({ status: "verified", checkedAt: "2026-11-12" });

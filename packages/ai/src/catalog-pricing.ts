@@ -513,20 +513,97 @@ const BEDROCK_OPENAI_IDS = new Map(
 
 const GEMINI_25_PRO_REROUTE_DATE = "2026-12-01";
 
+/** USD per million tokens; the source of truth for gemini-3.5-flash-lite and the gemini-2.5-flash alias target. */
+const GEMINI_35_FLASH_LITE_COST: ModelCost = { input: 0.3, output: 2.5, cacheRead: 0.03, cacheWrite: 0 };
+
+interface GeminiContract {
+	cost: ModelCost;
+	/** Model-specific conditions appended to the shared paid Standard caveats. */
+	note: string;
+	/** First UTC date the listed rates no longer apply; estimates stop there rather than apply a later price early. */
+	retiredOn?: string;
+}
+
+const storageNote = (rate: string) =>
+	`Cache storage at ${rate} per million token-hours is a separate meter, not a cache-write token price.`;
+const audioNote = (input: string, read: string) =>
+	`Audio input (${input}) and cached audio (${read}) have separate token rates that these counters cannot distinguish, so only text, image and video input is covered.`;
+const GEMINI_38_FLASH_COST: ModelCost = { input: 0.75, output: 3.75, cacheRead: 0.075, cacheWrite: 0 };
+const GEMINI_38_FLASH_NOTE = `Listed rates apply through 2026-12-31; Google doubles them on 2027-01-01 (input 1.50, output 7.50, read 0.15), which is not applied. ${storageNote("$0.50 through 2026-12-31 and $1.00 after")}`;
+const GEMINI_PRO_31_COST: ModelCost = {
+	input: 2,
+	output: 12,
+	cacheRead: 0.2,
+	cacheWrite: 0,
+	tiers: [{ inputTokensAbove: 200000, input: 4, output: 18, cacheRead: 0.4, cacheWrite: 0 }],
+};
+const GEMINI_PRO_31_NOTE = `Prompts above 200000 tokens use the higher rates for the whole request. ${storageNote("$4.50")}`;
+
+/**
+ * Exact IDs named on the paid Standard table of the Gemini Developer API pricing page (fetched 2026-11-13),
+ * never inferred from a name prefix or a free-tier row. Dated contracts end at `retiredOn`; the later price
+ * is deliberately not applied because one row cannot carry a date schedule.
+ */
+const GEMINI_CONTRACTS: Record<string, GeminiContract> = {
+	"gemini-4-argon": {
+		cost: { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 0 },
+		note: "Not offered on the free tier. The listed rates apply through 2026-11-30; Google doubles them on 2026-12-01 (input 4, output 20, read 0.20), which is not applied. Caching is implicit only; explicit caching and storage are unsupported, so cache writes have no token rate.",
+		retiredOn: "2026-12-01",
+	},
+	"gemini-3.8-flash": {
+		cost: GEMINI_38_FLASH_COST,
+		note: GEMINI_38_FLASH_NOTE,
+		retiredOn: "2027-01-01",
+	},
+	"gemini-3.6-flash": {
+		cost: GEMINI_38_FLASH_COST,
+		note: GEMINI_38_FLASH_NOTE,
+		retiredOn: "2027-01-01",
+	},
+	// Google bills this alias at gemini-3.5-flash-lite rates from 2026-12-01; the text rates are identical.
+	"gemini-2.5-flash": {
+		cost: GEMINI_35_FLASH_LITE_COST,
+		note: `Deprecated: from 2026-12-01 requests route to gemini-3.5-flash-lite and bill at its rates, which equal these for text, image and video, so the rates hold across that date. Audio input ($1.00) and cached audio ($0.10) apply only before the reroute (gemini-3.5-flash-lite bills audio at $0.30) and these counters cannot distinguish audio, so only text, image and video input is covered. ${storageNote("$1.00")}`,
+	},
+	"gemini-2.5-flash-lite": {
+		cost: { input: 0.1, output: 0.4, cacheRead: 0.01, cacheWrite: 0 },
+		note: `Not deprecated. ${audioNote("$0.30", "$0.03")} ${storageNote("$1.00")}`,
+	},
+	"gemini-3.1-flash-lite": {
+		cost: { input: 0.25, output: 1.5, cacheRead: 0.025, cacheWrite: 0 },
+		note: `Listed with an earliest shutdown of 2027-05-07 (recommended replacement gemini-3.5-flash-lite) and no announced price change. ${audioNote("$0.50", "$0.05")} ${storageNote("$1.00")}`,
+	},
+	"gemini-3-flash-preview": {
+		cost: { input: 0.5, output: 3, cacheRead: 0.05, cacheWrite: 0 },
+		note: `${audioNote("$1.00", "$0.10")} ${storageNote("$1.00")}`,
+	},
+	// One pricing section names both IDs. Above 200000 prompt tokens the whole request uses the higher rates.
+	"gemini-3.1-pro-preview": {
+		cost: GEMINI_PRO_31_COST,
+		note: GEMINI_PRO_31_NOTE,
+	},
+	"gemini-3.1-pro-preview-customtools": {
+		cost: GEMINI_PRO_31_COST,
+		note: GEMINI_PRO_31_NOTE,
+	},
+};
+
 /** Apply narrow official corrections before user overrides, never infer a provider from a model name. */
 export function catalogueCost(model: Pick<AnyModel, "provider" | "id" | "type" | "cost">): ModelCost {
 	const cost = catalogueCostUnbounded(model);
-	if (
-		(model.type ?? "chat") !== "chat" ||
-		model.provider !== "google" ||
-		model.id !== "gemini-2.5-pro" ||
-		cost.assessment?.status !== "verified"
-	)
+	if ((model.type ?? "chat") !== "chat" || model.provider !== "google" || cost.assessment?.status !== "verified")
 		return cost;
-	// Google reroutes this alias on this date; bound whatever verified row survives, including newer catalog rows.
+	// Google ends these prices on a fixed date; bound whatever verified row survives, including newer catalog rows.
+	const end =
+		model.id === "gemini-2.5-pro"
+			? GEMINI_25_PRO_REROUTE_DATE
+			: Object.hasOwn(GEMINI_CONTRACTS, model.id)
+				? GEMINI_CONTRACTS[model.id].retiredOn
+				: undefined;
+	if (end === undefined) return cost;
 	const { retiredOn } = cost.assessment;
-	if (retiredOn !== undefined && retiredOn <= GEMINI_25_PRO_REROUTE_DATE) return cost;
-	return { ...cost, assessment: { ...cost.assessment, retiredOn: GEMINI_25_PRO_REROUTE_DATE } };
+	if (retiredOn !== undefined && retiredOn <= end) return cost;
+	return { ...cost, assessment: { ...cost.assessment, retiredOn: end } };
 }
 
 function catalogueCostUnbounded(model: Pick<AnyModel, "provider" | "id" | "type" | "cost">): ModelCost {
@@ -553,6 +630,10 @@ function catalogueCostUnbounded(model: Pick<AnyModel, "provider" | "id" | "type"
 	const xai =
 		type === "chat" && model.provider === "xai" && Object.hasOwn(xaiRates, model.id) ? xaiRates[model.id] : undefined;
 	const gemini = type === "chat" && model.provider === "google" && model.id === "gemini-3.5-flash-lite";
+	const geminiContract =
+		type === "chat" && model.provider === "google" && Object.hasOwn(GEMINI_CONTRACTS, model.id)
+			? GEMINI_CONTRACTS[model.id]
+			: undefined;
 	const gemini25Pro = type === "chat" && model.provider === "google" && model.id === "gemini-2.5-pro";
 	const bedrockContract =
 		type === "chat" &&
@@ -585,7 +666,14 @@ function catalogueCostUnbounded(model: Pick<AnyModel, "provider" | "id" | "type"
 			Object.hasOwn(feedPrices[model.provider as "openrouter" | "vercel-ai-gateway"], `${type}:${model.id}`));
 	const checkedAt =
 		(feed?.assessment?.status !== "unknown" ? feed?.assessment?.checkedAt : undefined) ??
-		(archived || codexTerra || bedrockContract || boundedAnthropicContract || cerebras || xai || gemini
+		(archived ||
+		codexTerra ||
+		bedrockContract ||
+		boundedAnthropicContract ||
+		cerebras ||
+		xai ||
+		gemini ||
+		geminiContract
 			? "2026-11-13"
 			: PRICING_CHECKED_AT);
 	// A newer explicitly assessed catalog must not be frozen at this client's audit date.
@@ -775,12 +863,24 @@ function catalogueCostUnbounded(model: Pick<AnyModel, "provider" | "id" | "type"
 		);
 	if (gemini) {
 		return verified(
-			{ input: 0.3, output: 2.5, cacheRead: 0.03, cacheWrite: 0 },
+			GEMINI_35_FLASH_LITE_COST,
 			GOOGLE_SOURCE,
 			"Paid Standard; text input, output and cached-read token rates only. Image and audio output and tool charges have separate units and are not distinguished by these counters. Cache storage is $1 per million token-hours, not a token-write price; tools and other non-token charges excluded. No Vertex substitution.",
 			["cacheWrite"],
 			checkedAt,
 		);
+	}
+	if (geminiContract) {
+		const assessed = verified(
+			structuredClone(geminiContract.cost),
+			GOOGLE_SOURCE,
+			`Paid Standard token charges for the Gemini Developer API (not the free tier; Batch, Flex, Priority, grounding and other non-token charges excluded; no Vertex substitution). Image and audio output have separate units. ${geminiContract.note}`,
+			["cacheWrite"],
+			checkedAt,
+		);
+		if (geminiContract.retiredOn && assessed.assessment?.status === "verified")
+			assessed.assessment = { ...assessed.assessment, retiredOn: geminiContract.retiredOn };
+		return assessed;
 	}
 	if (gemini25Pro) {
 		return verified(
@@ -792,7 +892,7 @@ function catalogueCostUnbounded(model: Pick<AnyModel, "provider" | "id" | "type"
 				tiers: [{ inputTokensAbove: 200000, input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 }],
 			},
 			GOOGLE_SOURCE,
-			"Paid Standard token charges only; cache storage at USD 4.50 per million tokens/hour is excluded. Google reroutes this alias to gemini-3.8-flash from 2026-12-01, so these rates are bounded before that date and the rerouted contract is not assessed. No Vertex substitution.",
+			"Paid Standard token charges only; cache storage at USD 4.50 per million tokens/hour is excluded. Google reroutes this alias to gemini-3.8-flash from 2026-12-01, so these rates are bounded before that date and the rerouted price is not applied (gemini-3.8-flash is itself date-scheduled). No Vertex substitution.",
 			["cacheWrite"],
 			checkedAt,
 		);

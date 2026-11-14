@@ -27,7 +27,10 @@ describe("calculateCost respects retiredOn", () => {
 	it.each([
 		["anthropic", "claude-sonnet-4-5", "2026-11-30", (3 + 15 + 0.3 + 3.75) / 20],
 		["google", "gemini-2.5-pro", "2026-12-01", (1.25 + 10 + 0.125 + 0) / 20],
-	] as const)("%s/%s is priced before and zero from %s", (provider, id, retiredOn, total) => {
+		["google", "gemini-4-argon", "2026-12-01", (2 + 10 + 0.1 + 0) / 20],
+		["google", "gemini-3.8-flash", "2027-01-01", (0.75 + 3.75 + 0.075 + 0) / 20],
+		["google", "gemini-3.6-flash", "2027-01-01", (0.75 + 3.75 + 0.075 + 0) / 20],
+	] as const)("%s/%s is priced before and unpriced from %s", (provider, id, retiredOn, total) => {
 		const m = model(provider, id);
 		expect(m.cost.assessment).toMatchObject({ retiredOn });
 		const before = new Date(Date.parse(`${retiredOn}T00:00:00Z`) - 86_200_000).toISOString().slice(0, 10);

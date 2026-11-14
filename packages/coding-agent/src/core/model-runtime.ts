@@ -105,6 +105,9 @@ import {
  * provider's auth error code (Anthropic `authentication_error` / `permission_error`, OpenAI
  * `invalid_api_key`). Bare words like "unauthorized" are not enough: proxies and models say them.
  */
+/** Most newer availability passes one awaited refresh waits for before resolving. */
+const MAX_SUPERSEDING_PASS_WAITS = 4;
+
 const AUTH_REJECTION_RE =
 	/^\s*(?:401|403)\b|\bstatus(?: code)?:?\s*(?:401|403)\b|\b(?:authentication_error|permission_error|invalid_api_key)\b/;
 
@@ -235,6 +238,8 @@ export class ModelRuntime implements Models {
 	};
 	private availabilityRefreshSeq = 0;
 	private availabilityErrorSeq = 0;
+	/** The most recently queued full availability pass; later passes supersede earlier ones. */
+	private latestAvailabilityPass: { seq: number; settled: Promise<void> } | undefined;
 	private readonly providerAvailabilitySeq = new Map<string, number>();
 	private availabilityError: string | undefined;
 	private readonly credentialOperations = new Map<string, Promise<unknown>>();
@@ -419,12 +424,38 @@ export class ModelRuntime implements Models {
 		}
 		const errorSeq = ++this.availabilityErrorSeq;
 		const effectiveSignal = operationSignal(signal);
-		return this.runAvailabilityRefresh(seq, errorSeq, effectiveSignal).catch((error) => {
+		const pass = this.runAvailabilityRefresh(seq, errorSeq, effectiveSignal).catch((error) => {
 			if (errorSeq === this.availabilityErrorSeq && !effectiveSignal.aborted) {
 				this.availabilityError = error instanceof Error ? error.message : String(error);
 			}
 			throw error;
 		});
+		this.latestAvailabilityPass = {
+			seq,
+			settled: pass.then(
+				() => undefined,
+				() => undefined,
+			),
+		};
+		return this.settleSupersedingPasses(pass, seq, effectiveSignal);
+	}
+
+	/**
+	 * A pass superseded by a newer one discards its result, so resolving right after it would hand
+	 * the awaiting caller a snapshot that is not yet current. Wait for the passes queued after it
+	 * (their errors are recorded by those passes, not rethrown here). Every wait is on a strictly
+	 * newer pass, and a pass never waits on another, so this cannot deadlock; the loop is capped so
+	 * a steady stream of refreshes cannot hold a caller forever.
+	 */
+	private async settleSupersedingPasses(pass: Promise<void>, seq: number, signal: AbortSignal): Promise<void> {
+		await pass;
+		let waitedSeq = seq;
+		for (let i = 0; i < MAX_SUPERSEDING_PASS_WAITS && !signal.aborted; i++) {
+			const latest = this.latestAvailabilityPass;
+			if (!latest || latest.seq <= waitedSeq) return;
+			waitedSeq = latest.seq;
+			await latest.settled;
+		}
 	}
 
 	private async refreshProviderAvailability(providerId: string, signal: AbortSignal): Promise<void> {
@@ -1130,10 +1161,20 @@ export class ModelRuntime implements Models {
 		type: AuthType,
 	): void {
 		if (!this.snapshot.storedProviders.has(providerId) && !configuredStatus?.configured) return;
+		this.markConfigured(providerId, { type, source: "configured provider" });
+	}
+
+	/**
+	 * Mark a provider configured ahead of its availability check. A full pass already in flight listed
+	 * providers before this one existed and would write a snapshot without it, so it is invalidated;
+	 * the caller's own refresh replaces this entry (nredd/pi-harness#911).
+	 */
+	private markConfigured(providerId: string, check: AuthCheck): void {
+		++this.availabilityRefreshSeq;
 		const configuredProviders = new Set(this.snapshot.configuredProviders).add(providerId);
 		const auth = new Map(this.snapshot.auth);
 		// Never clobber a real check result.
-		if (!auth.get(providerId)) auth.set(providerId, { type, source: "configured provider" });
+		if (!auth.get(providerId)) auth.set(providerId, check);
 		this.snapshot = {
 			...this.snapshot,
 			auth,
@@ -1194,9 +1235,7 @@ export class ModelRuntime implements Models {
 		if (!this.recomposeProvider(providerId) && !this.snapshot.configuredProviders.has(providerId)) {
 			// A provider of only virtual models needs no credentials. Mark it configured now: session
 			// restore checks auth before the refresh below lands.
-			const auth = new Map(this.snapshot.auth).set(providerId, { type: "api_key", source: "virtual" });
-			const configuredProviders = new Set(this.snapshot.configuredProviders).add(providerId);
-			this.snapshot = { ...this.snapshot, auth, configuredProviders };
+			this.markConfigured(providerId, { type: "api_key", source: "virtual" });
 		}
 		this.updateModelSnapshot();
 		void this.refresh({ allowNetwork: false });

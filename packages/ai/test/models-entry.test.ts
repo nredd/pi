@@ -1,9 +1,17 @@
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
 const packageRoot = fileURLToPath(new URL("..", import.meta.url));
 const sourceEntry = new URL("../src/models.ts", import.meta.url).href;
+const distEntry = fileURLToPath(new URL("../dist/models.js", import.meta.url));
+const specifierEntry = "@earendil-works/pi-ai/models";
+const distBuilt = existsSync(distEntry);
+// The specifier case must resolve through `exports["./models"].import` (dist), so it runs without
+// `--conditions=source`. Local runs after only `npm run worktree:setup` have no dist, so skip there;
+// CI always builds first and must fail, never skip, when dist is missing.
+const skipSpecifier = !distBuilt && !process.env.CI;
 
 // Install before linking the static imports, so unused barrel re-exports are checked too.
 const preload = `data:text/javascript,${encodeURIComponent(`
@@ -28,9 +36,12 @@ const preload = `data:text/javascript,${encodeURIComponent(`
 `)}`;
 
 describe("lightweight models entry", () => {
-	it.each([sourceEntry, "@earendil-works/pi-ai/models"])(
-		"runs a faux completion without TypeBox, catalogs, or SDKs through %s",
-		(entry) => {
+	for (const { entry, conditions, skip } of [
+		{ entry: sourceEntry, conditions: ["--conditions=source"], skip: false },
+		{ entry: specifierEntry, conditions: [] as string[], skip: skipSpecifier },
+	]) {
+		it.skipIf(skip)(`runs a faux completion without TypeBox, catalogs, or SDKs through ${entry}`, () => {
+			if (entry === specifierEntry) expect(distBuilt, "packages/ai/dist/models.js missing").toBe(true);
 			const script = `
 				import assert from "node:assert/strict";
 				import { createModels, createProvider } from ${JSON.stringify(entry)};
@@ -48,7 +59,7 @@ describe("lightweight models entry", () => {
 			`;
 			const result = spawnSync(
 				process.execPath,
-				["--conditions=source", "--import", preload, "--input-type=module", "--eval", script],
+				[...conditions, "--import", preload, "--input-type=module", "--eval", script],
 				{
 					cwd: packageRoot,
 					encoding: "utf8",
@@ -57,6 +68,6 @@ describe("lightweight models entry", () => {
 			);
 			expect(result.error).toBeUndefined();
 			expect(result.status, result.stderr).toBe(0);
-		},
-	);
+		});
+	}
 });

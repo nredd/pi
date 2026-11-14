@@ -258,4 +258,35 @@ describe("ModelRuntime availability passes", () => {
 
 		expect(runtime.hasConfiguredAuth(env.id)).toBe(true);
 	});
+
+	// #101: a credential change landing mid-pass must not be overwritten by the pass's older credential list
+	it("keeps a stored credential added mid-pass for a provider the pass saw without one", async () => {
+		const { credentials, runtime } = await createRuntime();
+		runtime.registerProvider("late", {
+			baseUrl: "https://example.test/v1",
+			apiKey: "$PI_TEST_UNSET_AVAILABILITY_KEY",
+			api: "openai-completions",
+			models: [apiModel],
+		});
+		await runtime.refresh({ allowNetwork: false });
+		expect(runtime.getProviderAuthStatus("late").configured).toBe(false);
+
+		const list = credentials.list.bind(credentials);
+		const listed = Promise.withResolvers<void>();
+		const held = Promise.withResolvers<void>();
+		vi.spyOn(credentials, "list").mockImplementationOnce(async (options) => {
+			const before = await list(options);
+			listed.resolve();
+			await held.promise;
+			return before;
+		});
+		const stale = runtime.refresh({ allowNetwork: false });
+		await listed.promise;
+		await credentials.modify("late", async () => ({ type: "api_key", key: "stored-key" }));
+		await runtime.refresh({ providers: ["late"], allowNetwork: false });
+		held.resolve();
+		await stale;
+
+		expect(runtime.getProviderAuthStatus("late")).toMatchObject({ configured: true, source: "stored" });
+	});
 });

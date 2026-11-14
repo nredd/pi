@@ -462,11 +462,21 @@ export class ModelRuntime implements Models {
 		for (const model of this.snapshot.available) {
 			if (keep(model.provider)) availableKeys.add(modelKey(model));
 		}
+		// A credential may exist for a provider the runtime does not know yet, so this does not use `known`.
+		const unchanged = (providerId: string) =>
+			(pass.generations.get(providerId) ?? 0) === this.generationOf(providerId);
+		const storedProviders = new Set(
+			[...pass.storedProviders, ...this.snapshot.storedProviders].filter((providerId) =>
+				unchanged(providerId)
+					? pass.storedProviders.has(providerId)
+					: this.snapshot.storedProviders.has(providerId),
+			),
+		);
 		this.snapshot = {
 			all,
 			available: all.filter((model) => availableKeys.has(modelKey(model))),
 			configuredProviders,
-			storedProviders: pass.storedProviders,
+			storedProviders,
 			auth,
 		};
 		this.lastWrittenPassSeq = seq;

@@ -14,6 +14,7 @@ const sandbox = new CodemodeSandbox({
 	onWorkerStarted: (exited) => {
 		void exited.then(() => {
 			workerExited = true;
+			console.log(JSON.stringify({ type: "workerExited", elapsedMs: performance.now() - started }));
 		});
 	},
 	tools: [

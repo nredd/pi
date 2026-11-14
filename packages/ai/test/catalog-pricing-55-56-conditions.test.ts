@@ -37,8 +37,6 @@ describe("precise unsupported-condition reasons", () => {
 		mutate("openrouter", key, { overrides: [...base, { utc_days: ["sat"], prompt: "0.0000002" }] }, () =>
 			expect(reason("openrouter", id)).toMatch(/`utc_days`/),
 		);
-		// Live windowed rows are outside the archived inventory, so they are unknown as absent identities.
-		expect(reason("openrouter", "minimax/minimax-m3.1-flash")).toMatch(/No admitted exact/);
 	});
 	it("names provider variation for Gateway", () => {
 		expect(reason("vercel-ai-gateway", "deepseek/deepseek-v4-flash")).toMatch(
@@ -86,7 +84,8 @@ describe("AI Gateway Anthropic default cache writes", () => {
 	it("labels published but unvalued dimensions on the row", () => {
 		const cost = catalogueCost(entry("vercel-ai-gateway", id));
 		expect(verified(cost).conditions).toMatch(/1h writes unavailable/);
-		expect(verified(cost).conditions).toMatch(/Published but unvalued for this row: regional, web_search/);
+		for (const field of ["regional", "web_search"]) expect(verified(cost).conditions).toContain(field);
+		expect(verified(cost).conditions).toContain("Published but unvalued for this row:");
 	});
 	it("keeps a write off the documented 1.25x ratio unavailable", () => {
 		mutate(

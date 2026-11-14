@@ -278,6 +278,17 @@ const NON_TOKEN_FIELDS = new Set([
 	"input_audio_cache",
 	"internal_reasoning",
 	"request",
+	"video_duration_pricing",
+	"video_token_pricing",
+	"image_dimension_quality_pricing",
+	"speech_input_character_cost",
+	"speech_output_cost_per_second",
+	"transcription_duration_cost_per_second",
+	"realtime_session_duration_cost_per_second",
+	"realtime_client_message_cost",
+	"audio_input_token_cost",
+	"audio_output_token_cost",
+	"maps_search",
 ]);
 
 /** A precise reason for a published pricing field the token estimator cannot value. */
@@ -289,7 +300,7 @@ function unsupportedFieldReason(provider: "openrouter" | "vercel-ai-gateway", fi
 	const other = fields.filter((field) => field !== "varies_by_provider" && field !== "peak_pricing");
 	if (other.length > 0)
 		reasons.push(
-			other.every((field) => NON_TOKEN_FIELDS.has(field) || field.endsWith("_pricing") || field.includes("_cost"))
+			other.every((field) => NON_TOKEN_FIELDS.has(field))
 				? "it publishes non-token or separately counted charges"
 				: "it publishes unrecognised pricing fields",
 		);

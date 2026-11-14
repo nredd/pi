@@ -191,4 +191,23 @@ describe("ModelRuntime availability passes", () => {
 
 		expect(env && runtime.hasConfiguredAuth(env.id)).toBe(true);
 	});
+
+	// #101: entries kept for providers registered mid-flight must not outlive the provider
+	it("drops an unregistered provider on the next pass", async () => {
+		const { runtime } = await createRuntime();
+		runtime.registerProvider("late", {
+			baseUrl: "https://example.test/v1",
+			apiKey: "literal-key",
+			api: "openai-completions",
+			models: [apiModel],
+		});
+		await runtime.refresh({ allowNetwork: false });
+		expect(runtime.hasConfiguredAuth("late")).toBe(true);
+
+		runtime.unregisterProvider("late");
+		await runtime.refresh({ allowNetwork: false });
+
+		expect(runtime.hasConfiguredAuth("late")).toBe(false);
+		expect(runtime.getModel("late", "m")).toBeUndefined();
+	});
 });

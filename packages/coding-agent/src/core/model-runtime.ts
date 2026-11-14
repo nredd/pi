@@ -437,16 +437,25 @@ export class ModelRuntime implements Models {
 				.filter((entry): entry is [string, AuthCheck] => entry[1] !== undefined)
 				.map(([providerId]) => providerId),
 		);
+		// Providers registered after the pass began are unlisted but exist now. Unlisted entries of
+		// providers that are gone (unregistered) are dropped, as a full replace would.
+		const all = [...this.models.getModels()];
+		const known = new Set(this.models.getProviders().map((provider) => provider.id));
+		const isNew = (providerId: string) => !pass.listed.has(providerId) && known.has(providerId);
 		for (const [providerId, check] of this.snapshot.auth) {
-			if (!pass.listed.has(providerId)) auth.set(providerId, check);
+			if (isNew(providerId)) auth.set(providerId, check);
 		}
 		for (const providerId of this.snapshot.configuredProviders) {
-			if (!pass.listed.has(providerId)) configuredProviders.add(providerId);
+			if (isNew(providerId)) configuredProviders.add(providerId);
 		}
-		const kept = this.snapshot.available.filter((model) => !pass.listed.has(model.provider));
+		const modelKey = (model: Model<Api>) => `${model.provider}/${model.id}`;
+		const availableKeys = new Set(pass.available.map(modelKey));
+		for (const model of this.snapshot.available) {
+			if (isNew(model.provider)) availableKeys.add(modelKey(model));
+		}
 		this.snapshot = {
-			all: [...this.models.getModels()],
-			available: [...pass.available, ...kept],
+			all,
+			available: all.filter((model) => availableKeys.has(modelKey(model))),
 			configuredProviders,
 			storedProviders: pass.storedProviders,
 			auth,

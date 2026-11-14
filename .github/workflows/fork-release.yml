@@ -69,8 +69,8 @@ jobs:
           git -c "gpg.ssh.allowedSignersFile=$RUNNER_TEMP/ssh/allowed_signers" verify-tag "$RELEASE_TAG"
           version=${RELEASE_TAG#v}
           version=${version%-nredd.*}
-          branch="origin/nredd/v$version"
-          git fetch origin "+refs/heads/nredd/v$version:refs/remotes/origin/nredd/v$version"
+          branch="origin/main"
+          git fetch origin "+refs/heads/main:refs/remotes/origin/main"
           commit=$(git rev-parse "$RELEASE_TAG^{commit}")
           git merge-base --is-ancestor "$commit" "$branch"
           printf 'tag=%s\nversion=%s\n' "$RELEASE_TAG" "$version" >>"$GITHUB_OUTPUT"

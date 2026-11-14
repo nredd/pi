@@ -2,9 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [main, nredd/v1.3.0, "security/**"]
+    branches: [main, "security/**"]
   pull_request:
-    branches: [main, nredd/v1.3.0]
+    branches: [main]
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -13,9 +13,6 @@ concurrency:
 jobs:
   build-check-test:
     runs-on: ubuntu-latest
-    env:
-      # Trusted ref comparisons only; never interpolate PR-controlled text into commands.
-      IS_FORK_REF: ${{ github.base_ref == 'nredd/v1.3.0' || github.ref_name == 'nredd/v1.3.0' || startsWith(github.ref_name, 'security/') }}
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -36,7 +33,6 @@ jobs:
         run: npm ci --ignore-scripts
 
       - name: Audit every fork dependency lock including development tools
-        if: env.IS_FORK_REF == 'true'
         run: |
           set -euo pipefail
           git ls-files -z -- package-lock.json '**/package-lock.json' >"$RUNNER_TEMP/npm-lockfiles"
@@ -49,9 +45,8 @@ jobs:
             npm audit "${opts[@]}"
           done <"$RUNNER_TEMP/npm-lockfiles"
 
-      # Fork branch: freeze model data to the published pi-ai release instead of fetching it live.
+      # This repo is the fork: freeze model data to the published pi-ai release instead of fetching it live.
       - name: Restore the release model data
-        if: env.IS_FORK_REF == 'true'
         run: |
           set -euo pipefail
           version=$(node -p "require('./packages/coding-agent/package.json').version")
@@ -60,12 +55,7 @@ jobs:
           rm -rf packages/ai/src/providers/data
           cp -R "$RUNNER_TEMP/package/dist/providers/data" packages/ai/src/providers/data
 
-      - name: Build
-        if: env.IS_FORK_REF != 'true'
-        run: npm run build
-
       - name: Build offline
-        if: env.IS_FORK_REF == 'true'
         run: npm run build:offline
 
       - name: Check
@@ -74,12 +64,7 @@ jobs:
       - name: Build the pi-env daemon
         run: npm run build:daemon --workspace packages/env
 
-      - name: Test
-        if: env.IS_FORK_REF != 'true'
-        run: npm test
-
       - name: Test in an isolated home
-        if: env.IS_FORK_REF == 'true'
         run: ./test.sh
 
   mcp-conformance:

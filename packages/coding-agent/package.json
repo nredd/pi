@@ -13,6 +13,7 @@
 	"types": "./dist/index.d.ts",
 	"exports": {
 		".": {
+			"source": "./src/index.ts",
 			"types": "./dist/index.d.ts",
 			"import": "./dist/index.js"
 		},
@@ -20,10 +21,12 @@
 			"import": "./dist/bundle/rpc-entry.js"
 		},
 		"./testing": {
+			"source": "./src/testing/index.ts",
 			"types": "./dist/testing/index.d.ts",
 			"import": "./dist/testing/index.js"
 		},
 		"./testing/interactive": {
+			"source": "./src/testing/interactive.ts",
 			"types": "./dist/testing/interactive.d.ts",
 			"import": "./dist/testing/interactive.js"
 		}

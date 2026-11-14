@@ -46,11 +46,15 @@ describe("lightweight models entry", () => {
 				assert.equal(response.stopReason, "stop");
 				assert.deepEqual(response.content, [{ type: "text", text: "OK" }]);
 			`;
-			const result = spawnSync(process.execPath, ["--import", preload, "--input-type=module", "--eval", script], {
-				cwd: packageRoot,
-				encoding: "utf8",
-				timeout: 10_000,
-			});
+			const result = spawnSync(
+				process.execPath,
+				["--conditions=source", "--import", preload, "--input-type=module", "--eval", script],
+				{
+					cwd: packageRoot,
+					encoding: "utf8",
+					timeout: 10_000,
+				},
+			);
 			expect(result.error).toBeUndefined();
 			expect(result.status, result.stderr).toBe(0);
 		},

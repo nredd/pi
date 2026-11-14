@@ -1229,6 +1229,7 @@ export function calculateCost(model: AnyModel, usage: Usage, asOf?: string): Usa
 	delete usage.cost.unpriced;
 	delete usage.cost.reason;
 	delete usage.cost.unpricedCalls;
+	delete usage.cost.pricedCalls;
 	return calculateTokenCost(model.cost, usage);
 }
 

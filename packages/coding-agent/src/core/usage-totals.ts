@@ -1,4 +1,5 @@
 import type { Usage } from "@earendil-works/pi-ai/compat";
+import { pricedCallsOf, unpricedCallsOf } from "@earendil-works/pi-ai/utils/usage-counts";
 import type { SessionEntry } from "./session-manager.ts";
 
 export interface UsageTotals {
@@ -8,7 +9,7 @@ export interface UsageTotals {
 	cacheWrite: number;
 	/** Spend of priced usage only; unpriced usage is excluded, never counted as $0. */
 	cost: number;
-	/** Entries whose cost was recorded as priced (including legitimately free ones). */
+	/** Requests recorded as priced: billable tokens or a nonzero cost, including legitimately free ones. */
 	pricedCount: number;
 	/** Entries marked `cost.unpriced`: real tokens the catalogue could not price. */
 	unpricedCount: number;
@@ -31,18 +32,9 @@ export function addUsageToTotals(totals: UsageTotals, usage: Usage): void {
 	totals.output += usage.output;
 	totals.cacheRead += usage.cacheRead;
 	totals.cacheWrite += usage.cacheWrite;
-	if (usage.cost.unpriced) {
-		// An aggregate (`combineUsage`, summed tool usage) carries the priced part of its total and a
-		// count; a single unpriced request has total 0 and counts once.
-		totals.unpricedCount += usage.cost.unpricedCalls ?? 1;
-		if (usage.cost.total > 0) {
-			totals.cost += usage.cost.total;
-			totals.pricedCount += 1;
-		}
-	} else {
-		totals.cost += usage.cost.total;
-		totals.pricedCount += 1;
-	}
+	totals.cost += usage.cost.total;
+	totals.unpricedCount += unpricedCallsOf(usage);
+	totals.pricedCount += pricedCallsOf(usage);
 }
 
 /**
@@ -67,16 +59,19 @@ export function formatUsageCostNote(cost: Usage["cost"]): string {
 	return spend ? ` (${spend})` : "";
 }
 
-/** The marker for a sum of two costs: a priced subtotal plus how many summed requests were unpriced. */
+/**
+ * The marker for a sum of two usages: a priced subtotal, how many summed requests were unpriced, and how
+ * many were priced. The priced count keeps a free priced request ($0.000) apart from a zero-usage failure.
+ */
 function combinedUnpriced(
-	first: Usage["cost"],
-	second: Usage["cost"],
-): Pick<Usage["cost"], "unpriced" | "reason" | "unpricedCalls"> {
-	const unpricedCalls =
-		(first.unpriced ? (first.unpricedCalls ?? 1) : 0) + (second.unpriced ? (second.unpricedCalls ?? 1) : 0);
+	first: Usage,
+	second: Usage,
+): Pick<Usage["cost"], "unpriced" | "reason" | "unpricedCalls" | "pricedCalls"> {
+	const unpricedCalls = unpricedCallsOf(first) + unpricedCallsOf(second);
 	if (unpricedCalls === 0) return {};
-	const reason = first.reason ?? second.reason;
-	return { unpriced: true, unpricedCalls, ...(reason !== undefined ? { reason } : {}) };
+	const reason = first.cost.reason ?? second.cost.reason;
+	const pricedCalls = pricedCallsOf(first) + pricedCallsOf(second);
+	return { unpriced: true, unpricedCalls, pricedCalls, ...(reason !== undefined ? { reason } : {}) };
 }
 
 /** Sum of two usages, keeping the optional token splits when either side reports them. */
@@ -99,7 +94,7 @@ export function combineUsage(first: Usage, second: Usage): Usage {
 			cacheRead: first.cost.cacheRead + second.cost.cacheRead,
 			cacheWrite: first.cost.cacheWrite + second.cost.cacheWrite,
 			total: first.cost.total + second.cost.total,
-			...combinedUnpriced(first.cost, second.cost),
+			...combinedUnpriced(first, second),
 		},
 	};
 }

@@ -124,6 +124,74 @@ describe("usage totals with unpriced entries", () => {
 	});
 });
 
+// nredd/pi#98
+describe("priced versus zero-usage entries", () => {
+	const zeroUsage = (): Usage => ({
+		input: 0,
+		output: 0,
+		cacheRead: 0,
+		cacheWrite: 0,
+		totalTokens: 0,
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+	});
+	// A free priced model: real tokens, recorded cost $0 and not marked unpriced.
+	const freePriced = (): Usage => ({
+		input: 100_000,
+		output: 0,
+		cacheRead: 0,
+		cacheWrite: 0,
+		totalTokens: 100_000,
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+	});
+
+	/** Label from entries added one by one. */
+	const perEntry = (...usages: Usage[]) => {
+		const totals = createUsageTotals();
+		for (const u of usages) addUsageToTotals(totals, u);
+		return formatUsageTotalsCost(totals);
+	};
+	/** Label from the same entries summed into one aggregate first. */
+	const aggregate = (...usages: Usage[]) => perEntry(usages.reduce((sum, u) => combineUsage(sum, u)));
+
+	it("does not count a zero-usage failed request as priced", () => {
+		expect(perEntry(zeroUsage())).toBeUndefined();
+		expect(perEntry(zeroUsage(), unpriced(), unpriced())).toBe("unknown");
+		expect(aggregate(zeroUsage(), unpriced(), unpriced())).toBe("unknown");
+	});
+
+	it("agrees between per-entry and aggregate for a zero-usage failure plus unpriced", () => {
+		const inputs = [zeroUsage(), unpriced(), unpriced()];
+		expect(aggregate(...inputs)).toBe(perEntry(...inputs));
+	});
+
+	it("counts a free priced model as priced in both paths", () => {
+		// Nothing to show: priced, but $0 and no unpriced entries (the footer hides it).
+		expect(perEntry(freePriced())).toBeUndefined();
+		expect(perEntry(freePriced(), unpriced())).toBe("$0.000 + 1 unpriced");
+		expect(aggregate(freePriced(), unpriced())).toBe("$0.000 + 1 unpriced");
+	});
+
+	it("agrees between per-entry and aggregate for a free priced model plus unpriced", () => {
+		const inputs = [freePriced(), unpriced(), unpriced()];
+		expect(aggregate(...inputs)).toBe(perEntry(...inputs));
+		expect(aggregate(...inputs)).toBe("$0.000 + 2 unpriced");
+	});
+
+	it("reads a legacy marked aggregate without pricedCalls by its priced subtotal", () => {
+		const legacy = (total: number): Usage => ({
+			...unpriced(),
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total, unpriced: true, unpricedCalls: 2 },
+		});
+		expect(perEntry(legacy(1.5))).toBe("$1.500 + 2 unpriced");
+		expect(perEntry(legacy(0))).toBe("unknown");
+	});
+
+	it("keeps a free priced request apart from a zero-usage failure in an aggregate", () => {
+		expect(aggregate(zeroUsage(), unpriced())).toBe("unknown");
+		expect(aggregate(freePriced(), zeroUsage(), unpriced())).toBe("$0.000 + 1 unpriced");
+	});
+});
+
 // nredd/pi#83
 describe("session file round trip", () => {
 	const dirs: string[] = [];

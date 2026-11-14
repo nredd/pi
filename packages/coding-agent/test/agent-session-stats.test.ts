@@ -262,6 +262,25 @@ describe("AgentSession.getSessionStats", () => {
 		}
 	});
 
+	// nredd/pi#98
+	it("excludes zero-usage entries from pricedCount", async () => {
+		const { session, sessionManager } = await createSession();
+		try {
+			const zero = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0 };
+			sessionManager.appendMessage(createUserMessage("hello", 1));
+			sessionManager.appendMessage(createAssistantMessage("a", 10, 2));
+			sessionManager.appendMessage({
+				...createAssistantMessage("b", 0, 3),
+				usage: { ...createUsage(0), ...zero },
+				stopReason: "aborted",
+			});
+			syncAgentMessages(session, sessionManager);
+			expect(session.getSessionStats()).toMatchObject({ pricedCount: 1, unpricedCount: 0 });
+		} finally {
+			session.dispose();
+		}
+	});
+
 	it("includes tool result usage in session totals", async () => {
 		const { session, sessionManager } = await createSession();
 

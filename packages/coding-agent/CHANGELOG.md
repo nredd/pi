@@ -4,6 +4,7 @@
 
 ### Fixed
 
+- `get_session_stats` `pricedCount` counts only requests with billable tokens or a nonzero cost; zero-usage errored or aborted requests are in neither `pricedCount` nor `unpricedCount`. Codemode model-call totals count free priced calls as priced, matching the footer ([#98](https://github.com/nredd/pi/issues/98)).
 - Fullscreen text selection survives timestamp toggles and safely mappable reflow without implicit copying; changed selected content and replaced components still invalidate it. Entry rules stay out of copied text with timestamps off or on ([#35](https://github.com/nredd/pi/issues/35)).
 - Disabled automatic compaction no longer rejects normal provider requests when a valid reserve exceeds the model window. Malformed target settings remain rejected ([#33](https://github.com/nredd/pi/issues/33)).
 - Pre-dispatch compaction preserves the entire unsent user/custom input batch, including user instructions preceding large extension context, until the answering request dispatches. Summary requests and failed request gates do not release pending input.

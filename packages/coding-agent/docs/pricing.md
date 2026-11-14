@@ -194,16 +194,17 @@ Additional exact contracts, checked 2026-11-13:
   - `gemini-3.1-flash-lite-preview`: shut down 2026-05-25 (deprecations, changelog), replaced by `gemini-3.1-flash-lite`.
     No current pricing section. `gemini-2.5-computer-use-preview-10-2025`: shut down (deprecations list 2026-07-28,
     models page marks it shut down), no pricing section, and the computer use tool is now billed as ordinary tokens
-    of the selected model. A missing mention is not proof no contract existed, but no official source gives one now.
+    of the selected model. No official source gives a current contract.
   - `gemma-4-*`: the pricing page lists free tier only, with paid input, output and caching "Not available". Zero
     rates here would not be a paid-deployment claim.
   - `gemini-2.5-pro` after 2026-12-01: target `gemini-3.8-flash` is itself date-scheduled, so one row cannot
     carry the schedule. A date-tier model would touch `models.ts` and the request-time cost surface (#83), and
-    time-windowed prices stay unknown by owner decision (#55/#56). Feed `expiration_date`/`deprecated_at` are ignored.
+    time-windowed prices stay unknown (#55/#56), and the feed's `expiration_date`/`deprecated_at` fields are ignored.
   - Archived IDs such as `gemini-3-pro-preview`, `gemini-2.5-pro-preview-03-25`, `-05-06`, `-06-05` and the
     2.0 family are listed as shut down with no pricing section, and are absent from the bundled catalogue.
   - Image-output, live-audio, TTS, embedding and agent IDs have per-unit meters the counters cannot express.
-  `gemini-4-carbon` and `gemini-4-hydrogen` are priced on the page but absent from the bundled catalogue.
+
+- `gemini-4-carbon` and `gemini-4-hydrogen` are priced on the page but absent from the bundled catalogue.
 
 Generation and precedence:
 

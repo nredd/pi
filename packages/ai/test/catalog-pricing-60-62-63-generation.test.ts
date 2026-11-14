@@ -21,7 +21,10 @@ it("hydrates exact family assessments into shards and JSON", () => {
 			if (String(url) === 'https://models.dev/api.json') return Response.json({
 				cerebras: {models: {'gpt-oss-120b': {id:'gpt-oss-120b',tool_call:true,cost:{input:999,output:999}}}},
 				xai: {models: {'grok-4.7': {id:'grok-4.7',tool_call:true,cost:{input:999,output:999}}}},
-				google: {models: {'gemini-3.5-flash-lite': {id:'gemini-3.5-flash-lite',tool_call:true,cost:{input:999,output:999}}}}
+				google: {models: {
+					'gemini-3.5-flash-lite': {id:'gemini-3.5-flash-lite',tool_call:true,cost:{input:999,output:999}},
+					'gemini-4-argon': {id:'gemini-4-argon',tool_call:true,cost:{input:999,output:999}}
+				}}
 			});
 			if (String(url).includes('models.dev/models.json')) return Response.json({});
 			if (String(url).includes('openrouter.ai/api/v1/models')) return Response.json({data:[]});
@@ -48,6 +51,11 @@ it("hydrates exact family assessments into shards and JSON", () => {
 			const shard = JSON.parse(readFileSync(join(isolated, `src/providers/data/${provider}.json`), "utf8"));
 			expect(shard[api][`chat:${id}`].cost).toEqual(cost);
 		}
+		// A dated Google contract keeps its end date through generation, not only in the runtime overlay.
+		const argon = legacy.google["gemini-4-argon"].cost;
+		expect(argon).toMatchObject({ input: 2, assessment: { status: "verified", retiredOn: "2026-12-01" } });
+		const google = JSON.parse(readFileSync(join(isolated, "src/providers/data/google.json"), "utf8"));
+		expect(google["google-generative-ai"]["chat:gemini-4-argon"].cost).toEqual(argon);
 		const hydrated = run(["--data-only"]);
 		expect(hydrated.status, `${hydrated.stdout}\n${hydrated.stderr}`).toBe(0);
 		const shard = JSON.parse(readFileSync(join(isolated, "src/providers/data/xai.json"), "utf8"));

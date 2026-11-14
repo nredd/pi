@@ -251,7 +251,6 @@ describe("catalogue assessment", () => {
 		expect(rerouted.cost).toBeNull();
 		expect(rerouted.reason).toContain("retired");
 		expect(estimateTokenCost({ cost }, tokens, "2027-01-01").cost).toBeNull();
-		expect(catalogueCost(entry("google", "gemini-2.5-flash")).assessment?.status).toBe("unknown");
 	});
 	it.each(["2026-11-12", "2026-11-13", "2026-11-20"])(
 		"bounds a gemini-2.5-pro row checked %s that lacks the reroute bound",

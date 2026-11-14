@@ -1,6 +1,15 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+	copyFileSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	realpathSync,
+	rmSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -136,6 +145,30 @@ test("check exits non-zero locally; GitHub Actions skips only the hook check", (
 	}
 	const usage = spawnSync(process.execPath, [script, "bogus"], { encoding: "utf8", env });
 	assert.equal(usage.status, 2);
+});
+
+// #94: argv[1] behind a symlinked prefix (macOS /tmp, or TMPDIR unset under `env -i`) must still run main.
+test("check runs as main when the script path is behind a symlink, with and without TMPDIR", (t) => {
+	const real = mkdtempSync(join(realpathSync(tmpdir()), "pi-worktree-real-"));
+	const link = `${real}-link`;
+	symlinkSync(real, link);
+	t.after(() => {
+		rmSync(link, { force: true });
+		rmSync(real, { recursive: true, force: true });
+	});
+	execFileSync("git", ["init", "-q", real]);
+	mkdirSync(join(real, "scripts"));
+	mkdirSync(join(real, "packages/coding-agent"), { recursive: true });
+	copyFileSync(script, join(real, "scripts/worktree.mjs"));
+	copyFileSync(fileURLToPath(new URL("./npm-command.mjs", import.meta.url)), join(real, "scripts/npm-command.mjs"));
+	writeFileSync(join(real, "packages/coding-agent/package.json"), JSON.stringify({ version: "9.9.9" }));
+	execFileSync("git", ["-C", real, "config", "core.hooksPath", ".husky/_"]);
+	const viaLink = join(link, "scripts/worktree.mjs");
+	for (const env of [{ ...process.env, TMPDIR: link, GITHUB_ACTIONS: "" }, { PATH: process.env.PATH ?? "" }]) {
+		const result = spawnSync(process.execPath, [viaLink, "check"], { encoding: "utf8", env });
+		assert.equal(result.status, 1, result.stderr);
+		assert.match(result.stderr, /npm run worktree:setup/);
+	}
 });
 
 test("GITHUB_ACTIONS skips the hook check but keeps node_modules and data checks", (t) => {

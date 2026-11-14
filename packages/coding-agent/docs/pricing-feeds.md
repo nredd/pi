@@ -47,12 +47,31 @@ Supported slices:
   initial brackets inherit the published base rate until their first minimum.
 - Exact `alibaba/qwen-3-14b` has input/output 0.12/0.24 USD/million tokens. Its absent read
   and write fields are unavailable, not verified zero/free. `openai/gpt-6.1-sol` admits its
-  advertised Standard/base input, output and read tiers; all Gateway writes remain unavailable
-  because the REST write field alone does not establish TTL. Numeric compatibility fields
-  are retained separately from assessment eligibility.
+  advertised Standard/base input, output and read tiers. The Gateway REST write field alone
+  does not establish a TTL, so Gateway writes are unavailable by default. Exception, checked
+  2026-11-14 against the Gateway [caching docs](https://vercel.com/docs/ai-gateway/models-and-providers/prompt-caching):
+  Anthropic entries default to five minutes (omitted `cache_ttl`), written at 1.25x base input
+  (1h at 2x). An `anthropic/` row whose base rate and every bracket price writes at exactly 1.25x
+  input admits its write rate as the default 5m write only. The feed has no 1h write field, so
+  1h/12h counters and unknown lifetimes stay unavailable, and other vendors' writes are never
+  inferred from this. The page does not price Bedrock- or Vertex-routed Anthropic separately; that is not evidenced. Numeric compatibility fields are retained separately from assessment
+  eligibility.
+- Each verified row's conditions text names the published dimensions this baseline does not value
+  (`regional`, `fast`, `service_tiers`, `web_search`) so they are not read as absent.
 
 Remaining unknowns and excluded charges:
 
+- An unsupported condition is named in the assessment `reason`: UTC window/weekday overrides,
+  provider variation, peak pricing and each non-token field.
+- Not assessed, checked 2026-11-14: Gateway `deprecated_at` and OpenRouter `expiration_date`
+  are not mapped to `retiredOn`. OpenRouter documents `expiration_date` only as the "deprecation
+  date for the model endpoint", and no Gateway doc defines `deprecated_at`, so neither is
+  evidence of the last day a contract is billable. Candidates in the frozen snapshot include
+  Gateway `inception/mercury-2` (2026-11-15) and OpenRouter `openai/gpt-5` (2026-12-11).
+- OpenRouter rates move within a day: 8 of 310 archived rows differed between the 2026-11-13
+  snapshot and a 2026-11-14 fetch (Gateway: 0 of 263). The snapshot stays a dated baseline and
+  is not refreshed by this change. Gateway promotions (e.g. the GPT-5.6 Sol 50% discount, ended
+  2026-09-18) are not in the feed prices admitted here.
 - UTC/weekdays/overnight overrides, provider-varying or peak contracts, image/audio and other
   non-token rates, malformed/negative sentinel prices, missing exact operation IDs and image operations
   remain unknown. Explicit non-Standard Gateway selectors, e.g. `openai/gpt-4.1-fast`,

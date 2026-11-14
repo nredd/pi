@@ -571,7 +571,7 @@ const GEMINI_CONTRACTS: Record<string, GeminiContract> = {
 	},
 	"gemini-3.1-flash-lite": {
 		cost: { input: 0.25, output: 1.5, cacheRead: 0.025, cacheWrite: 0 },
-		note: `Deprecated with an earliest shutdown of 2027-05-07 (replacement gemini-3.5-flash-lite) and no announced price change. ${audioNote("$0.50", "$0.05")} ${storageNote("$1.00")}`,
+		note: `Listed with an earliest shutdown of 2027-05-07 (recommended replacement gemini-3.5-flash-lite) and no announced price change. ${audioNote("$0.50", "$0.05")} ${storageNote("$1.00")}`,
 	},
 	"gemini-3-flash-preview": {
 		cost: { input: 0.5, output: 3, cacheRead: 0.05, cacheWrite: 0 },
@@ -591,17 +591,19 @@ const GEMINI_CONTRACTS: Record<string, GeminiContract> = {
 /** Apply narrow official corrections before user overrides, never infer a provider from a model name. */
 export function catalogueCost(model: Pick<AnyModel, "provider" | "id" | "type" | "cost">): ModelCost {
 	const cost = catalogueCostUnbounded(model);
-	if (
-		(model.type ?? "chat") !== "chat" ||
-		model.provider !== "google" ||
-		model.id !== "gemini-2.5-pro" ||
-		cost.assessment?.status !== "verified"
-	)
+	if ((model.type ?? "chat") !== "chat" || model.provider !== "google" || cost.assessment?.status !== "verified")
 		return cost;
-	// Google reroutes this alias on this date; bound whatever verified row survives, including newer catalog rows.
+	// Google ends these prices on a fixed date; bound whatever verified row survives, including newer catalog rows.
+	const end =
+		model.id === "gemini-2.5-pro"
+			? GEMINI_25_PRO_REROUTE_DATE
+			: Object.hasOwn(GEMINI_CONTRACTS, model.id)
+				? GEMINI_CONTRACTS[model.id].retiredOn
+				: undefined;
+	if (end === undefined) return cost;
 	const { retiredOn } = cost.assessment;
-	if (retiredOn !== undefined && retiredOn <= GEMINI_25_PRO_REROUTE_DATE) return cost;
-	return { ...cost, assessment: { ...cost.assessment, retiredOn: GEMINI_25_PRO_REROUTE_DATE } };
+	if (retiredOn !== undefined && retiredOn <= end) return cost;
+	return { ...cost, assessment: { ...cost.assessment, retiredOn: end } };
 }
 
 function catalogueCostUnbounded(model: Pick<AnyModel, "provider" | "id" | "type" | "cost">): ModelCost {

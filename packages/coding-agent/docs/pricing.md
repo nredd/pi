@@ -154,8 +154,8 @@ Additional exact contracts, checked 2026-11-13:
   `gemini-3.8-flash` on 2026-12-01, but that target is itself date-scheduled, so the alias stays
   bounded rather than priced afterwards.
 - Also assessed from the same table, text/image/video input only (audio rates differ and are excluded):
-  `gemini-2.5-flash-lite` `0.10/0.40/0.01`, `gemini-3.1-flash-lite` `0.25/1.50/0.025` (deprecated, earliest
-  shutdown 2027-05-07, no price change announced), `gemini-3-flash-preview` `0.50/3.00/0.05`, and
+  `gemini-2.5-flash-lite` `0.10/0.40/0.01`, `gemini-3.1-flash-lite` `0.25/1.50/0.025` (listed with an earliest
+  shutdown of 2027-05-07, recommended replacement `gemini-3.5-flash-lite`, no price change announced), `gemini-3-flash-preview` `0.50/3.00/0.05`, and
   `gemini-3.1-pro-preview` plus `gemini-3.1-pro-preview-customtools` `2/12/0.20`, with `4/18/0.40` for the
   whole request above 200000 prompt tokens (`$4.50` per million token-hours storage excluded).
 - Still unassessed, each with evidence: `gemini-3.7-flash` and `gemini-3.5-flash` are documented as routed

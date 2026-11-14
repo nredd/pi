@@ -11,7 +11,7 @@ type AssistantUsage = {
 	output: number;
 	cacheRead: number;
 	cacheWrite: number;
-	cost: { total: number };
+	cost: { total: number; unpriced?: true };
 };
 
 function createSession(options: {
@@ -252,6 +252,36 @@ describe("FooterComponent width handling", () => {
 		const footer = new FooterComponent(session, createFooterData(1));
 
 		expect(stripAnsi(footer.render(120)[1])).toContain("$1.234 (sub)");
+	});
+
+	const pricedUsage = { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, cost: { total: 0.5 } };
+	const unpricedUsage = { ...pricedUsage, cost: { total: 0, unpriced: true as const } };
+
+	it("shows unknown, not $0.000, when every entry is unpriced", () => {
+		const session = createSession({ sessionName: "", usage: unpricedUsage });
+		const footer = new FooterComponent(session, createFooterData(1));
+		const line = stripAnsi(footer.render(120)[1]);
+		expect(line).toContain("unknown");
+		expect(line).not.toContain("$0.000");
+	});
+
+	it("shows the priced total plus the unpriced count", () => {
+		const session = createSession({
+			sessionName: "",
+			usage: pricedUsage,
+			toolUsage: unpricedUsage,
+			compactionUsage: unpricedUsage,
+		});
+		const footer = new FooterComponent(session, createFooterData(1));
+		expect(stripAnsi(footer.render(120)[1])).toContain("$0.500 + 2 unpriced");
+	});
+
+	it("keeps rendering old records without the marker as priced", () => {
+		const session = createSession({ sessionName: "", usage: pricedUsage });
+		const footer = new FooterComponent(session, createFooterData(1));
+		const line = stripAnsi(footer.render(120)[1]);
+		expect(line).toContain("$0.500");
+		expect(line).not.toContain("unpriced");
 	});
 
 	it("marks explicitly identified subscription auth", () => {

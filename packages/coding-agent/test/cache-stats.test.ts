@@ -1,4 +1,5 @@
-import type { AssistantMessage } from "@earendil-works/pi-ai";
+import type { AnyModel, AssistantMessage } from "@earendil-works/pi-ai";
+import { calculateCost, catalogueCost } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
 	collectCacheMisses,
@@ -8,6 +9,7 @@ import {
 } from "../src/core/cache-stats.ts";
 import type { SessionEntry } from "../src/core/session-manager.ts";
 
+const zeroRates = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
 const zeroCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
 
 const models: ModelPriceSource = {
@@ -135,12 +137,29 @@ describe("detectCacheMiss", () => {
 		expect(miss?.modelChanged).toBe(false);
 	});
 
-	// nredd/pi#83: a retired contract records zero cost; the fallback read price must not invent a miss cost.
-	it("reports no miss cost when the recorded cost is zeroed", () => {
+	// nredd/pi#83: cost comes from the real calculateCost, not a hand-built zero.
+	it("reports an unknown miss cost, not $0, when calculateCost marked the message unpriced", () => {
+		const retiredModel = {
+			provider: "anthropic",
+			id: "claude-sonnet-4-5",
+			type: "chat",
+			cost: catalogueCost({ provider: "anthropic", id: "claude-sonnet-4-5", type: "chat", cost: zeroRates }),
+		} as AnyModel;
 		const retired = assistant({ cacheWrite: 110_000, timestamp: 600_000 });
+		retired.usage.cost = calculateCost(retiredModel, retired.usage, "2026-12-01") as typeof retired.usage.cost;
+		expect(retired.usage.cost.unpriced).toBe(true);
+
 		const miss = detectCacheMiss([entry(turn1), entry(turn2)], retired, models);
-		expect(miss?.missedTokens).toBe(105_000);
-		expect(miss?.missedCost).toBe(0);
+		expect(miss).toMatchObject({ missedTokens: 105_000, missedCost: 0, costUnknown: true });
+		const totals = computeCacheWaste([entry(turn1), entry(turn2), entry(retired)], models);
+		expect(totals).toMatchObject({ missedCost: 0, unpricedMisses: 1, missCount: 1 });
+
+		// Same usage before retirement is priced and has a real miss cost.
+		const priced = assistant({ cacheWrite: 110_000, timestamp: 600_000 });
+		priced.usage.cost = calculateCost(retiredModel, priced.usage, "2026-11-29") as typeof priced.usage.cost;
+		const pricedMiss = detectCacheMiss([entry(turn1), entry(turn2)], priced, models);
+		expect(pricedMiss?.costUnknown).toBeUndefined();
+		expect(pricedMiss?.missedCost).toBeGreaterThan(0);
 	});
 
 	it("flags model switches on detected misses", () => {

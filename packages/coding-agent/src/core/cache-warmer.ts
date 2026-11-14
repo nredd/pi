@@ -69,10 +69,11 @@ function lastPromptTokens(entries: SessionEntry[]): number {
 	return 0;
 }
 
+/** Request-time price of `tokens`; `unpriced` when the catalogue contract is retired (cost unknown, not 0). */
 function price(
 	model: Model<Api>,
 	tokens: Partial<Pick<Usage, "input" | "output" | "cacheRead" | "cacheWrite">>,
-): number {
+): { cost: number; unpriced: boolean } {
 	const usage: Usage = {
 		input: 0,
 		output: 0,
@@ -82,7 +83,8 @@ function price(
 		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 		...tokens,
 	};
-	return calculateCost(model, usage).total;
+	const cost = calculateCost(model, usage);
+	return { cost: cost.total, unpriced: cost.unpriced === true };
 }
 
 export type CacheWarmingAction = "warm" | "stop";
@@ -101,6 +103,12 @@ export interface CacheWarmingDecision {
 	expectedSavings: number;
 	/** False when the prompt size or the model's prices are unknown. */
 	economicsAvailable: boolean;
+	/**
+	 * True when the model's price contract is retired (`retiredOn`): the provider still bills, at rates
+	 * the catalogue does not assess. Warming stops rather than spend real money on an unknown price or
+	 * approximate it with the retired rates of a different contract.
+	 */
+	unpriced?: true;
 	/** Pi's decision: "warm" when `expectedSavings` is at least $0.05. */
 	action: CacheWarmingAction;
 }
@@ -191,7 +199,7 @@ export class CacheWarmer {
 		const decision = this.evaluate(run);
 		const refreshing = run.timer === undefined;
 		if (!decision.economicsAvailable && !refreshing) {
-			return { state: "inactive", reason: "cache economics unavailable" };
+			return { state: "inactive", reason: unavailableReason(decision) };
 		}
 		return {
 			state: refreshing ? "refreshing" : "scheduled",
@@ -322,7 +330,7 @@ export class CacheWarmer {
 				? "stopped by extension"
 				: decision.economicsAvailable
 					? "expected savings below threshold"
-					: "cache economics unavailable";
+					: unavailableReason(decision);
 			this.stop(reason, { decision, extensionOverride });
 			return;
 		}
@@ -378,15 +386,16 @@ export class CacheWarmer {
 	private evaluate(run: ActiveRun): CacheWarmingDecision {
 		const model = run.model;
 		const promptTokens = lastPromptTokens(this.sessionManager.getBranch());
-		const cacheHitCost = price(model, { cacheRead: promptTokens });
-		const cacheMissCost = price(
-			model,
-			model.cost.cacheWrite > 0 ? { cacheWrite: promptTokens } : { input: promptTokens },
-		);
-		const warmCost = price(model, { cacheRead: promptTokens, output: 1 });
+		const hit = price(model, { cacheRead: promptTokens });
+		const miss = price(model, model.cost.cacheWrite > 0 ? { cacheWrite: promptTokens } : { input: promptTokens });
+		const warm = price(model, { cacheRead: promptTokens, output: 1 });
+		const unpriced = hit.unpriced || miss.unpriced || warm.unpriced;
+		const cacheHitCost = hit.cost;
+		const cacheMissCost = miss.cost;
+		const warmCost = warm.cost;
 		const missCost = Math.max(0, cacheMissCost - cacheHitCost);
 		const continuationProbability = run.phase === "idle" ? IDLE_CONTINUATION_PROBABILITY : 1;
-		const economicsAvailable = promptTokens > 0 && (cacheHitCost > 0 || cacheMissCost > 0);
+		const economicsAvailable = !unpriced && promptTokens > 0 && (cacheHitCost > 0 || cacheMissCost > 0);
 		const expectedSavings = continuationProbability * missCost - warmCost;
 		return {
 			phase: run.phase,
@@ -395,6 +404,7 @@ export class CacheWarmer {
 			continuationProbability,
 			expectedSavings,
 			economicsAvailable,
+			...(unpriced ? { unpriced: true as const } : {}),
 			action: expectedSavings >= CACHE_WARMING_MINIMUM_EXPECTED_SAVINGS ? "warm" : "stop",
 		};
 	}
@@ -404,8 +414,12 @@ function formatDollars(value: number): string {
 	return value < 0 ? `-$${Math.abs(value).toFixed(3)}` : `$${value.toFixed(3)}`;
 }
 
+function unavailableReason(decision: CacheWarmingDecision): string {
+	return decision.unpriced ? "price contract retired (unpriced)" : "cache economics unavailable";
+}
+
 function formatCacheWarmingEconomics(decision: CacheWarmingDecision): string {
-	if (!decision.economicsAvailable) return "cache economics unavailable";
+	if (!decision.economicsAvailable) return unavailableReason(decision);
 	const probability = Math.round(decision.continuationProbability * 100);
 	const probabilityText =
 		decision.phase === "streaming"
@@ -448,6 +462,7 @@ export function formatCacheWarmingStatus(status: CacheWarmingStatus, now = Date.
 /** One-line transcript text for persisted cache-warming usage. */
 export function formatCacheWarmingUsage(entry: UsageEntry): string {
 	const note = entry.note ? ` (${entry.note})` : "";
+	if (entry.usage.cost.unpriced) return `Cache warmed${note}: unpriced`;
 	const cost = entry.usage.cost.total.toFixed(6).replace(/(\.\d{3}\d*?)0+$/, "$1");
 	return `Cache warmed${note}: $${cost}`;
 }

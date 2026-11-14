@@ -241,6 +241,26 @@ describe("AgentSession.getSessionStats", () => {
 		}
 	});
 
+	it("excludes unpriced usage from cost and reports the counts", async () => {
+		const { session, sessionManager } = await createSession();
+		try {
+			const cost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
+			sessionManager.appendMessage(createUserMessage("hello", 1));
+			sessionManager.appendMessage({
+				...createAssistantMessage("a", 10, 2),
+				usage: { ...createUsage(10), cost: { ...cost, total: 0.5 } },
+			});
+			sessionManager.appendMessage({
+				...createAssistantMessage("b", 10, 3),
+				usage: { ...createUsage(10), cost: { ...cost, unpriced: true } },
+			});
+			syncAgentMessages(session, sessionManager);
+			expect(session.getSessionStats()).toMatchObject({ cost: 0.5, pricedCount: 1, unpricedCount: 1 });
+		} finally {
+			session.dispose();
+		}
+	});
+
 	it("includes tool result usage in session totals", async () => {
 		const { session, sessionManager } = await createSession();
 

@@ -364,7 +364,11 @@ export interface SessionStats {
 		cacheWrite: number;
 		total: number;
 	};
+	/** Priced spend only; unpriced usage is excluded (see `unpricedCount`), never counted as $0. */
 	cost: number;
+	/** Entries recorded as priced / as unpriced (catalogue contract retired). */
+	pricedCount: number;
+	unpricedCount: number;
 	contextUsage?: ContextUsage;
 }
 
@@ -5058,6 +5062,8 @@ export class AgentSession {
 				total: usageTotals.input + usageTotals.output + usageTotals.cacheRead + usageTotals.cacheWrite,
 			},
 			cost: usageTotals.cost,
+			pricedCount: usageTotals.pricedCount,
+			unpricedCount: usageTotals.unpricedCount,
 			contextUsage: this.getContextUsage(),
 		};
 	}

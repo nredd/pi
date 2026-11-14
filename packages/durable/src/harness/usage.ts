@@ -34,7 +34,12 @@ export async function recordUsage(
 	const total = Object.hasOwn(totals, key) ? totals[key] : undefined;
 	// Providers may leave optional counters `undefined`; drafts take strict JSON.
 	if (total === undefined)
-		totals[key] = copyJson(usage, { omitUndefinedProperties: true }) as JsonRepresentation<Usage>;
+		totals[key] = copyJson(
+			usage.cost.unpriced
+				? { ...usage, cost: { ...usage.cost, unpricedCalls: usage.cost.unpricedCalls ?? 1 } }
+				: usage,
+			{ omitUndefinedProperties: true },
+		) as JsonRepresentation<Usage>;
 	else addUsage(total, usage);
 }
 
@@ -52,6 +57,13 @@ export function addUsage(total: Draft<Usage> | Usage, usage: Usage): void {
 	total.cost.cacheRead += usage.cost.cacheRead;
 	total.cost.cacheWrite += usage.cost.cacheWrite;
 	total.cost.total += usage.cost.total;
+	// Unpriced usage adds 0 to the totals, which are then a priced subtotal; keep the marker and a count
+	// so a reader never mistakes the sum for the full spend.
+	if (usage.cost.unpriced) {
+		total.cost.unpriced = true;
+		total.cost.unpricedCalls = (total.cost.unpricedCalls ?? 0) + (usage.cost.unpricedCalls ?? 1);
+		total.cost.reason ??= usage.cost.reason;
+	}
 }
 
 /** Add every bucket of `state` into `sum`. */

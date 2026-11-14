@@ -1,6 +1,8 @@
+import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import { catalogueCost, isPricingRetired } from "../src/catalog-pricing.ts";
-import { calculateCost } from "../src/models.ts";
+import { calculateCost, estimateTokenCost } from "../src/models.ts";
+import { PricingAssessmentSchema } from "../src/providers/model-schema.ts";
 import type { AnyModel, ModelCost, Usage } from "../src/types.ts";
 
 const zero = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
@@ -32,7 +34,8 @@ describe("calculateCost respects retiredOn", () => {
 		expect(calculateCost(m, usage(), before).total).toBeGreaterThan(0);
 		for (const asOf of [retiredOn, "2099-01-01"]) {
 			const retired = calculateCost(m, usage(), asOf);
-			expect(retired).toEqual({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 });
+			expect(retired).toMatchObject({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0, unpriced: true });
+			expect(retired.reason).toMatch(/retired/);
 		}
 		if (provider === "anthropic") expect(calculateCost(m, usage(), before).total).toBeCloseTo(total);
 	});
@@ -45,16 +48,47 @@ describe("calculateCost respects retiredOn", () => {
 		expect(u.cost.total).toBe(0);
 	});
 
-	it("keeps legacy arithmetic without a bound or with a malformed one", () => {
-		const base = model("anthropic", "claude-sonnet-4-5");
+	it("marks only retired costs unpriced, and the marker survives a JSON round trip", () => {
+		const m = model("google", "gemini-2.5-pro");
+		const priced = calculateCost(m, usage(), "2026-11-30");
+		expect(priced.unpriced).toBeUndefined();
+		expect("unpriced" in priced).toBe(false);
+		const u = usage();
+		calculateCost(m, u, "2026-12-01");
+		expect(JSON.parse(JSON.stringify(u)).cost).toEqual(u.cost);
+		expect(JSON.parse(JSON.stringify(u)).cost.unpriced).toBe(true);
+	});
+
+	it("rejects invalid calendar dates in retiredOn at validation", () => {
+		const base = {
+			status: "verified",
+			source: "s",
+			checkedAt: "2026-01-01",
+			unit: "usd-per-million-tokens",
+			conditions: "c",
+		};
+		for (const retiredOn of ["2026-02-30", "2026-13-01", "2026-00-10", "2026-04-31", "2025-02-29", "2100-02-29"])
+			expect(Value.Check(PricingAssessmentSchema, { ...base, retiredOn }), retiredOn).toBe(false);
+		for (const retiredOn of ["2026-11-30", "2028-02-29", "2000-02-29", "2026-12-31"])
+			expect(Value.Check(PricingAssessmentSchema, { ...base, retiredOn }), retiredOn).toBe(true);
+		expect(Value.Check(PricingAssessmentSchema, { ...base, checkedAt: "2026-02-30" })).toBe(false);
+	});
+
+	it("keeps legacy arithmetic without a bound", () => {
 		const unbounded = model("anthropic", "claude-opus-4-5");
 		expect(isPricingRetired(unbounded.cost, "2099-01-01")).toBe(false);
 		expect(calculateCost(unbounded, usage(), "2099-01-01").total).toBeGreaterThan(0);
+	});
+
+	it("fails closed on a malformed retiredOn, agreeing with estimateTokenCost", () => {
+		const base = model("anthropic", "claude-sonnet-4-5");
 		const malformed = {
 			...base,
 			cost: { ...base.cost, assessment: { ...base.cost.assessment, retiredOn: "2026-02-30" } },
 		} as AnyModel;
-		expect(isPricingRetired(malformed.cost as ModelCost, "2099-01-01")).toBe(false);
-		expect(calculateCost(malformed, usage(), "2099-01-01").total).toBeGreaterThan(0);
+		const tokens = { input: 1, output: 1, cacheRead: 0, cacheWrite: 0 };
+		expect(estimateTokenCost(malformed, tokens, "2026-01-01").cost).toBeNull();
+		expect(isPricingRetired(malformed.cost as ModelCost, "2026-01-01")).toBe(true);
+		expect(calculateCost(malformed, usage(), "2026-01-01").unpriced).toBe(true);
 	});
 });

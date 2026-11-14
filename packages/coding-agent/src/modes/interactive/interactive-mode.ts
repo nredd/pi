@@ -123,7 +123,7 @@ import { isInstallTelemetryEnabled } from "../../core/telemetry.ts";
 import { withBuiltInRenderers } from "../../core/tools/renderers/index.ts";
 import type { TruncationResult } from "../../core/tools/truncate.ts";
 import { hasTrustRequiringProjectResources, ProjectTrustStore } from "../../core/trust-manager.ts";
-import { getUsageCostBreakdown } from "../../core/usage-totals.ts";
+import { formatUsageCostNote, formatUsageTotalsCost, getUsageCostBreakdown } from "../../core/usage-totals.ts";
 import { addMcpServerConfig, loadMcpConfig } from "../../extensions/mcp/config.ts";
 import { getChangelogPath, getNewEntries, normalizeChangelogLinks, parseChangelog } from "../../utils/changelog.ts";
 import { copyToClipboard, readClipboardFilePaths, readClipboardText } from "../../utils/clipboard.ts";
@@ -4247,7 +4247,7 @@ export class InteractiveMode {
 
 		const { usage } = notice;
 		const tokens = usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
-		const cost = usage.cost.total >= 0.01 ? ` (~$${usage.cost.total.toFixed(2)})` : "";
+		const cost = formatUsageCostNote(usage.cost);
 		const label = notice.kind === "compaction" ? "Compaction" : "Branch summary";
 		this.chatContainer.addChild(new Spacer(1));
 		this.chatContainer.addChild(
@@ -4317,7 +4317,11 @@ export class InteractiveMode {
 	private addCacheMissNotice(miss: CacheMiss): void {
 		if (miss.missedTokens < 20_000 && miss.missedCost < 0.1) return;
 
-		const cost = miss.missedCost >= 0.01 ? ` (~$${miss.missedCost.toFixed(2)})` : "";
+		const cost = miss.costUnknown
+			? " (cost unknown, unpriced)"
+			: miss.missedCost >= 0.01
+				? ` (~$${miss.missedCost.toFixed(2)})`
+				: "";
 		const reBilled = `${formatTokens(miss.missedTokens)} tokens re-billed${cost}`;
 		let label = "Cache miss";
 		if (miss.modelChanged) {
@@ -6907,18 +6911,21 @@ export class InteractiveMode {
 				info += `${theme.fg("dim", "Refresh cost:")} $${decision.warmCost.toFixed(3)}\n`;
 			}
 
-			if (stats.cost > 0 || cacheWaste.missedTokens > 0) {
+			const costTotal = formatUsageTotalsCost(stats);
+			if (costTotal !== undefined || cacheWaste.missedTokens > 0) {
 				info += `\n${theme.bold("Cost")}\n`;
-				info += `${theme.fg("dim", "Total:")} $${stats.cost.toFixed(3)}`;
+				info += `${theme.fg("dim", "Total:")} ${costTotal ?? "$0.000"}`;
 				// A single entry repeats the total, unless it names a model other than the selected one.
 				if (usageBreakdown.length > 1 || usageBreakdown[0]?.key !== selectedModelKey) {
 					for (const entry of usageBreakdown) {
-						info += `\n  ${theme.fg("dim", `${entry.key}:`)} $${entry.cost.toFixed(3)} ${theme.fg("dim", `(${formatTokens(entry.tokens)} tokens)`)}`;
+						info += `\n  ${theme.fg("dim", `${entry.key}:`)} ${formatUsageTotalsCost({ cost: entry.cost, pricedCount: entry.priced ?? 1, unpricedCount: entry.unpriced ?? 0 }) ?? `$${entry.cost.toFixed(3)}`} ${theme.fg("dim", `(${formatTokens(entry.tokens)} tokens)`)}`;
 					}
 				}
 				if (cacheWaste.missedTokens > 0) {
 					const missLabel = cacheWaste.missCount === 1 ? "1 miss" : `${cacheWaste.missCount} misses`;
-					const detail = `${cacheWaste.missedTokens.toLocaleString()} tokens, ${missLabel}`;
+					const unknown =
+						cacheWaste.unpricedMisses > 0 ? `, ${cacheWaste.unpricedMisses} unpriced (cost unknown)` : "";
+					const detail = `${cacheWaste.missedTokens.toLocaleString()} tokens, ${missLabel}${unknown}`;
 					info +=
 						cacheWaste.missedCost >= 0.0001
 							? `\n${theme.fg("dim", "Cache Re-billed:")} $${cacheWaste.missedCost.toFixed(3)} ${theme.fg("dim", `(${detail})`)}`

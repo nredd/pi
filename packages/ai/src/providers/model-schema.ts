@@ -42,6 +42,10 @@ export const ModelCostTierSchema = Type.Object({
 	}),
 	...ModelCostRatesProperties,
 });
+/** `YYYY-MM-DD` restricted to real calendar dates (month/day ranges and leap years), so `2026-02-30` fails. */
+export const CALENDAR_DATE_PATTERN =
+	"^(?:\\d{4}-(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|\\d{4}-(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|\\d{4}-02-(?:0[1-9]|1\\d|2[0-8])|(?:\\d\\d(?:0[48]|[2468][048]|[13579][26])|(?:[02468][048]|[13579][26])00)-02-29)$";
+
 export const PricingAssessmentSchema = Type.Union([
 	Type.Object({
 		status: Type.Literal("unknown"),
@@ -56,13 +60,13 @@ export const PricingAssessmentSchema = Type.Union([
 	Type.Object({
 		status: Type.Enum(["verified", "free"]),
 		source: Type.String({ minLength: 1 }),
-		checkedAt: Type.String({ pattern: "^\\d{4}-\\d{2}-\\d{2}$" }),
+		checkedAt: Type.String({ pattern: CALENDAR_DATE_PATTERN }),
 		unit: Type.Literal("usd-per-million-tokens"),
 		conditions: Type.String({ minLength: 1 }),
 		unavailable: Type.Optional(Type.Array(Type.Enum(["input", "output", "cacheRead", "cacheWrite"]))),
 		maxContextTokens: Type.Optional(Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER })),
 		maxOutputTokens: Type.Optional(Type.Integer({ minimum: 1, maximum: Number.MAX_SAFE_INTEGER })),
-		retiredOn: Type.Optional(Type.String({ pattern: "^\\d{4}-\\d{2}-\\d{2}$" })),
+		retiredOn: Type.Optional(Type.String({ pattern: CALENDAR_DATE_PATTERN })),
 	}),
 ]);
 

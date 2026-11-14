@@ -855,11 +855,17 @@ export function pricingToday(): string {
 	return new Date().toISOString().slice(0, 10);
 }
 
-/** True when the assessed contract is bounded by a well-formed `retiredOn` on or before `asOf`. */
+/**
+ * True when the assessed contract is bounded by a `retiredOn` on or before `asOf`. A present but
+ * malformed `retiredOn` (or `asOf`) fails closed as retired, the same answer `estimateTokenCost` gives
+ * ("Invalid pricing metadata"), so the two never disagree. Schema validation rejects such dates at load.
+ */
 export function isPricingRetired(cost: ModelCost, asOf: string = pricingToday()): boolean {
 	const assessment = cost.assessment;
 	const retiredOn = assessment && assessment.status !== "unknown" ? assessment.retiredOn : undefined;
-	return typeof retiredOn === "string" && validDate(retiredOn) && validDate(asOf) && asOf >= retiredOn;
+	if (retiredOn === undefined) return false;
+	if (typeof retiredOn !== "string" || !validDate(retiredOn) || !validDate(asOf)) return true;
+	return asOf >= retiredOn;
 }
 
 export interface PricingTokens {

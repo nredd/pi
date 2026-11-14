@@ -1208,12 +1208,21 @@ export function hasApi<TApi extends Api>(model: AnyModel, api: TApi): model is M
 
 /**
  * Request-time cost. Past the contract's `retiredOn` the numeric rates no longer describe what the
- * provider bills, so cost is zero (unpriced), matching `estimateTokenCost`; `Usage.cost` has no null.
- * `asOf` is a UTC `YYYY-MM-DD` date, injectable for tests.
+ * provider bills, and the successor contract is not assessed, so the cost is unknown: every field is 0
+ * and `unpriced: true` marks it. A bare 0 would record real spend as free. Matches `estimateTokenCost`,
+ * which returns null. `asOf` is a UTC `YYYY-MM-DD` date, injectable for tests.
  */
 export function calculateCost(model: AnyModel, usage: Usage, asOf?: string): Usage["cost"] {
 	if (isPricingRetired(model.cost, asOf)) {
-		Object.assign(usage.cost, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 });
+		usage.cost = {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			total: 0,
+			unpriced: true,
+			reason: "Price contract retired; the successor contract is not assessed.",
+		};
 		return usage.cost;
 	}
 	return calculateTokenCost(model.cost, usage);

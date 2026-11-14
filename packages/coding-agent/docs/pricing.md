@@ -20,7 +20,10 @@ Catalogue pricing:
     1.25/10/0.125) and so the expected-savings test would compare two wrong numbers.
   - On an aggregate `Usage` (`combineUsage`, durable ledger) `unpriced` means some summed requests
     were unpriced and the totals are a priced subtotal; the ledger also counts them in
-    `unpricedCalls`.
+    `unpricedCalls` and the priced ones in `pricedCalls`.
+  - A request counts as priced only with billable tokens or a nonzero cost. A zero-usage request
+    (for example one that failed before `message_start`) is neither priced nor unpriced, so it
+    never turns a total into `$0.000 + N unpriced`. A free priced model still counts as priced.
   - Session files and exports serialize the marker as-is. Older records without it are priced.
 - Before `retiredOn`, `cost` retains numeric request-time arithmetic for existing callers. Recorded transcript
   costs are historical observations; updating this catalogue does not rewrite or reprice them.

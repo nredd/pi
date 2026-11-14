@@ -479,6 +479,8 @@ export interface Usage {
 		reason?: string;
 		/** Aggregates only (`combineUsage`, durable ledger): how many summed requests were unpriced. Absent means 1. */
 		unpricedCalls?: number;
+		/** Aggregates with `unpricedCalls` only: how many summed requests were priced (billable tokens or nonzero cost). */
+		pricedCalls?: number;
 	};
 }
 

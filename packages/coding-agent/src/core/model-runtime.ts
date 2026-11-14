@@ -99,6 +99,18 @@ import {
 	withVirtualModels,
 } from "./virtual-models.ts";
 
+/** One full availability check, not yet written to the snapshot. */
+interface AvailabilityPass {
+	/** Copy of `providerGeneration` when the pass began; a provider absent from it was untouched (generation 0). */
+	generations: ReadonlyMap<string, number>;
+	available: Model<Api>[];
+	checks: [string, AuthCheck | undefined][];
+	storedProviders: Set<string>;
+}
+
+/** Most newer availability passes one awaited refresh waits for before resolving. */
+const MAX_SUPERSEDING_PASS_WAITS = 4;
+
 /**
  * A provider rejecting the request's credentials: HTTP 401/403 from `onResponse`, or, when an
  * SDK adapter throws before a response, the status it leads its message with or names, or a
@@ -235,6 +247,15 @@ export class ModelRuntime implements Models {
 	};
 	private availabilityRefreshSeq = 0;
 	private availabilityErrorSeq = 0;
+	/** Seq of the last full pass written to the snapshot. */
+	private lastWrittenPassSeq = 0;
+	/**
+	 * Per-provider change counter, bumped when a provider is registered, unregistered or refreshed on
+	 * its own. A full pass only writes entries for providers whose generation is unchanged since it began.
+	 */
+	private readonly providerGeneration = new Map<string, number>();
+	/** The most recently queued full availability pass; later passes supersede earlier ones. */
+	private latestAvailabilityPass: { seq: number; settled: Promise<void> } | undefined;
 	private readonly providerAvailabilitySeq = new Map<string, number>();
 	private availabilityError: string | undefined;
 	private readonly credentialOperations = new Map<string, Promise<unknown>>();
@@ -381,8 +402,10 @@ export class ModelRuntime implements Models {
 		};
 	}
 
-	private async runAvailabilityRefresh(seq: number, errorSeq: number, signal: AbortSignal): Promise<void> {
+	/** Check every provider known now. Pure: the caller decides whether the result may be written. */
+	private async checkAvailability(signal: AbortSignal): Promise<AvailabilityPass> {
 		const providers = this.models.getProviders();
+		const generations = new Map(this.providerGeneration);
 		const [available, checks, credentials] = await Promise.all([
 			this.models.getAvailable(undefined, { signal }),
 			Promise.all(
@@ -395,21 +418,68 @@ export class ModelRuntime implements Models {
 			),
 			this.credentials.list({ signal }),
 		]);
-		if (seq !== this.availabilityRefreshSeq) return;
-		const auth = new Map(checks);
+		return {
+			generations,
+			available: [...available],
+			checks,
+			storedProviders: new Set(credentials.map((entry) => entry.providerId)),
+		};
+	}
+
+	private generationOf(providerId: string): number {
+		return this.providerGeneration.get(providerId) ?? 0;
+	}
+
+	private touchProvider(providerId: string): void {
+		this.providerGeneration.set(providerId, this.generationOf(providerId) + 1);
+	}
+
+	/**
+	 * Write a pass. Entries are replaced only for providers the pass listed and that have not changed
+	 * since (no registration, unregistration or provider-level refresh). For any other provider the
+	 * pass's view is stale, so the current snapshot entry stays, or is dropped if the provider is gone (#101).
+	 */
+	private writeAvailability(pass: AvailabilityPass, seq: number): void {
+		const all = [...this.models.getModels()];
+		const known = new Set(this.models.getProviders().map((provider) => provider.id));
+		const fresh = (providerId: string) =>
+			known.has(providerId) && (pass.generations.get(providerId) ?? 0) === this.generationOf(providerId);
+		const keep = (providerId: string) => known.has(providerId) && !fresh(providerId);
+		const auth = new Map(pass.checks.filter(([providerId]) => fresh(providerId)));
 		const configuredProviders = new Set(
-			checks
+			[...auth]
 				.filter((entry): entry is [string, AuthCheck] => entry[1] !== undefined)
 				.map(([providerId]) => providerId),
 		);
+		for (const [providerId, check] of this.snapshot.auth) {
+			if (keep(providerId)) auth.set(providerId, check);
+		}
+		for (const providerId of this.snapshot.configuredProviders) {
+			if (keep(providerId)) configuredProviders.add(providerId);
+		}
+		const modelKey = (model: Model<Api>) => `${model.provider}/${model.id}`;
+		const availableKeys = new Set(pass.available.filter((model) => fresh(model.provider)).map(modelKey));
+		for (const model of this.snapshot.available) {
+			if (keep(model.provider)) availableKeys.add(modelKey(model));
+		}
+		// A credential may exist for a provider the runtime does not know yet, so this does not use `known`.
+		const unchanged = (providerId: string) =>
+			(pass.generations.get(providerId) ?? 0) === this.generationOf(providerId);
+		const storedProviders = new Set(
+			[...pass.storedProviders, ...this.snapshot.storedProviders].filter((providerId) =>
+				unchanged(providerId)
+					? pass.storedProviders.has(providerId)
+					: this.snapshot.storedProviders.has(providerId),
+			),
+		);
 		this.snapshot = {
-			all: [...this.models.getModels()],
-			available: [...available],
+			all,
+			available: all.filter((model) => availableKeys.has(modelKey(model))),
 			configuredProviders,
-			storedProviders: new Set(credentials.map((entry) => entry.providerId)),
+			storedProviders,
 			auth,
 		};
-		if (errorSeq === this.availabilityErrorSeq) this.availabilityError = undefined;
+		this.lastWrittenPassSeq = seq;
 	}
 
 	private queueAvailabilityRefresh(signal?: AbortSignal): Promise<void> {
@@ -419,17 +489,62 @@ export class ModelRuntime implements Models {
 		}
 		const errorSeq = ++this.availabilityErrorSeq;
 		const effectiveSignal = operationSignal(signal);
-		return this.runAvailabilityRefresh(seq, errorSeq, effectiveSignal).catch((error) => {
-			if (errorSeq === this.availabilityErrorSeq && !effectiveSignal.aborted) {
-				this.availabilityError = error instanceof Error ? error.message : String(error);
-			}
-			throw error;
-		});
+		const pass = this.checkAvailability(effectiveSignal).then(
+			(result) => {
+				// Only the newest pass writes; an older one waits to see whether a newer one does.
+				if (seq === this.availabilityRefreshSeq) {
+					this.writeAvailability(result, seq);
+					if (errorSeq === this.availabilityErrorSeq) this.availabilityError = undefined;
+				}
+				return result;
+			},
+			(error) => {
+				if (errorSeq === this.availabilityErrorSeq && !effectiveSignal.aborted) {
+					this.availabilityError = error instanceof Error ? error.message : String(error);
+				}
+				throw error;
+			},
+		);
+		this.latestAvailabilityPass = {
+			seq,
+			settled: pass.then(
+				() => undefined,
+				() => undefined,
+			),
+		};
+		return this.settleSupersededPass(pass, seq, errorSeq, effectiveSignal);
+	}
+
+	/**
+	 * A pass superseded by a newer one discards its result, so resolving right after it would hand
+	 * the awaiting caller a snapshot that is not yet current. Wait for the newer passes (their errors
+	 * are recorded by those passes, not rethrown here). If none of them wrote, because they failed or
+	 * were aborted, write this pass's own result rather than resolve without any write. Every wait is
+	 * on a strictly newer pass and a pass never waits on another, so this cannot deadlock; the loop is
+	 * capped so a steady stream of refreshes cannot hold a caller forever.
+	 */
+	private async settleSupersededPass(
+		passPromise: Promise<AvailabilityPass>,
+		seq: number,
+		errorSeq: number,
+		signal: AbortSignal,
+	): Promise<void> {
+		const pass = await passPromise;
+		let waitedSeq = seq;
+		for (let i = 0; i < MAX_SUPERSEDING_PASS_WAITS && !signal.aborted; i++) {
+			const latest = this.latestAvailabilityPass;
+			if (!latest || latest.seq <= waitedSeq) break;
+			waitedSeq = latest.seq;
+			await raceWithAbortSignal(latest.settled, signal);
+		}
+		if (this.lastWrittenPassSeq >= seq || signal.aborted) return;
+		this.writeAvailability(pass, seq);
+		if (errorSeq === this.availabilityErrorSeq) this.availabilityError = undefined;
 	}
 
 	private async refreshProviderAvailability(providerId: string, signal: AbortSignal): Promise<void> {
-		// Invalidate any full availability pass that started before this credential change.
-		++this.availabilityRefreshSeq;
+		// A full pass that began before this keeps the provider's current entry. One that begins later is authoritative.
+		this.touchProvider(providerId);
 		const providerSeq = (this.providerAvailabilitySeq.get(providerId) ?? 0) + 1;
 		this.providerAvailabilitySeq.set(providerId, providerSeq);
 		const errorSeq = ++this.availabilityErrorSeq;
@@ -1109,6 +1224,7 @@ export class ModelRuntime implements Models {
 		if (!provider.id.trim()) throw new Error("Provider id must not be empty.");
 		this.extensionProviders.delete(provider.id);
 		this.nativeExtensionProviders.set(provider.id, provider);
+		this.touchProvider(provider.id);
 		this.recomposeProvider(provider.id);
 		this.updateModelSnapshot();
 		this.markProvisionallyConfigured(
@@ -1130,10 +1246,18 @@ export class ModelRuntime implements Models {
 		type: AuthType,
 	): void {
 		if (!this.snapshot.storedProviders.has(providerId) && !configuredStatus?.configured) return;
+		this.markConfigured(providerId, { type, source: "configured provider" });
+	}
+
+	/**
+	 * Mark a provider configured ahead of its availability check. A pass already in flight never
+	 * listed it, so its write keeps this entry; the next pass that lists it replaces it.
+	 */
+	private markConfigured(providerId: string, check: AuthCheck): void {
 		const configuredProviders = new Set(this.snapshot.configuredProviders).add(providerId);
 		const auth = new Map(this.snapshot.auth);
 		// Never clobber a real check result.
-		if (!auth.get(providerId)) auth.set(providerId, { type, source: "configured provider" });
+		if (!auth.get(providerId)) auth.set(providerId, check);
 		this.snapshot = {
 			...this.snapshot,
 			auth,
@@ -1155,6 +1279,7 @@ export class ModelRuntime implements Models {
 			if (value !== undefined) (effective as Record<string, unknown>)[key] = value;
 		}
 		this.extensionProviders.set(providerId, effective);
+		this.touchProvider(providerId);
 		this.recomposeProvider(providerId);
 		this.updateModelSnapshot();
 		this.markProvisionallyConfigured(
@@ -1168,6 +1293,7 @@ export class ModelRuntime implements Models {
 	unregisterProvider(providerId: string): void {
 		this.extensionProviders.delete(providerId);
 		this.nativeExtensionProviders.delete(providerId);
+		this.touchProvider(providerId);
 		this.recomposeProvider(providerId);
 		this.updateModelSnapshot();
 		void this.refresh({ allowNetwork: false });
@@ -1191,12 +1317,11 @@ export class ModelRuntime implements Models {
 			route: (request, ctx) => definition.route(request, ctx),
 		});
 		this.virtualModels.set(providerId, models);
+		this.touchProvider(providerId);
 		if (!this.recomposeProvider(providerId) && !this.snapshot.configuredProviders.has(providerId)) {
 			// A provider of only virtual models needs no credentials. Mark it configured now: session
 			// restore checks auth before the refresh below lands.
-			const auth = new Map(this.snapshot.auth).set(providerId, { type: "api_key", source: "virtual" });
-			const configuredProviders = new Set(this.snapshot.configuredProviders).add(providerId);
-			this.snapshot = { ...this.snapshot, auth, configuredProviders };
+			this.markConfigured(providerId, { type: "api_key", source: "virtual" });
 		}
 		this.updateModelSnapshot();
 		void this.refresh({ allowNetwork: false });
@@ -1206,6 +1331,7 @@ export class ModelRuntime implements Models {
 		const models = this.virtualModels.get(providerId);
 		if (!models?.delete(id)) return;
 		if (models.size === 0) this.virtualModels.delete(providerId);
+		this.touchProvider(providerId);
 		this.recomposeProvider(providerId);
 		this.updateModelSnapshot();
 		void this.refresh({ allowNetwork: false });

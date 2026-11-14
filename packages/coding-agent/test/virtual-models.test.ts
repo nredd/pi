@@ -9,7 +9,7 @@ import {
 	InMemoryModelsStore,
 	type Model,
 } from "@earendil-works/pi-ai";
-import { afterEach, beforeEach, describe, expect, it, onTestFinished } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.ts";
 import { ModelRuntime } from "../src/core/model-runtime.ts";
 import { createAgentSession } from "../src/core/sdk.ts";
@@ -324,6 +324,63 @@ describe("createAgentSession with virtual models", () => {
 
 		expect(modelFallbackMessage).toBeUndefined();
 		expect(session.model).toMatchObject({ provider: "late", id: "auto" });
+	});
+
+	it("starts on the saved virtual default registered while an older availability pass is in flight", async () => {
+		// #101: a pass that listed providers before the registration must not clear it.
+		const credentials = AuthStorage.inMemory();
+		const runtime = await ModelRuntime.create({
+			credentials,
+			modelsStore: new InMemoryModelsStore(),
+			modelsPath: null,
+			allowModelNetwork: false,
+		});
+		const faux = fauxProvider({ models: [{ id: "small", contextWindow: 1000, maxTokens: 100, input: ["text"] }] });
+		runtime.registerNativeProvider(faux.provider);
+		await runtime.refresh({ allowNetwork: false });
+		const list = credentials.list.bind(credentials);
+		const listed = Promise.withResolvers<void>();
+		const held = Promise.withResolvers<void>();
+		vi.spyOn(credentials, "list").mockImplementationOnce(async (options) => {
+			listed.resolve();
+			await held.promise;
+			return list(options);
+		});
+		const stale = runtime.refresh({ allowNetwork: false });
+		await listed.promise;
+		// The registration's own refresh reads models.json first; let the older pass land before it.
+		const refresh = runtime.refresh.bind(runtime);
+		vi.spyOn(runtime, "refresh").mockImplementationOnce(async (options) => {
+			await stale;
+			return refresh(options);
+		});
+
+		runtime.registerVirtualModel({
+			provider: "router",
+			id: "default",
+			name: "Default",
+			route: () => ({ model: runtime.getModel("faux", "small")!, thinkingLevel: "off" }),
+		});
+		held.resolve();
+		await stale;
+
+		expect(runtime.hasConfiguredAuth("router")).toBe(true);
+		const { session, modelFallbackMessage } = await createAgentSession({
+			cwd: tempDir,
+			agentDir: tempDir,
+			modelRuntime: runtime,
+			sessionManager: SessionManager.inMemory(tempDir),
+			resourceLoader: createTestResourceLoader(),
+			settingsManager: SettingsManager.inMemory({
+				defaultProvider: "router",
+				defaultModel: "default",
+				compaction: { reserveTokens: 0 },
+			}),
+		});
+		onTestFinished(() => session.dispose());
+
+		expect(modelFallbackMessage).toBeUndefined();
+		expect(session.model).toMatchObject({ provider: "router", id: "default" });
 	});
 
 	it("falls back to the physical model when the virtual model is not registered", async () => {

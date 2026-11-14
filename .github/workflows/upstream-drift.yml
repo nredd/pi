@@ -1,0 +1,139 @@
+name: Upstream drift canary
+
+# Not a required check and never runs on pull requests. Read-only toward upstream: it only
+# fetches, trial-merges in a scratch worktree, and reports through one rolling issue.
+on:
+  schedule:
+    - cron: "23 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: upstream-drift
+  cancel-in-progress: false
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    env:
+      GH_TOKEN: ${{ github.token }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+
+      - name: Prepare scratch paths
+        run: |
+          echo "TRIAL_DIR=$RUNNER_TEMP/trial" >> "$GITHUB_ENV"
+          echo "WORK_DIR=$RUNNER_TEMP/drift" >> "$GITHUB_ENV"
+
+      - name: Fetch upstream (read-only)
+        run: |
+          git remote add upstream https://github.com/earendil-works/pi.git
+          git remote set-url --push upstream DISABLED
+          git fetch --no-tags upstream main
+
+      - name: Load rolling issue
+        id: issue
+        run: |
+          mkdir -p "$WORK_DIR"
+          gh issue list --label upstream-drift --state open --limit 1 --json number,body > "$WORK_DIR/issue.json"
+          echo "number=$(jq -r '.[0].number // empty' "$WORK_DIR/issue.json")" >> "$GITHUB_OUTPUT"
+          jq -r '.[0].body // empty' "$WORK_DIR/issue.json" > "$WORK_DIR/previous.md"
+
+      - name: Analyze drift and trial merge
+        id: analyze
+        run: |
+          node scripts/upstream-drift.mjs analyze \
+            --repo . --local-ref HEAD --upstream-ref upstream/main \
+            --trial-dir "$TRIAL_DIR" --keep-trial \
+            --previous-body "$WORK_DIR/previous.md" \
+            --out "$WORK_DIR/report.json"
+          echo "clean=$(jq -r '.merge.clean' "$WORK_DIR/report.json")" >> "$GITHUB_OUTPUT"
+
+      - name: Install system dependencies
+        if: steps.analyze.outputs.clean == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev fd-find ripgrep
+          sudo ln -s "$(which fdfind)" /usr/local/bin/fd
+
+      - name: Trial install
+        id: install
+        if: steps.analyze.outputs.clean == 'true'
+        continue-on-error: true
+        timeout-minutes: 10
+        working-directory: ${{ env.TRIAL_DIR }}
+        run: npm ci --ignore-scripts
+
+      - name: Trial build
+        id: build
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 20
+        working-directory: ${{ env.TRIAL_DIR }}
+        run: npm run build
+
+      - name: Trial check
+        id: check
+        if: steps.build.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 15
+        working-directory: ${{ env.TRIAL_DIR }}
+        run: npm run check
+
+      - name: Trial tests
+        id: test
+        if: steps.check.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 25
+        working-directory: ${{ env.TRIAL_DIR }}
+        run: ./test.sh
+
+      - name: Record trial outcomes
+        if: steps.analyze.outcome == 'success'
+        env:
+          INSTALL: ${{ steps.install.outcome }}
+          BUILD: ${{ steps.build.outcome }}
+          CHECK: ${{ steps.check.outcome }}
+          TEST: ${{ steps.test.outcome }}
+        run: |
+          jq -n --arg install "$INSTALL" --arg build "$BUILD" --arg check "$CHECK" --arg test "$TEST" \
+            '{install: $install, build: $build, check: $check, test: $test}' > "$WORK_DIR/trial.json"
+
+      - name: Render summary and decide trips
+        if: steps.analyze.outcome == 'success'
+        run: |
+          node scripts/upstream-drift.mjs finalize \
+            --report "$WORK_DIR/report.json" --trial "$WORK_DIR/trial.json" \
+            --previous-body "$WORK_DIR/previous.md" \
+            --body-out "$WORK_DIR/body.md" --comment-out "$WORK_DIR/comment.md" \
+            --run-url "$RUN_URL"
+          cat "$WORK_DIR/body.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Update rolling issue
+        if: steps.analyze.outcome == 'success'
+        env:
+          ISSUE_NUMBER: ${{ steps.issue.outputs.number }}
+        run: |
+          if [ -z "$ISSUE_NUMBER" ]; then
+            url="$(gh issue create --title "Upstream drift canary" --label upstream-drift --body-file "$WORK_DIR/body.md")"
+            ISSUE_NUMBER="${url##*/}"
+          else
+            gh issue edit "$ISSUE_NUMBER" --body-file "$WORK_DIR/body.md"
+          fi
+          if [ -f "$WORK_DIR/comment.md" ]; then
+            gh issue comment "$ISSUE_NUMBER" --body-file "$WORK_DIR/comment.md"
+          fi

@@ -135,6 +135,14 @@ describe("detectCacheMiss", () => {
 		expect(miss?.modelChanged).toBe(false);
 	});
 
+	// nredd/pi#83: a retired contract records zero cost; the fallback read price must not invent a miss cost.
+	it("reports no miss cost when the recorded cost is zeroed", () => {
+		const retired = assistant({ cacheWrite: 110_000, timestamp: 600_000 });
+		const miss = detectCacheMiss([entry(turn1), entry(turn2)], retired, models);
+		expect(miss?.missedTokens).toBe(105_000);
+		expect(miss?.missedCost).toBe(0);
+	});
+
 	it("flags model switches on detected misses", () => {
 		const otherModel = assistant({
 			cacheWrite: 110_000,

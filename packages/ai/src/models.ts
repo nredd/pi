@@ -1213,7 +1213,7 @@ export function hasApi<TApi extends Api>(model: AnyModel, api: TApi): model is M
  */
 export function calculateCost(model: AnyModel, usage: Usage, asOf?: string): Usage["cost"] {
 	if (isPricingRetired(model.cost, asOf)) {
-		usage.cost.input = usage.cost.output = usage.cost.cacheRead = usage.cost.cacheWrite = usage.cost.total = 0;
+		Object.assign(usage.cost, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 });
 		return usage.cost;
 	}
 	return calculateTokenCost(model.cost, usage);

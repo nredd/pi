@@ -3,11 +3,11 @@ Catalogue pricing:
 - `retiredOn` (UTC `YYYY-MM-DD`) bounds a contract: priced before it, unpriced on and after it.
   `estimateTokenCost` returns `{cost: null, reason}`. `calculateCost` has no null in `Usage.cost`,
   so it zeroes every field, the same value as other unpriced models, and the stored zero is NOT
-  a free price. Footer, session totals and exports sum the zero; `cache-warmer.ts` reports
+  a free price. Session totals, the footer and exports only sum or print recorded `cost.total`, so they show $0 (`cache-stats.ts` yields a zero miss cost); `cache-warmer.ts` reports
   "cache economics unavailable" and stops warming. Neither assumes a successor contract. A
   malformed `retiredOn` is ignored by `calculateCost` (legacy arithmetic) and rejected by the
   estimator. Both take an optional `asOf` date for tests, defaulting to today (UTC).
-- `cost` retains numeric request-time arithmetic for existing callers. Recorded transcript
+- Before `retiredOn`, `cost` retains numeric request-time arithmetic for existing callers. Recorded transcript
   costs are historical observations; updating this catalogue does not rewrite or reprice them.
 - `cost.assessment` distinguishes `verified`, verified `free`, and `unknown`. Missing
   assessment is unknown, even when every numeric field is zero. Unknown does not mean

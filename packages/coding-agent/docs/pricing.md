@@ -1,5 +1,12 @@
 Catalogue pricing:
 
+- `retiredOn` (UTC `YYYY-MM-DD`) bounds a contract: priced before it, unpriced on and after it.
+  `estimateTokenCost` returns `{cost: null, reason}`. `calculateCost` has no null in `Usage.cost`,
+  so it zeroes every field, the same value as other unpriced models, and the stored zero is NOT
+  a free price. Footer, session totals and exports sum the zero; `cache-warmer.ts` reports
+  "cache economics unavailable" and stops warming. Neither assumes a successor contract. A
+  malformed `retiredOn` is ignored by `calculateCost` (legacy arithmetic) and rejected by the
+  estimator. Both take an optional `asOf` date for tests, defaulting to today (UTC).
 - `cost` retains numeric request-time arithmetic for existing callers. Recorded transcript
   costs are historical observations; updating this catalogue does not rewrite or reprice them.
 - `cost.assessment` distinguishes `verified`, verified `free`, and `unknown`. Missing
@@ -55,9 +62,8 @@ Source audit, checked 2026-11-12:
   it (input/output/read). Storage at $4.50 per million tokens/hour is outside token value.
   Google reroutes this alias to `gemini-3.8-flash` billing on 2026-12-01, so its assessment
   carries `retiredOn: 2026-12-01`: priced through 2026-11-30, unpriced from that date. The
-  rerouted contract is not assessed here and `estimateTokenCost` never prices the old rates past
-  the date. Request-time `cost` arithmetic still uses the numeric rates; tracked in
-  [nredd/pi#83](https://github.com/nredd/pi/issues/83).
+  rerouted contract is not assessed here, so neither `estimateTokenCost` nor `calculateCost`
+  prices the old rates past the date (see `retiredOn` below).
 - Official AWS pricing [here](https://aws.amazon.com/bedrock/pricing/) supplies a chosen
   published baseline, not an account-specific invoice. AWS has no universal default region.
   This estimate uses the **Global Cross-region Inference**, **US East (N. Virginia)** selector,

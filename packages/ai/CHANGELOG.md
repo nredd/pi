@@ -12,6 +12,7 @@
 
 ### Fixed
 
+- `calculateCost` now zeroes request-time cost on and after a pricing contract's `retiredOn` (e.g. `google/gemini-2.5-pro`, Sonnet 4.5), matching `estimateTokenCost`, instead of billing the retired rates. Optional `asOf` date for tests ([#83](https://github.com/nredd/pi/issues/83)).
 - Reject completed OpenAI-family Responses snapshots containing assistant output without a matching finalized stream item, instead of silently returning an empty or partial successful message ([#45](https://github.com/nredd/pi/issues/45)).
 
 ## [1.3.0] - 2026-10-15

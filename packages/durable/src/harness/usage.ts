@@ -50,8 +50,8 @@ function withCallCounts(usage: Usage): Usage {
 
 /** Add every counter of `usage` to `total`; optional counters are added once either side reports them. */
 export function addUsage(total: Draft<Usage> | Usage, usage: Usage): void {
-	// Read before the sum: a total without a `pricedCalls` count (unmarked, or marked before it existed) counts
-	// as one request when it had billable tokens or cost.
+	// Read before the sum. Without a `pricedCalls` count, an unmarked total counts as one priced request with
+	// billable tokens or cost, and a marked one only with a nonzero subtotal (see `pricedCallsOf`).
 	const pricedBefore = pricedCallsOf(total);
 	total.input += usage.input;
 	total.output += usage.output;

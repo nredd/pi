@@ -481,7 +481,7 @@ export interface Usage {
 		unpricedCalls?: number;
 		/**
 		 * Set with `unpricedCalls` on aggregates (`combineUsage`, durable ledger): priced requests among the sum.
-		 * Exact only as zero versus nonzero: a ledger total recorded before it was marked counts as one.
+		 * Exact only as zero versus nonzero. Without it, a total is read by `pricedCallsOf`.
 		 */
 		pricedCalls?: number;
 	};

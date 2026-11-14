@@ -3,8 +3,8 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import {
 	analyze,
 	areaOf,
@@ -48,7 +48,16 @@ const CHANGELOG = "# Changelog\n\n## [Unreleased]\n\n### Added\n\n- thing\n";
 function fixture() {
 	const dir = mkdtempSync(join(tmpdir(), "drift-test-"));
 	git(dir, "init", "-q", "-b", "base");
-	commit(dir, { "packages/ai/a.ts": "base\n", "packages/tui/t.ts": "t\n", "README.md": "r\n", "packages/ai/CHANGELOG.md": CHANGELOG }, "Base");
+	commit(
+		dir,
+		{
+			"packages/ai/a.ts": "base\n",
+			"packages/tui/t.ts": "t\n",
+			"README.md": "r\n",
+			"packages/ai/CHANGELOG.md": CHANGELOG,
+		},
+		"Base",
+	);
 	git(dir, "branch", "upstream");
 	git(dir, "branch", "fork");
 	return dir;
@@ -103,10 +112,11 @@ test("clean merge: counts, areas, patched-file overlap, no conflicts", () => {
 		assert.equal(report.merge.clean, true);
 		assert.deepEqual(report.merge.conflicts, []);
 		assert.equal(existsSync(trialDir), false, "scratch worktree removed without keepTrial");
-		assert.deepEqual(
-			Object.fromEntries(report.areas.map((a) => [a.area, a.commits])),
-			{ "packages/ai": 1, "packages/tui": 1, docs: 1 },
-		);
+		assert.deepEqual(Object.fromEntries(report.areas.map((a) => [a.area, a.commits])), {
+			"packages/ai": 1,
+			"packages/tui": 1,
+			docs: 1,
+		});
 		assert.deepEqual(report.patchedFiles, ["packages/tui/t.ts"]);
 		assert.equal(report.patchedTouches.length, 1);
 		assert.equal(report.patchedTouches[0].subject, "Upstream tui and docs");
@@ -138,14 +148,19 @@ test("conflict: lists conflicted paths, aborts, removes the worktree, trips", ()
 	const repo = fixture();
 	const trialDir = `${repo}-trial`;
 	try {
-		onBranch(repo, "upstream", () => commit(repo, { "packages/ai/a.ts": "upstream\n", "README.md": "up\n" }, "Upstream edits"));
+		onBranch(repo, "upstream", () =>
+			commit(repo, { "packages/ai/a.ts": "upstream\n", "README.md": "up\n" }, "Upstream edits"),
+		);
 		onBranch(repo, "fork", () => commit(repo, { "packages/ai/a.ts": "fork\n", "README.md": "fk\n" }, "Fork edits"));
 		const report = analyze({ repo, localRef: "fork", upstreamRef: "upstream", trialDir, keepTrial: true });
 		assert.equal(report.merge.clean, false);
 		assert.deepEqual(report.merge.conflicts, ["README.md", "packages/ai/a.ts"]);
 		assert.equal(existsSync(trialDir), false);
 		const decision = evaluate(report, undefined);
-		assert.deepEqual(decision.trips.map((t) => t.id), ["conflicts"]);
+		assert.deepEqual(
+			decision.trips.map((t) => t.id),
+			["conflicts"],
+		);
 		assert.match(renderBody(report, decision, { now: "T" }), /- `packages\/ai\/a\.ts`/);
 	} finally {
 		rmSync(repo, { recursive: true, force: true });
@@ -156,16 +171,29 @@ test("new breaking entry trips; entries already at the merge base do not", () =>
 	const repo = fixture();
 	try {
 		onBranch(repo, "base", () => {
-			commit(repo, { "packages/ai/CHANGELOG.md": `${CHANGELOG}\n### Breaking Changes\n\n- Old break\n` }, "Old breaking entry");
+			commit(
+				repo,
+				{ "packages/ai/CHANGELOG.md": `${CHANGELOG}\n### Breaking Changes\n\n- Old break\n` },
+				"Old breaking entry",
+			);
 		});
 		git(repo, "branch", "-f", "upstream", "base");
 		git(repo, "branch", "-f", "fork", "base");
 		onBranch(repo, "upstream", () => {
-			commit(repo, { "packages/ai/CHANGELOG.md": `${CHANGELOG}\n### Breaking Changes\n\n- Old break\n- Dropped \`legacy()\`\n` }, "Upstream breaking");
+			commit(
+				repo,
+				{
+					"packages/ai/CHANGELOG.md": `${CHANGELOG}\n### Breaking Changes\n\n- Old break\n- Dropped \`legacy()\`\n`,
+				},
+				"Upstream breaking",
+			);
 		});
 		const report = analyze({ repo, localRef: "fork", upstreamRef: "upstream" });
 		assert.equal(report.merge.clean, undefined, "no trial without trialDir");
-		assert.deepEqual(report.breaking.map((b) => b.text), ["Dropped `legacy()`"]);
+		assert.deepEqual(
+			report.breaking.map((b) => b.text),
+			["Dropped `legacy()`"],
+		);
 		assert.equal(report.breaking[0].path, "packages/ai/CHANGELOG.md");
 		const decision = evaluate(report, undefined);
 		assert.equal(decision.trips.length, 1);
@@ -185,7 +213,10 @@ test("behind threshold edges: equal does not trip, one over does", () => {
 		assert.equal(at.behind, 3);
 		assert.equal(evaluate(at, undefined).trips.length, 0);
 		const over = analyze({ repo, localRef: "fork", upstreamRef: "upstream", behindThreshold: 2 });
-		assert.deepEqual(evaluate(over, undefined).trips.map((t) => t.id), ["behind"]);
+		assert.deepEqual(
+			evaluate(over, undefined).trips.map((t) => t.id),
+			["behind"],
+		);
 		const zero = analyze({ repo, localRef: "upstream", upstreamRef: "fork", behindThreshold: 0 });
 		assert.equal(zero.behind, 0);
 		assert.equal(evaluate(zero, undefined).trips.length, 0, "0 behind never trips even at threshold 0");
@@ -194,7 +225,15 @@ test("behind threshold edges: equal does not trip, one over does", () => {
 	}
 });
 
-const ALL_GREEN = { deps: "success", install: "success", models: "success", build: "success", check: "success", daemon: "success", test: "success" };
+const ALL_GREEN = {
+	deps: "success",
+	install: "success",
+	models: "success",
+	build: "success",
+	check: "success",
+	daemon: "success",
+	test: "success",
+};
 
 const baseReport = {
 	localRef: "origin/main",
@@ -214,7 +253,10 @@ const baseReport = {
 
 test("pure threshold edges on 200/201 default", () => {
 	assert.equal(evaluate({ ...baseReport, behind: 200 }, {}).trips.length, 0);
-	assert.deepEqual(evaluate({ ...baseReport, behind: 201 }, {}).trips.map((t) => t.id), ["behind"]);
+	assert.deepEqual(
+		evaluate({ ...baseReport, behind: 201 }, {}).trips.map((t) => t.id),
+		["behind"],
+	);
 });
 
 test("trial red only counts on a clean merge", () => {
@@ -223,22 +265,34 @@ test("trial red only counts on a clean merge", () => {
 	assert.equal(trialIsRed({ test: "cancelled" }), true);
 	assert.equal(trialIsRed(undefined), false);
 	const red = { build: "failure" };
-	assert.deepEqual(evaluate(baseReport, red).trips.map((t) => t.id), ["trial"]);
+	assert.deepEqual(
+		evaluate(baseReport, red).trips.map((t) => t.id),
+		["trial"],
+	);
 	const conflicted = { ...baseReport, merge: { clean: false, conflicts: ["x"], kept: false } };
-	assert.deepEqual(evaluate(conflicted, red).trips.map((t) => t.id), ["conflicts"]);
+	assert.deepEqual(
+		evaluate(conflicted, red).trips.map((t) => t.id),
+		["conflicts"],
+	);
 });
 
 test("comment only for trips absent from the previous state", () => {
 	const report = { ...baseReport, behind: 250 };
 	const first = evaluate(report, {});
-	assert.deepEqual(first.newTrips.map((t) => t.id), ["behind"]);
+	assert.deepEqual(
+		first.newTrips.map((t) => t.id),
+		["behind"],
+	);
 	const body = renderBody(report, first, { now: "T" });
 	assert.deepEqual(parseState(body), { upstreamSha: "b".repeat(40), tripped: ["behind"] });
 	const second = evaluate(report, {}, body);
 	assert.equal(second.trips.length, 1);
 	assert.equal(second.newTrips.length, 0);
 	const worse = evaluate({ ...report, merge: { clean: false, conflicts: ["x"], kept: false } }, {}, body);
-	assert.deepEqual(worse.newTrips.map((t) => t.id), ["conflicts"]);
+	assert.deepEqual(
+		worse.newTrips.map((t) => t.id),
+		["conflicts"],
+	);
 	assert.match(renderComment(worse, { runUrl: "https://example.com/run/1" }), /conflicts in 1 path/);
 });
 
@@ -249,17 +303,28 @@ test("parseState tolerates missing or corrupt markers", () => {
 });
 
 test("rendered body has no unicode dashes and truncates long lists", () => {
-	const touches = Array.from({ length: 40 }, (_, i) => ({ sha: `${i}`.padStart(40, "0"), subject: `Commit ${i}`, files: ["f"] }));
+	const touches = Array.from({ length: 40 }, (_, i) => ({
+		sha: `${i}`.padStart(40, "0"),
+		subject: `Commit ${i}`,
+		files: ["f"],
+	}));
 	const report = { ...baseReport, patchedTouches: touches, patchedFiles: ["f"], newSinceLastRun: 7 };
 	const body = renderBody(report, evaluate(report, {}), { now: "T", trial: ALL_GREEN });
 	assert.doesNotMatch(body, /[\u2013\u2014]/);
 	assert.match(body, /\.\.\. and 15 more/);
 	assert.match(body, /since last run: 7/);
-	assert.match(body, /deps: success, install: success, models: success, build: success, check: success, daemon: success, test: success/);
+	assert.match(
+		body,
+		/deps: success, install: success, models: success, build: success, check: success, daemon: success, test: success/,
+	);
 });
 
 test("many long breaking entries stay under the issue body limit and comment stays short", () => {
-	const breaking = Array.from({ length: 80 }, (_, i) => ({ path: "packages/ai/CHANGELOG.md", version: "1.0.0", text: `Entry ${i} ${"x".repeat(3000)}` }));
+	const breaking = Array.from({ length: 80 }, (_, i) => ({
+		path: "packages/ai/CHANGELOG.md",
+		version: "1.0.0",
+		text: `Entry ${i} ${"x".repeat(3000)}`,
+	}));
 	const report = { ...baseReport, breaking };
 	const decision = evaluate(report, {});
 	const body = renderBody(report, decision, { now: "T" });
@@ -278,7 +343,23 @@ test("finalize CLI writes the body, comments only for new trips, and removes a s
 		writeFileSync(join(dir, "report.json"), JSON.stringify(report));
 		writeFileSync(join(dir, "trial.json"), JSON.stringify({ ...ALL_GREEN, build: "failure" }));
 		const run = (...extra) => {
-			const result = spawnSync(process.execPath, [script, "finalize", "--report", join(dir, "report.json"), "--trial", join(dir, "trial.json"), "--body-out", join(dir, "body.md"), "--comment-out", join(dir, "comment.md"), ...extra], { encoding: "utf8" });
+			const result = spawnSync(
+				process.execPath,
+				[
+					script,
+					"finalize",
+					"--report",
+					join(dir, "report.json"),
+					"--trial",
+					join(dir, "trial.json"),
+					"--body-out",
+					join(dir, "body.md"),
+					"--comment-out",
+					join(dir, "comment.md"),
+					...extra,
+				],
+				{ encoding: "utf8" },
+			);
 			assert.equal(result.status, 0, result.stderr);
 			return JSON.parse(result.stdout);
 		};

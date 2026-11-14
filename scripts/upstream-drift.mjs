@@ -44,7 +44,11 @@ export function git(cwd, args, { allowFail = false } = {}) {
 			const stderr = error.stderr?.toString() ?? "";
 			throw new Error(`git ${args.join(" ")} failed: ${stderr.trim() || error.message}`);
 		}
-		return { status: error.status ?? 1, stdout: error.stdout?.toString() ?? "", stderr: error.stderr?.toString() ?? "" };
+		return {
+			status: error.status ?? 1,
+			stdout: error.stdout?.toString() ?? "",
+			stderr: error.stderr?.toString() ?? "",
+		};
 	}
 }
 
@@ -180,7 +184,9 @@ export function analyze({
 	for (const commit of upstreamCommits) {
 		for (const area of new Set(commit.files.map(areaOf))) areaCounts.set(area, (areaCounts.get(area) ?? 0) + 1);
 	}
-	const areas = [...areaCounts].map(([area, commits]) => ({ area, commits })).sort((a, b) => b.commits - a.commits || a.area.localeCompare(b.area));
+	const areas = [...areaCounts]
+		.map(([area, commits]) => ({ area, commits }))
+		.sort((a, b) => b.commits - a.commits || a.area.localeCompare(b.area));
 
 	const forkPatched = new Set(lines(git(repo, ["diff", "--name-only", "--no-renames", base, localRef]).stdout));
 	const patchedTouches = [];
@@ -190,7 +196,9 @@ export function analyze({
 	}
 	const patchedFiles = [...new Set(patchedTouches.flatMap((touch) => touch.files))].sort();
 
-	const changelogs = lines(git(repo, ["diff", "--name-only", "--no-renames", base, upstreamRef, "--", "packages/*/CHANGELOG.md"]).stdout);
+	const changelogs = lines(
+		git(repo, ["diff", "--name-only", "--no-renames", base, upstreamRef, "--", "packages/*/CHANGELOG.md"]).stdout,
+	);
 	const breaking = [];
 	for (const path of changelogs) {
 		const show = (ref) => {
@@ -205,7 +213,10 @@ export function analyze({
 
 	const previous = parseState(previousBody);
 	let newSinceLastRun;
-	if (previous?.upstreamSha && git(repo, ["cat-file", "-e", `${previous.upstreamSha}^{commit}`], { allowFail: true }).status === 0) {
+	if (
+		previous?.upstreamSha &&
+		git(repo, ["cat-file", "-e", `${previous.upstreamSha}^{commit}`], { allowFail: true }).status === 0
+	) {
 		newSinceLastRun = revCount(repo, `${previous.upstreamSha}..${upstreamRef}`);
 	}
 
@@ -243,7 +254,10 @@ export function trialIsRed(trial) {
 export function evaluate(report, trial, previousBody) {
 	const trips = [];
 	if (report.behind > report.behindThreshold) {
-		trips.push({ id: "behind", reason: `behind upstream by ${report.behind} commits (threshold ${report.behindThreshold})` });
+		trips.push({
+			id: "behind",
+			reason: `behind upstream by ${report.behind} commits (threshold ${report.behindThreshold})`,
+		});
 	}
 	if (report.merge.clean === false) {
 		trips.push({ id: "conflicts", reason: `trial merge conflicts in ${report.merge.conflicts.length} path(s)` });
@@ -253,7 +267,10 @@ export function evaluate(report, trial, previousBody) {
 		trips.push({ id: "trial", reason: `trial ${red.join(", ")} red on a clean merge` });
 	}
 	for (const entry of report.breaking) {
-		trips.push({ id: `breaking:${createHash("sha256").update(`${entry.path}\n${entry.text}`).digest("hex").slice(0, 8)}`, reason: `breaking change in \`${entry.path}\` (${entry.version}): ${clip(entry.text)}` });
+		trips.push({
+			id: `breaking:${createHash("sha256").update(`${entry.path}\n${entry.text}`).digest("hex").slice(0, 8)}`,
+			reason: `breaking change in \`${entry.path}\` (${entry.version}): ${clip(entry.text)}`,
+		});
 	}
 	const previous = new Set(parseState(previousBody)?.tripped ?? []);
 	const newTrips = trips.filter((trip) => !previous.has(trip.id));
@@ -288,25 +305,39 @@ export function renderBody(report, decision, { trial, runUrl, now = new Date().t
 	const out = [];
 	out.push(`Upstream drift canary, updated ${now}${runUrl ? ` ([run](${runUrl}))` : ""}.`);
 	out.push("");
-	out.push(`Status: ${decision.trips.length === 0 ? "no thresholds tripped" : `${decision.trips.length} threshold(s) tripped`}`);
+	out.push(
+		`Status: ${decision.trips.length === 0 ? "no thresholds tripped" : `${decision.trips.length} threshold(s) tripped`}`,
+	);
 	out.push(...tripLines(decision.trips));
 	out.push("");
 	out.push("Drift:");
-	out.push(`- \`${report.localRef}\` ${report.localSha.slice(0, 10)} vs \`${report.upstreamRef}\` ${report.upstreamSha.slice(0, 10)}, merge base ${report.mergeBase.slice(0, 10)}`);
+	out.push(
+		`- \`${report.localRef}\` ${report.localSha.slice(0, 10)} vs \`${report.upstreamRef}\` ${report.upstreamSha.slice(0, 10)}, merge base ${report.mergeBase.slice(0, 10)}`,
+	);
 	out.push(`- behind ${report.behind}, ahead ${report.ahead} (threshold ${report.behindThreshold})`);
-	if (report.newSinceLastRun !== undefined) out.push(`- new upstream commits since last run: ${report.newSinceLastRun}`);
+	if (report.newSinceLastRun !== undefined)
+		out.push(`- new upstream commits since last run: ${report.newSinceLastRun}`);
 	out.push("");
 	out.push("Upstream commits by area (a commit counts once per area it touches):");
 	if (report.areas.length === 0) out.push("- none");
 	out.push(...truncateList(report.areas, (entry) => `- \`${entry.area}\`: ${entry.commits}`, MAX_AREAS));
 	out.push("");
-	out.push(`Trial merge: ${report.merge.clean === undefined ? "not attempted" : report.merge.clean ? "clean" : "conflicts"}`);
+	out.push(
+		`Trial merge: ${report.merge.clean === undefined ? "not attempted" : report.merge.clean ? "clean" : "conflicts"}`,
+	);
 	out.push(...truncateList(report.merge.conflicts, (path) => `- \`${path}\``));
 	out.push(`Trial steps: ${trialSummary(report, trial)}`);
 	out.push("");
-	out.push(`Upstream commits touching fork-patched files (${report.patchedTouches.length} commits, ${report.patchedFiles.length} files):`);
+	out.push(
+		`Upstream commits touching fork-patched files (${report.patchedTouches.length} commits, ${report.patchedFiles.length} files):`,
+	);
 	if (report.patchedTouches.length === 0) out.push("- none");
-	out.push(...truncateList(report.patchedTouches, (touch) => `- ${touch.sha.slice(0, 10)} ${clip(touch.subject)} (${touch.files.length} file(s))`));
+	out.push(
+		...truncateList(
+			report.patchedTouches,
+			(touch) => `- ${touch.sha.slice(0, 10)} ${clip(touch.subject)} (${touch.files.length} file(s))`,
+		),
+	);
 	out.push("");
 	out.push(`New \`### Breaking Changes\` entries (${report.breaking.length}):`);
 	if (report.breaking.length === 0) out.push("- none");
@@ -352,7 +383,8 @@ function main(argv) {
 	const previousBody = readOptional(values["previous-body"]);
 	if (command === "analyze") {
 		const threshold = Number.parseInt(values["behind-threshold"], 10);
-		if (!Number.isInteger(threshold) || threshold < 0) throw new Error("--behind-threshold must be a non-negative integer");
+		if (!Number.isInteger(threshold) || threshold < 0)
+			throw new Error("--behind-threshold must be a non-negative integer");
 		const report = analyze({
 			repo: resolve(values.repo),
 			localRef: values["local-ref"],
@@ -377,9 +409,12 @@ function main(argv) {
 		const commentOut = values["comment-out"];
 		if (commentOut) {
 			rmSync(commentOut, { force: true });
-			if (decision.newTrips.length > 0) writeFileSync(commentOut, renderComment(decision, { runUrl: values["run-url"] }));
+			if (decision.newTrips.length > 0)
+				writeFileSync(commentOut, renderComment(decision, { runUrl: values["run-url"] }));
 		}
-		process.stdout.write(`${JSON.stringify({ trips: decision.trips.map((t) => t.id), newTrips: decision.newTrips.map((t) => t.id) })}\n`);
+		process.stdout.write(
+			`${JSON.stringify({ trips: decision.trips.map((t) => t.id), newTrips: decision.newTrips.map((t) => t.id) })}\n`,
+		);
 		return;
 	}
 	throw new Error("usage: upstream-drift.mjs <analyze|finalize> [options]");

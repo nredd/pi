@@ -18,7 +18,7 @@ concurrency:
 jobs:
   drift:
     runs-on: ubuntu-latest
-    timeout-minutes: 100
+    timeout-minutes: 120
     env:
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:

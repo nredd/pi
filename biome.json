@@ -26,6 +26,8 @@
 	"files": {
 		"includes": [
 			"scripts/fork-release-signers.test.mjs",
+			"scripts/upstream-drift.mjs",
+			"scripts/upstream-drift.test.mjs",
 			"scripts/worktree.mjs",
 			"scripts/worktree.test.mjs",
 			"scripts/binary-release-contract.mjs",

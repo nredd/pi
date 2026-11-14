@@ -206,7 +206,7 @@ const runtimes = [
 	{ name: "Bun", command: "bun", available: spawnSync("bun", ["--version"], { timeout: 5000 }).status === 0 },
 ];
 
-const FIXTURE_BOUND_MS = 60000;
+const FIXTURE_BOUND_MS = 60_000;
 
 interface FixtureLine {
 	type: string;
@@ -246,13 +246,17 @@ function runExitFixture(command: string, how: string, awaitExit: boolean): Promi
 		child.stdout.on("data", (chunk: string) => {
 			stdout += chunk;
 			if (awaitExit) return;
-			const types = new Set(
-				stdout
-					.split("\n")
-					.slice(0, -1)
-					.map((line) => (JSON.parse(line) as FixtureLine).type),
-			);
-			if (types.has("result") && types.has("workerExited")) finish();
+			try {
+				const types = new Set(
+					stdout
+						.split("\n")
+						.slice(0, -1)
+						.map((line) => (JSON.parse(line) as FixtureLine).type),
+				);
+				if (types.has("result") && types.has("workerExited")) finish();
+			} catch (error) {
+				finish(new Error(`fixture wrote non-JSON stdout: ${stdout}`, { cause: error }));
+			}
 		});
 		child.on("error", finish);
 		child.on("close", () => finish());
@@ -260,6 +264,7 @@ function runExitFixture(command: string, how: string, awaitExit: boolean): Promi
 }
 
 describe.each(runtimes)("$name process lifetime", ({ name, command, available }) => {
+	// #95: the Bun case also requires the worker to eventually exit, with a generous bound instead of a timing assert.
 	// #10748: verify both prompt cancellation and, on Node, prompt process exit with a real worker.
 	// Bun 1.4.0's pending terminate() keeps the process alive even after unref(), independently of codemode.
 	it.skipIf(!available).each(["abort", "timeout", "close"] as const)(

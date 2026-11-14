@@ -11,7 +11,7 @@ import {
 	withOpenAiLongContextPricing,
 } from "../src/catalog-pricing.ts";
 import { getEffortThinkingLevelMap, type ModelsDevReasoningOption } from "./models-dev-reasoning-options.ts";
-import { type AiGatewayPricing, getAiGatewayCost } from "./ai-gateway-pricing.ts";
+import { type AiGatewayPricing, getAiGatewayCost, getAiGatewayEvaluationCost } from "./ai-gateway-pricing.ts";
 import { buildOpenRouterCatalog, type OpenRouterCatalog, type OpenRouterModelListItem } from "./openrouter-catalog.ts";
 import {
 	CLOUDFLARE_AI_GATEWAY_ANTHROPIC_BASE_URL,
@@ -1372,14 +1372,6 @@ async function fetchAiGatewayModels(): Promise<{
 		const models: Model<any>[] = [];
 		const classifiers: ClassifierModel<"typesafe-system-one">[] = [];
 
-		const toNumber = (value: string | number | undefined): number => {
-			if (typeof value === "number") {
-				return Number.isFinite(value) ? value : 0;
-			}
-			const parsed = parseFloat(value ?? "0");
-			return Number.isFinite(parsed) ? parsed : 0;
-		};
-
 		const items = Array.isArray(data.data) ? (data.data as AiGatewayModel[]) : [];
 		for (const model of items) {
 			// Evaluation models such as TypeSafe's Jev are served through the
@@ -1393,12 +1385,7 @@ async function fetchAiGatewayModels(): Promise<{
 					provider: "vercel-ai-gateway",
 					baseUrl: AI_GATEWAY_TYPESAFE_BASE_URL,
 					input: ["text"],
-					cost: {
-						input: roundCost(toNumber(model.pricing?.input) * 1_000_000),
-						output: roundCost(toNumber(model.pricing?.output) * 1_000_000),
-						cacheRead: 0,
-						cacheWrite: 0,
-					},
+					cost: getAiGatewayEvaluationCost(model.pricing),
 					contextWindow: model.context_window || 4096,
 				});
 				continue;

@@ -249,6 +249,11 @@
                                 "reason": {
                                   "type": "string",
                                   "minLength": 1
+                                },
+                                "origin": {
+                                  "type": "string",
+                                  "const": "provider-live",
+                                  "description": "The rates came from the provider's own live response for the caller's credential, not a static catalogue row. Catalogue corrections keep them."
                                 }
                               }
                             },
@@ -499,6 +504,11 @@
                 "reason": {
                   "type": "string",
                   "minLength": 1
+                },
+                "origin": {
+                  "type": "string",
+                  "const": "provider-live",
+                  "description": "The rates came from the provider's own live response for the caller's credential, not a static catalogue row. Catalogue corrections keep them."
                 }
               }
             },

@@ -12,11 +12,14 @@ import { type OpenRouterModel, openRouterCost } from "./openrouter-api.ts";
 
 const OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1";
 const OPENROUTER_USER_MODELS_TIMEOUT_MS = 15_000;
+const LIVE_PRICE_REASON =
+	"Live OpenRouter price for this key from GET /models/user; not matched to an assessed published contract.";
 
 /**
  * Restrict an OpenRouter catalog to the chat models the key may use, with the key's limits and
  * prices from `GET /models/user`. Image and classifier models are returned unchanged. A missing
- * limit keeps the catalog value. The request uses the provider's configured base URL, so regional
+ * limit keeps the catalog value. A live price is kept as reported and marked `origin: "provider-live"`
+ * with an unknown assessment, so catalogue corrections never replace it. The request uses the provider's configured base URL, so regional
  * endpoints such as `https://us.openrouter.ai/api/v1` apply their region's filtering. When the
  * endpoint rejects the key (401/403) or does not exist (404), for example with a proxy configured
  * in models.json, the catalog is returned unchanged.
@@ -53,7 +56,13 @@ export async function personalizeOpenRouterCatalog(
 				// `||`: OpenRouter reports a missing limit as absent, null or 0, like the generator's fallback.
 				contextWindow: entry.top_provider?.context_length || entry.context_length || model.contextWindow,
 				maxTokens: entry.top_provider?.max_completion_tokens || model.maxTokens,
-				cost: entry.pricing ? openRouterCost(entry.pricing) : model.cost,
+				cost: entry.pricing
+					? {
+							...openRouterCost(entry.pricing),
+							// The key's own price is not a stale catalogue row; later corrections must keep it.
+							assessment: { status: "unknown", reason: LIVE_PRICE_REASON, origin: "provider-live" },
+						}
+					: model.cost,
 			},
 		];
 	});

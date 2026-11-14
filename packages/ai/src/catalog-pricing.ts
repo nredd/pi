@@ -1,4 +1,5 @@
-import type { AnyModel, ModelCost, ModelCostRates, Usage } from "./types.ts";
+import feedPrices from "./catalog-feed-prices.json" with { type: "json" };
+import type { AnyModel, ModelCost, ModelCostRates, ModelCostTier, Usage } from "./types.ts";
 
 /** Official standard/global list prices checked on this date, not request-date bills. */
 export const PRICING_CHECKED_AT = "2026-11-12";
@@ -100,6 +101,294 @@ function verified(
 			unavailable,
 		},
 	};
+}
+
+/** OpenRouter's per-token prices, as decimal strings. */
+export interface OpenRouterPricing {
+	prompt?: string;
+	completion?: string;
+	input_cache_read?: string;
+	input_cache_write?: string;
+	input_cache_write_1h?: string;
+	overrides?: OpenRouterPricingOverride[];
+}
+
+/**
+ * A conditional price. `min_prompt_tokens` selects prompt-length pricing; `utc_*` fields select
+ * time-of-day or weekday pricing. Missing rates keep the base price.
+ */
+export interface OpenRouterPricingOverride {
+	min_prompt_tokens?: number;
+	utc_start?: number;
+	utc_end?: number;
+	utc_days?: string[];
+	prompt?: string;
+	completion?: string;
+	input_cache_read?: string;
+	input_cache_write?: string;
+	input_cache_write_1h?: string;
+}
+
+/** The fields pi reads from a model in OpenRouter's `GET /models` and `GET /models/user`. */
+export interface OpenRouterModel {
+	id: string;
+	context_length?: number | null;
+	top_provider?: { context_length?: number | null; max_completion_tokens?: number | null };
+	pricing?: OpenRouterPricing;
+}
+
+/**
+ * Convert OpenRouter's $/token prices to pi's $/1M tokens. Missing, invalid and negative base
+ * prices are 0. Prompt-length overrides become request-wide tiers; a rate a tier does not list
+ * keeps the base price. Time-of-day overrides are skipped because ModelCost cannot express them.
+ */
+export function openRouterCost(pricing: OpenRouterPricing | undefined): ModelCost {
+	const base = {
+		input: perMillion(pricing?.prompt, 0),
+		output: perMillion(pricing?.completion, 0),
+		cacheRead: perMillion(pricing?.input_cache_read, 0),
+		cacheWrite: perMillion(pricing?.input_cache_write, 0),
+		...(pricing?.input_cache_write_1h !== undefined
+			? { cacheWrite1h: perMillion(pricing.input_cache_write_1h, 0) }
+			: {}),
+	};
+	const overrides = (pricing?.overrides ?? []).filter(
+		(override) =>
+			override.min_prompt_tokens !== undefined &&
+			Number.isSafeInteger(override.min_prompt_tokens) &&
+			override.min_prompt_tokens >= 0 &&
+			override.utc_start === undefined &&
+			override.utc_end === undefined &&
+			override.utc_days === undefined,
+	);
+	const thresholds = [...new Set(overrides.map((override) => override.min_prompt_tokens!))].sort((a, b) => a - b);
+	const tiers = thresholds.map((threshold): ModelCostTier => {
+		const tier: ModelCostTier = { ...base, inputTokensAbove: threshold };
+		// Source order wins per price key, not the order of threshold values.
+		for (const override of overrides) {
+			if (override.min_prompt_tokens! > threshold) continue;
+			for (const [source, target] of [
+				["prompt", "input"],
+				["completion", "output"],
+				["input_cache_read", "cacheRead"],
+				["input_cache_write", "cacheWrite"],
+				["input_cache_write_1h", "cacheWrite1h"],
+			] as const) {
+				if (override[source] !== undefined) tier[target] = perMillion(override[source], tier[target] ?? 0);
+			}
+		}
+		return tier;
+	});
+	return tiers.length > 0 ? { ...base, tiers } : base;
+}
+
+/** A prompt-length bracket. `min` is inclusive and `max` exclusive, both in prompt tokens. */
+export interface AiGatewayPriceTier {
+	cost?: string | number;
+	min?: number;
+	max?: number;
+}
+
+/** Vercel AI Gateway pricing in $/token. */
+export interface AiGatewayPricing {
+	input?: string | number;
+	output?: string | number;
+	input_cache_read?: string | number;
+	input_cache_write?: string | number;
+	input_tiers?: AiGatewayPriceTier[];
+	output_tiers?: AiGatewayPriceTier[];
+	input_cache_read_tiers?: AiGatewayPriceTier[];
+	input_cache_write_tiers?: AiGatewayPriceTier[];
+}
+
+const RATE_FIELDS = [
+	{ rate: "input", tiers: "input_tiers" },
+	{ rate: "output", tiers: "output_tiers" },
+	{ rate: "cacheRead", tiers: "input_cache_read_tiers" },
+	{ rate: "cacheWrite", tiers: "input_cache_write_tiers" },
+] as const;
+
+/**
+ * Convert AI Gateway pricing to $/million tokens. Each rate lists its own prompt-length brackets;
+ * every bracket start above zero becomes a request-wide tier with the rates in effect there.
+ */
+export function getAiGatewayCost(pricing: AiGatewayPricing | undefined): ModelCost {
+	const base: ModelCostRates = {
+		input: perMillion(pricing?.input),
+		output: perMillion(pricing?.output),
+		cacheRead: perMillion(pricing?.input_cache_read),
+		cacheWrite: perMillion(pricing?.input_cache_write),
+	};
+
+	const starts = new Set<number>();
+	for (const field of RATE_FIELDS) {
+		for (const bracket of pricing?.[field.tiers] ?? []) {
+			if (bracket.min !== undefined && bracket.min > 0) starts.add(bracket.min);
+		}
+	}
+
+	const tiers = [...starts]
+		.sort((a, b) => a - b)
+		.map((start): ModelCostTier => {
+			const tier: ModelCostTier = { inputTokensAbove: start - 1, ...base };
+			for (const field of RATE_FIELDS) {
+				const bracket = pricing?.[field.tiers]?.find(
+					(candidate) => (candidate.min ?? 0) <= start && (candidate.max === undefined || start < candidate.max),
+				);
+				if (bracket?.cost !== undefined) tier[field.rate] = perMillion(bracket.cost, tier[field.rate]);
+			}
+			return tier;
+		});
+
+	return tiers.length > 0 ? { ...base, tiers } : base;
+}
+
+/** Classifier (evaluation) rates: input and output only, through the shared strict rate parser. */
+export function getAiGatewayEvaluationCost(pricing: Pick<AiGatewayPricing, "input" | "output"> | undefined): ModelCost {
+	return { input: perMillion(pricing?.input), output: perMillion(pricing?.output), cacheRead: 0, cacheWrite: 0 };
+}
+
+// Plain decimal or scientific notation only. `Number()` also reads "0x10", "0b10" and "0o10" as
+// 16, 2 and 8, which would turn a malformed rate into a real price.
+const DECIMAL_RATE = /^(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
+
+/** The one rate parser: a finite non-negative number, or undefined for anything else. */
+function parseRate(value: unknown): number | undefined {
+	const parsed =
+		typeof value === "number"
+			? value
+			: typeof value === "string" && DECIMAL_RATE.test(value.trim())
+				? Number(value)
+				: NaN;
+	return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
+}
+
+/** Strict source conversion; compatibility zeros never establish category availability. */
+function perMillion(value: string | number | undefined, fallback = 0): number {
+	const parsed = parseRate(value);
+	return parsed === undefined ? fallback : Number((parsed * 1_000_000).toFixed(6));
+}
+
+/** Assess only exact archived operation identities, using the existing source normalizers. */
+function feedCost(
+	provider: "openrouter" | "vercel-ai-gateway",
+	type: "chat" | "classifier",
+	id: string,
+	previous: ModelCost,
+): ModelCost {
+	const prices: Record<string, Record<string, unknown>> = feedPrices[provider];
+	const unknown = (reason: string): ModelCost => ({ ...previous, assessment: { status: "unknown", reason } });
+	// Gateway `-batch` IDs are async Batch API selectors; synchronous requests do not accept them. No
+	// batch rate schedule is admitted, so the default Standard rates must not certify them.
+	if (provider === "vercel-ai-gateway" && id.endsWith("-batch"))
+		return unknown(
+			"AI Gateway -batch IDs are asynchronous Batch API selectors, not a synchronous default/Standard token contract.",
+		);
+	const key = `${type}:${id}`;
+	if (!Object.hasOwn(prices, key))
+		return unknown(
+			"No admitted exact archived operation token contract; missing identities and unsupported operation/mode contracts remain unknown.",
+		);
+	const source = prices[key];
+	const raw = source.pricing as Record<string, unknown>;
+	if (!raw || typeof raw !== "object" || Array.isArray(raw)) return unknown("Invalid official pricing object.");
+	const openRouter = provider === "openrouter";
+	const topProvider = source.top_provider as OpenRouterModel["top_provider"];
+	const context = openRouter ? topProvider?.context_length || source.context_length : source.context_window;
+	const output = openRouter ? topProvider?.max_completion_tokens : source.max_tokens;
+	if (typeof context !== "number" || !Number.isSafeInteger(context) || context <= 0)
+		return unknown("Official request context limit is unavailable.");
+	const fields = openRouter
+		? ["prompt", "completion", "input_cache_read", "input_cache_write"]
+		: ["input", "output", "input_cache_read", "input_cache_write"];
+	const valid = (value: unknown): boolean => parseRate(value) !== undefined;
+	const allowed = openRouter
+		? [...fields, "input_cache_write_1h", "overrides", "web_search"]
+		: [...fields, ...fields.map((field) => `${field}_tiers`), "regional", "fast", "service_tiers", "web_search"];
+	if (Object.keys(raw).some((key) => !allowed.includes(key)))
+		return unknown("Published non-token, provider-varying or peak pricing needs unsupported counters or conditions.");
+	const unavailable: ("input" | "output" | "cacheRead" | "cacheWrite")[] = [];
+	for (const [index, field] of fields.entries()) {
+		if (raw[field] === undefined) unavailable.push((["input", "output", "cacheRead", "cacheWrite"] as const)[index]);
+		else if (!valid(raw[field])) return unknown("Malformed or negative official token rate.");
+	}
+	if (unavailable.includes("input") && unavailable.includes("output"))
+		return unknown("Official input and output token rates are unavailable.");
+	if (openRouter) {
+		const pricing = raw as OpenRouterPricing;
+		if (pricing.input_cache_write_1h !== undefined && !valid(pricing.input_cache_write_1h))
+			return unknown("Malformed extended cache-write rate.");
+		if (pricing.overrides !== undefined && !Array.isArray(pricing.overrides))
+			return unknown("Invalid OpenRouter pricing overrides.");
+		for (const override of pricing.overrides ?? []) {
+			if (!override || typeof override !== "object" || Array.isArray(override))
+				return unknown("Invalid OpenRouter pricing override.");
+			if (
+				Object.keys(override).some((key) => ![...fields, "input_cache_write_1h", "min_prompt_tokens"].includes(key))
+			)
+				return unknown("UTC, weekday or other conditional OpenRouter pricing is unsupported.");
+			if (!Number.isSafeInteger(override.min_prompt_tokens) || override.min_prompt_tokens! < 0)
+				return unknown("Invalid OpenRouter prompt threshold.");
+			if (Object.entries(override).some(([key, value]) => key !== "min_prompt_tokens" && !valid(value)))
+				return unknown("Malformed OpenRouter override rate.");
+		}
+		// The schema separately declares default 5m and extended 1h prices. Without that
+		// explicit lifetime contract, a numeric default write is not evidence of a TTL.
+		if (pricing.input_cache_write_1h === undefined && !unavailable.includes("cacheWrite"))
+			unavailable.push("cacheWrite");
+	} else {
+		const pricing = raw as AiGatewayPricing;
+		for (const field of fields) {
+			const brackets = raw[`${field}_tiers`];
+			if (brackets === undefined) continue;
+			if (!Array.isArray(brackets) || brackets.length === 0) return unknown("Invalid AI Gateway token brackets.");
+			let next = brackets[0]?.min ?? 0;
+			if (!Number.isSafeInteger(next) || next < 0) return unknown("Invalid AI Gateway bracket start.");
+			for (const bracket of brackets) {
+				if (
+					!bracket ||
+					!valid(bracket.cost) ||
+					(bracket.min ?? 0) !== next ||
+					!Number.isSafeInteger(bracket.min ?? 0) ||
+					(bracket.max !== undefined && (!Number.isSafeInteger(bracket.max) || bracket.max <= next))
+				)
+					return unknown("Gapped, overlapping or malformed AI Gateway token brackets.");
+				next = bracket.max ?? Infinity;
+			}
+			if (
+				next !== Infinity ||
+				((brackets[0].min ?? 0) === 0 &&
+					parseRate(brackets[0].cost) !== parseRate(pricing[field as keyof AiGatewayPricing]))
+			)
+				return unknown("AI Gateway brackets do not cover the advertised base contract.");
+		}
+		// The REST write field does not establish any short or extended retention.
+		if (!unavailable.includes("cacheWrite")) unavailable.push("cacheWrite");
+	}
+	const cost = openRouter ? openRouterCost(raw as OpenRouterPricing) : getAiGatewayCost(raw as AiGatewayPricing);
+	const assessed = verified(
+		cost,
+		openRouter
+			? "https://openrouter.ai/api/v1/models?output_modalities=all"
+			: "https://ai-gateway.vercel.sh/v1/models",
+		"Published default/Standard global token baseline only, not actual routed invoices or subscription cash. " +
+			"No search, image, audio, request or other non-token charges; regional, Fast, service-tier and account add-ons excluded. " +
+			(openRouter
+				? "Only explicitly published default 5m/1h writes; unknown write TTL unavailable."
+				: "All writes unavailable pending TTL verification."),
+		unavailable,
+		"2026-11-13",
+	);
+	if (assessed.assessment?.status === "verified") {
+		assessed.assessment = {
+			...assessed.assessment,
+			maxContextTokens: context,
+			...(typeof output === "number" && Number.isSafeInteger(output) && output > 0
+				? { maxOutputTokens: output }
+				: {}),
+		};
+	}
+	return assessed;
 }
 
 // Rates and bounds are one contract so a dated alias cannot acquire only one of them.
@@ -208,11 +497,32 @@ function catalogueCostUnbounded(model: Pick<AnyModel, "provider" | "id" | "type"
 		type === "chat" && model.provider === "anthropic" && Object.hasOwn(BOUNDED_ANTHROPIC, model.id)
 			? BOUNDED_ANTHROPIC[model.id]
 			: undefined;
-	const checkedAt =
-		codexTerra || bedrockContract || boundedAnthropicContract || cerebras || xai || gemini
-			? "2026-11-13"
-			: PRICING_CHECKED_AT;
 	const previous = model.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+	// A price OpenRouter reported live for the caller's credential is not a stale catalogue row. Only that
+	// provider's personalization sets the mark, so a self-declared one on any other row is ignored.
+	if (
+		model.provider === "openrouter" &&
+		previous.assessment?.status === "unknown" &&
+		previous.assessment.origin === "provider-live"
+	) {
+		return previous;
+	}
+	const feed =
+		(type === "chat" || type === "classifier") &&
+		(model.provider === "openrouter" || model.provider === "vercel-ai-gateway")
+			? feedCost(model.provider, type, model.id, previous)
+			: undefined;
+	// An id the feed archive covers is compared at the feed date even when the feed result is unknown
+	// (malformed row, Gateway `-batch`), so the unknown result cannot discard a newer incoming assessment.
+	const archived =
+		feed !== undefined &&
+		((model.provider === "vercel-ai-gateway" && model.id.endsWith("-batch")) ||
+			Object.hasOwn(feedPrices[model.provider as "openrouter" | "vercel-ai-gateway"], `${type}:${model.id}`));
+	const checkedAt =
+		(feed?.assessment?.status !== "unknown" ? feed?.assessment?.checkedAt : undefined) ??
+		(archived || codexTerra || bedrockContract || boundedAnthropicContract || cerebras || xai || gemini
+			? "2026-11-13"
+			: PRICING_CHECKED_AT);
 	// A newer explicitly assessed catalog must not be frozen at this client's audit date.
 	if (
 		previous.assessment?.status !== "unknown" &&
@@ -220,6 +530,7 @@ function catalogueCostUnbounded(model: Pick<AnyModel, "provider" | "id" | "type"
 		previous.assessment.checkedAt > checkedAt
 	)
 		return previous;
+	if (feed) return feed;
 	if (
 		type === "chat" &&
 		(model.provider === "openai" || (model.provider === "openai-codex" && CODEX_API_EQUIVALENT_IDS.has(model.id)))

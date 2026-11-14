@@ -1,0 +1,238 @@
+name: Upstream drift canary
+
+# Not a required check and never runs on pull requests. Read-only toward upstream: it only
+# fetches and trial-merges in a scratch worktree. Two jobs keep the token away from upstream code:
+# `trial` executes the merged tree with `contents: read` only and uploads a tiny JSON artifact;
+# `report` has `issues: write`, never executes upstream code, validates the artifact, regenerates
+# every fact from git, and updates the one rolling issue. Hosted runners only, no cache anywhere.
+on:
+  schedule:
+    - cron: "23 6 * * *"
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: upstream-drift
+  cancel-in-progress: false
+
+jobs:
+  trial:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+
+      - name: Prepare scratch paths
+        run: |
+          echo "TRIAL_DIR=$RUNNER_TEMP/trial" >> "$GITHUB_ENV"
+          echo "WORK_DIR=$RUNNER_TEMP/drift" >> "$GITHUB_ENV"
+
+      - name: Fetch upstream (read-only)
+        run: |
+          git remote add upstream https://github.com/earendil-works/pi.git
+          git remote set-url --push upstream DISABLED
+          git fetch --no-tags upstream main
+
+      - name: Analyze drift and trial merge
+        id: analyze
+        run: |
+          mkdir -p "$WORK_DIR"
+          node scripts/upstream-drift.mjs analyze \
+            --repo . --local-ref HEAD --upstream-ref upstream/main \
+            --trial-dir "$TRIAL_DIR" --keep-trial \
+            --out "$WORK_DIR/report.json"
+          echo "clean=$(jq -r '.merge.clean' "$WORK_DIR/report.json")" >> "$GITHUB_OUTPUT"
+
+      # Everything below that executes upstream code runs in a container (no runner env, token,
+      # processes or sockets, no capabilities, one mount of the merged tree). The host only does git,
+      # jq and trusted scripts from our own checkout. The image comes from a trusted Dockerfile
+      # built from stdin, so no upstream file is in its build context.
+      - name: Build sandbox image
+        id: deps
+        if: steps.analyze.outputs.clean == 'true'
+        continue-on-error: true
+        timeout-minutes: 15
+        run: docker build --tag upstream-drift-trial - < scripts/upstream-drift.Dockerfile
+
+      - name: Trial install
+        id: install
+        if: steps.deps.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 10
+        run: |
+          bash scripts/upstream-drift-sandbox.sh "$TRIAL_DIR" '
+            rm -rf .git
+            git init -q
+            git add -A
+            git -c user.name=trial -c user.email=trial@example.invalid commit -qm trial
+            npm ci --ignore-scripts'
+
+      # Mirrors `ci.yml` (`build-check-test`) minus the dependency audit: frozen release model data,
+      # offline build, check, pi-env daemon, isolated tests.
+      - name: Trial restore release model data
+        id: models
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 5
+        run: |
+          bash scripts/upstream-drift-sandbox.sh "$TRIAL_DIR" '
+            version=$(node -p "require(\"./packages/coding-agent/package.json\").version")
+            npm pack "@earendil-works/pi-ai@$version" --pack-destination /tmp
+            tar -xzf "/tmp/earendil-works-pi-ai-$version.tgz" -C /tmp
+            rm -rf packages/ai/src/providers/data
+            cp -R /tmp/package/dist/providers/data packages/ai/src/providers/data'
+
+      - name: Trial build
+        id: build
+        if: steps.models.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 20
+        run: bash scripts/upstream-drift-sandbox.sh "$TRIAL_DIR" 'npm run build:offline'
+
+      - name: Trial check
+        id: check
+        if: steps.build.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 15
+        run: bash scripts/upstream-drift-sandbox.sh "$TRIAL_DIR" 'npm run check'
+
+      - name: Trial build the pi-env daemon
+        id: daemon
+        if: steps.check.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 15
+        run: bash scripts/upstream-drift-sandbox.sh "$TRIAL_DIR" 'npm run build:daemon --workspace packages/env'
+
+      - name: Trial tests
+        id: test
+        if: steps.daemon.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 25
+        run: bash scripts/upstream-drift-sandbox.sh "$TRIAL_DIR" './test.sh'
+
+      # Trusted checkout code (not the merged tree) packs the outcomes into the validated artifact.
+      - name: Pack artifact
+        if: steps.analyze.outcome == 'success'
+        env:
+          DEPS: ${{ steps.deps.outcome }}
+          INSTALL: ${{ steps.install.outcome }}
+          MODELS: ${{ steps.models.outcome }}
+          BUILD: ${{ steps.build.outcome }}
+          CHECK: ${{ steps.check.outcome }}
+          DAEMON: ${{ steps.daemon.outcome }}
+          TEST: ${{ steps.test.outcome }}
+        run: |
+          jq -n --arg deps "$DEPS" --arg install "$INSTALL" --arg models "$MODELS" --arg build "$BUILD" \
+            --arg check "$CHECK" --arg daemon "$DAEMON" --arg test "$TEST" \
+            '{deps: $deps, install: $install, models: $models, build: $build, check: $check, daemon: $daemon, test: $test}' \
+            > "$WORK_DIR/trial.json"
+          node scripts/upstream-drift.mjs pack \
+            --report "$WORK_DIR/report.json" --trial "$WORK_DIR/trial.json" --out "$WORK_DIR/artifact.json"
+
+      - name: Upload artifact
+        if: steps.analyze.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: upstream-drift-artifact
+          path: ${{ env.WORK_DIR }}/artifact.json
+          if-no-files-found: error
+          retention-days: 3
+
+  report:
+    needs: trial
+    # Never run the privileged job from a non-default ref: its scripts would not be reviewed main code.
+    if: always() && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    env:
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      # The exact fork sha the trial tested (the default branch, see the job `if`). No upstream
+      # code is checked out, installed, built or executed here.
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+
+      - name: Prepare scratch paths
+        run: |
+          echo "WORK_DIR=$RUNNER_TEMP/drift" >> "$GITHUB_ENV"
+          mkdir -p "$RUNNER_TEMP/drift"
+
+      - name: Download trial artifact
+        id: download
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: upstream-drift-artifact
+          path: ${{ env.WORK_DIR }}/artifact
+
+      # Fetch refs only (no checkout, no build). Always the real upstream main; `finalize` requires
+      # the tested sha to be an ancestor of it, so a bare sha from some other fork cannot be reported.
+      - name: Fetch upstream refs (read-only)
+        run: |
+          git remote add upstream https://github.com/earendil-works/pi.git
+          git remote set-url --push upstream DISABLED
+          git fetch --no-tags upstream main
+
+      - name: Load rolling issue
+        id: issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          gh issue list --label upstream-drift --state open --limit 1 --json number,body > "$WORK_DIR/issue.json"
+          echo "number=$(jq -r '.[0].number // empty' "$WORK_DIR/issue.json")" >> "$GITHUB_OUTPUT"
+          jq -r '.[0].body // empty' "$WORK_DIR/issue.json" > "$WORK_DIR/previous.md"
+
+      - name: Render summary and decide trips
+        run: |
+          artifact_args=()
+          if [ -f "$WORK_DIR/artifact/artifact.json" ]; then
+            artifact_args=(--artifact "$WORK_DIR/artifact/artifact.json")
+          fi
+          node scripts/upstream-drift.mjs finalize \
+            --repo . --local-ref HEAD --upstream-ref upstream/main "${artifact_args[@]}" \
+            --previous-body "$WORK_DIR/previous.md" \
+            --body-out "$WORK_DIR/body.md" --comment-out "$WORK_DIR/comment.md" \
+            --run-url "$RUN_URL"
+          cat "$WORK_DIR/body.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Update rolling issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          ISSUE_NUMBER: ${{ steps.issue.outputs.number }}
+        run: |
+          if [ -z "$ISSUE_NUMBER" ]; then
+            gh label create upstream-drift --description "Fork drift from earendil-works/pi" || true
+            url="$(gh issue create --title "Upstream drift canary" --label upstream-drift --body-file "$WORK_DIR/body.md")"
+            ISSUE_NUMBER="${url##*/}"
+          else
+            gh issue edit "$ISSUE_NUMBER" --body-file "$WORK_DIR/body.md"
+          fi
+          if [ -f "$WORK_DIR/comment.md" ]; then
+            gh issue comment "$ISSUE_NUMBER" --body-file "$WORK_DIR/comment.md"
+          fi

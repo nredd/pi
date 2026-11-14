@@ -149,7 +149,8 @@ Additional exact contracts, checked 2026-11-13:
 - `gemini-2.5-flash` routes to `gemini-3.5-flash-lite` and bills at its rates from 2026-12-01. Those
   text, image and video rates (`0.30/2.50/0.03`) equal the alias's own, so the assessment carries
   no end date and shares the same constant as its target. Audio input (`$1.00`, cached `$0.10`)
-  cannot be distinguished by the counters and is excluded. `gemini-2.5-pro` still routes to
+  applies only before the reroute (the target bills audio at `$0.30`), cannot be distinguished by the
+  counters and is excluded. `gemini-2.5-pro` still routes to
   `gemini-3.8-flash` on 2026-12-01, but that target is itself date-scheduled, so the alias stays
   bounded rather than priced afterwards.
 - Also assessed from the same table, text/image/video input only (audio rates differ and are excluded):
@@ -159,10 +160,11 @@ Additional exact contracts, checked 2026-11-13:
   whole request above 200000 prompt tokens (`$4.50` per million token-hours storage excluded).
 - Still unassessed, each with evidence: `gemini-3.7-flash` and `gemini-3.5-flash` are documented as routed
   to `gemini-3.8-flash` and `gemini-3.6-flash`, but no page states they bill at those rates;
-  `gemini-flash-latest` and `gemini-flash-lite-latest` are hot-swapped aliases whose current target
-  is not stated; `gemini-3.1-flash-lite-preview` (shut down 2026-05-25) and
+  `gemini-flash-latest` and `gemini-flash-lite-latest` are hot-swapped aliases with no current
+  target stated (the last changelog switch, 2026-01-21, names `gemini-3-flash-preview`); `gemini-3.1-flash-lite-preview` (shut down 2026-05-25) and
   `gemini-2.5-computer-use-preview-10-2025` (shut down) have no current contract;
-  the `gemma-4-*` IDs list a free tier and no paid price, so zero rates are not a paid-deployment
+  archived IDs such as `gemini-3-pro-preview` and `gemini-2.5-pro-preview-03-25` are shut down per the deprecation page
+  and absent from the bundled catalogue, so no contract is assessed; the `gemma-4-*` IDs list a free tier and no paid price, so zero rates are not a paid-deployment
   claim; image-output, live-audio and agent IDs have per-unit meters the counters cannot express.
   `gemini-4-carbon` and `gemini-4-hydrogen` are priced on the page but absent from the bundled catalogue.
 

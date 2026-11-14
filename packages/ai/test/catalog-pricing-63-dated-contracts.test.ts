@@ -39,7 +39,7 @@ describe("Gemini dated paid Standard contracts", () => {
 			estimateTokenCost({ cost }, { ...zero, cacheWrite: 1, shortCacheWrites: true }, "2026-11-13").cost,
 		).toBeNull();
 		expect(estimateTokenCost({ cost }, { ...zero, cacheWrite: 1, cacheWrite1h: 1 }, "2026-11-13").cost).toBeNull();
-		// A free-tier row (zero rates) must not be promoted to verified free.
+		// An ID the page prices but this catalogue lacks stays unknown, even with zero rates.
 		expect(
 			catalogueCost({ provider: "google", id: "gemini-4-hydrogen", type: "chat", cost: zero }).assessment?.status,
 		).toBe("unknown");
@@ -70,6 +70,7 @@ describe("Gemini dated paid Standard contracts", () => {
 		const conditions = (alias.assessment as { conditions: string }).conditions;
 		expect(conditions).toContain("route to gemini-3.5-flash-lite");
 		expect(conditions).toContain("Audio input ($1.00) and cached audio ($0.10)");
+		expect(conditions).toContain("apply only before the reroute");
 		expect(conditions).not.toMatch(/text, image, video and audio/);
 	});
 
@@ -103,7 +104,7 @@ describe("Gemini dated paid Standard contracts", () => {
 		expect(get("gemini-3.1-pro-preview-customtools").tiers).toHaveLength(1);
 	});
 
-	it("leaves lifecycle-only, aliased and other-surface IDs unassessed", () => {
+	it("leaves unlisted, case-variant, other-provider and non-chat IDs unassessed", () => {
 		for (const [provider, id] of [
 			["google", "gemini-4-carbon"],
 			["google", "gemini-4-hydrogen"],

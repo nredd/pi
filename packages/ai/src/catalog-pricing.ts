@@ -498,7 +498,7 @@ const GEMINI_CONTRACTS: Record<string, GeminiContract> = {
 	// Google bills this alias at gemini-3.5-flash-lite rates from 2026-12-01; the text rates are identical.
 	"gemini-2.5-flash": {
 		cost: GEMINI_35_FLASH_LITE_COST,
-		note: `Deprecated: from 2026-12-01 requests route to gemini-3.5-flash-lite and bill at its rates, which equal these for text, image and video, so the rates hold across that date. ${audioNote("$1.00", "$0.10")} ${storageNote("$1.00")}`,
+		note: `Deprecated: from 2026-12-01 requests route to gemini-3.5-flash-lite and bill at its rates, which equal these for text, image and video, so the rates hold across that date. Audio input ($1.00) and cached audio ($0.10) apply only before the reroute (gemini-3.5-flash-lite bills audio at $0.30) and these counters cannot distinguish audio, so only text, image and video input is covered. ${storageNote("$1.00")}`,
 	},
 	"gemini-2.5-flash-lite": {
 		cost: { input: 0.1, output: 0.4, cacheRead: 0.01, cacheWrite: 0 },

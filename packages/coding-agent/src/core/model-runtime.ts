@@ -101,7 +101,7 @@ import {
 
 /** One full availability check, not yet written to the snapshot. */
 interface AvailabilityPass {
-	/** Generation of every provider listed when the pass began (see `providerGeneration`). */
+	/** Copy of `providerGeneration` when the pass began; a provider absent from it was untouched (generation 0). */
 	generations: ReadonlyMap<string, number>;
 	available: Model<Api>[];
 	checks: [string, AuthCheck | undefined][];
@@ -405,7 +405,7 @@ export class ModelRuntime implements Models {
 	/** Check every provider known now. Pure: the caller decides whether the result may be written. */
 	private async checkAvailability(signal: AbortSignal): Promise<AvailabilityPass> {
 		const providers = this.models.getProviders();
-		const generations = new Map(providers.map((provider) => [provider.id, this.generationOf(provider.id)]));
+		const generations = new Map(this.providerGeneration);
 		const [available, checks, credentials] = await Promise.all([
 			this.models.getAvailable(undefined, { signal }),
 			Promise.all(
@@ -443,7 +443,7 @@ export class ModelRuntime implements Models {
 		const all = [...this.models.getModels()];
 		const known = new Set(this.models.getProviders().map((provider) => provider.id));
 		const fresh = (providerId: string) =>
-			known.has(providerId) && pass.generations.get(providerId) === this.generationOf(providerId);
+			known.has(providerId) && (pass.generations.get(providerId) ?? 0) === this.generationOf(providerId);
 		const keep = (providerId: string) => known.has(providerId) && !fresh(providerId);
 		const auth = new Map(pass.checks.filter(([providerId]) => fresh(providerId)));
 		const configuredProviders = new Set(
@@ -543,7 +543,7 @@ export class ModelRuntime implements Models {
 	}
 
 	private async refreshProviderAvailability(providerId: string, signal: AbortSignal): Promise<void> {
-		// A full pass already in flight keeps this provider's entry rather than overwrite it.
+		// A full pass that began before this keeps the provider's current entry. One that begins later is authoritative.
 		this.touchProvider(providerId);
 		const providerSeq = (this.providerAvailabilitySeq.get(providerId) ?? 0) + 1;
 		this.providerAvailabilitySeq.set(providerId, providerSeq);

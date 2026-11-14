@@ -289,4 +289,24 @@ describe("ModelRuntime availability passes", () => {
 
 		expect(runtime.getProviderAuthStatus("late")).toMatchObject({ configured: true, source: "stored" });
 	});
+
+	// #101: a pass that began after an unregister is authoritative for that id's stored credential
+	it("tracks a credential removed after the provider was unregistered", async () => {
+		const { credentials, runtime } = await createRuntime();
+		runtime.registerProvider("foo", {
+			baseUrl: "https://example.test/v1",
+			apiKey: "$PI_TEST_UNSET_AVAILABILITY_KEY",
+			api: "openai-completions",
+			models: [apiModel],
+		});
+		await credentials.modify("foo", async () => ({ type: "api_key", key: "stored-key" }));
+		await runtime.refresh({ allowNetwork: false });
+		expect(runtime.getProviderAuthStatus("foo")).toMatchObject({ configured: true, source: "stored" });
+
+		runtime.unregisterProvider("foo");
+		await credentials.delete("foo");
+		await runtime.refresh({ allowNetwork: false });
+
+		expect(runtime.getProviderAuthStatus("foo").configured).toBe(false);
+	});
 });

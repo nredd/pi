@@ -239,8 +239,17 @@ export function check(root, { strict = false } = {}) {
 	return 1;
 }
 
-// Compare real paths: argv[1] keeps a symlinked prefix (e.g. macOS /tmp -> /private/tmp) that import.meta.url resolves.
-if (process.argv[1] && realpathSync(resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url))) {
+/** True when this file is the entry script. Compares real paths: argv[1] keeps a symlinked prefix (macOS /tmp) that import.meta.url resolves. */
+function isMainModule() {
+	if (!process.argv[1]) return false;
+	try {
+		return realpathSync(resolve(process.argv[1])) === realpathSync(fileURLToPath(import.meta.url));
+	} catch {
+		return false;
+	}
+}
+
+if (isMainModule()) {
 	const [command, ...flags] = process.argv.slice(2);
 	try {
 		if (command === "setup")

@@ -148,7 +148,7 @@ test("check exits non-zero locally; GitHub Actions skips only the hook check", (
 });
 
 // #94: argv[1] behind a symlinked prefix (macOS /tmp, or TMPDIR unset under `env -i`) must still run main.
-test("check runs as main when the script path is behind a symlinked TMPDIR", (t) => {
+test("check runs as main when the script path is behind a symlink, with and without TMPDIR", (t) => {
 	const real = mkdtempSync(join(realpathSync(tmpdir()), "pi-worktree-real-"));
 	const link = `${real}-link`;
 	symlinkSync(real, link);

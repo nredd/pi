@@ -134,7 +134,7 @@ Additional exact contracts, checked 2026-11-13:
   separate units and are not distinguished by these counters. Cache storage is $1 per million token-hours, not a cache-write
   token tariff; tools and other non-token fees are excluded. No Vertex parity is assumed.
   Google's [model](https://ai.google.dev/gemini-api/docs/models) and
-  [deprecation](https://ai.google.dev/gemini-api/docs/deprecations) pages, fetched the same day,
+  [deprecation](https://ai.google.dev/gemini-api/docs/deprecations) pages, fetched 2026-11-13,
   supply lifecycle evidence below. Every Gemini assessment is paid Standard only, never
   the free-tier column, and Batch, Flex, Priority, grounding and other non-token charges are excluded.
 - Dated Gemini contracts end at `retiredOn` (priced through the day before, unpriced from that UTC
@@ -144,6 +144,8 @@ Additional exact contracts, checked 2026-11-13:
   2026-12-31 and Google lists `1.50/7.50/0.15` from 2027-01-01. Argon supports implicit caching only,
   so its cache-write category is unavailable; Flash cache storage ($0.50 per million token-hours,
   $1.00 from 2027-01-01) is a separate meter, not a write price.
+  As for `gemini-2.5-pro`, request-time `cost` arithmetic still uses the numeric rates past these
+  dates; only `estimateTokenCost` stops ([nredd/pi#83](https://github.com/nredd/pi/issues/83)).
 - `gemini-2.5-flash` routes to `gemini-3.5-flash-lite` and bills at its rates from 2026-12-01. Those
   text, image and video rates (`0.30/2.50/0.03`) equal the alias's own, so the assessment carries
   no end date and shares the same constant as its target. Audio input (`$1.00`, cached `$0.10`)

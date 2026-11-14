@@ -403,12 +403,15 @@ test("apt failure is inconclusive, not a red trial trip", () => {
 test("validateArtifact accepts the allowed shape and rejects everything else", () => {
 	const good = {
 		upstreamSha: "a".repeat(40),
+		localSha: "e".repeat(40),
 		merge: { clean: false, conflicts: ["a/b.ts"] },
 		trial: { ...ALL_GREEN },
 	};
 	assert.deepEqual(validateArtifact(good), good);
 	const bad = [
 		{ ...good, upstreamSha: "main" },
+		{ ...good, localSha: "main" },
+		{ ...good, localSha: undefined },
 		{ ...good, extra: 1 },
 		{ ...good, merge: { clean: "yes", conflicts: [] } },
 		{ ...good, merge: { clean: false, conflicts: "x" } },
@@ -434,12 +437,14 @@ test("finalize regenerates facts from git and takes only the validated artifact"
 		});
 		onBranch(repo, "fork", () => commit(repo, { "packages/ai/other.ts": "fork\n" }, "Fork only"));
 		const sha = git(repo, "rev-parse", "upstream");
+		const localSha = git(repo, "rev-parse", "fork");
 		const script = fileURLToPath(new URL("./upstream-drift.mjs", import.meta.url));
 		const art = join(out, "artifact.json");
 		writeFileSync(
 			art,
 			JSON.stringify({
 				upstreamSha: sha,
+				localSha,
 				merge: { clean: true, conflicts: [] },
 				trial: { ...ALL_GREEN, build: "failure" },
 			}),
@@ -479,17 +484,36 @@ test("finalize regenerates facts from git and takes only the validated artifact"
 		const second = run("--previous-body", join(out, "previous.md"));
 		assert.deepEqual(JSON.parse(second.stdout).newTrips, []);
 		assert.equal(existsSync(join(out, "comment.md")), false, "stale comment removed");
-		// Artifact for a different upstream sha is refused, so stale trial results are never mixed in.
-		writeFileSync(
-			art,
-			JSON.stringify({ upstreamSha: "f".repeat(40), merge: { clean: true, conflicts: [] }, trial: ALL_GREEN }),
-		);
+		const write = (over) =>
+			writeFileSync(
+				art,
+				JSON.stringify({
+					upstreamSha: sha,
+					localSha,
+					merge: { clean: true, conflicts: [] },
+					trial: ALL_GREEN,
+					...over,
+				}),
+			);
+		// A sha that is not in the upstream history (e.g. a fork commit served by sha) is refused.
+		write({ upstreamSha: "f".repeat(40) });
 		assert.equal(run().status, 1);
+		write({ upstreamSha: localSha });
+		const notAncestor = run();
+		assert.equal(notAncestor.status, 1);
+		assert.match(notAncestor.stderr, /not an ancestor/);
+		// A trial of a different fork commit is stale and refused.
+		write({ localSha: git(repo, "rev-parse", "base") });
+		const stale = run();
+		assert.equal(stale.status, 1);
+		assert.match(stale.stderr, /different fork commit/);
+		// An older tested upstream sha that is an ancestor of the tip is accepted and facts are taken at that sha.
+		write({ upstreamSha: git(repo, "rev-parse", "upstream~1") });
+		const older = run();
+		assert.equal(older.status, 0, older.stderr);
+		assert.match(readFileSync(join(out, "body.md"), "utf8"), /behind 2, ahead 1/);
 		// A schema violation is refused.
-		writeFileSync(
-			art,
-			JSON.stringify({ upstreamSha: sha, merge: { clean: true, conflicts: [] }, trial: { build: "<b>" } }),
-		);
+		write({ trial: { build: "<b>" } });
 		assert.equal(run().status, 1);
 		// No artifact (trial job failed): still reports facts, merge "not attempted".
 		rmSync(art);
@@ -512,6 +536,7 @@ test("pack builds a validated artifact from a report and trial outcomes", () => 
 			JSON.stringify({
 				...baseReport,
 				upstreamSha: "c".repeat(40),
+				localSha: "d".repeat(40),
 				merge: { clean: true, conflicts: [], kept: true },
 			}),
 		);
@@ -533,6 +558,7 @@ test("pack builds a validated artifact from a report and trial outcomes", () => 
 		assert.equal(result.status, 0, result.stderr);
 		assert.deepEqual(JSON.parse(readFileSync(join(out, "artifact.json"), "utf8")), {
 			upstreamSha: "c".repeat(40),
+			localSha: "d".repeat(40),
 			merge: { clean: true, conflicts: [] },
 			trial: ALL_GREEN,
 		});
@@ -578,8 +604,12 @@ test("workflow splits untrusted trial from privileged report and stays on hosted
 	assert.deepEqual(perms(jobs.trial), ["contents: read"]);
 	assert.deepEqual(perms(jobs.report)?.sort(), ["contents: read", "issues: write"]);
 	assert.match(jobs.report, /needs: trial/);
-	assert.match(jobs.report, /if: always\(\)/);
 	assert.doesNotMatch(jobs.trial, /GH_TOKEN|github\.token|secrets\./);
+	assert.match(
+		jobs.report,
+		/^ {4}if: always\(\) && github\.ref == format\('refs\/heads\/\{0\}', github\.event\.repository\.default_branch\)$/m,
+	);
+	assert.match(jobs.report, /ref: \$\{\{ github\.sha \}\}/, "report checks out the exact tested sha");
 	assert.doesNotMatch(text, /actions\/cache/);
 	assert.doesNotMatch(text, /^\s+cache:/m, "no setup-node cache, so nothing is saved to the shared cache");
 	assert.doesNotMatch(
@@ -619,10 +649,61 @@ test("report job holds the token only in the issue steps and checks out the defa
 	const { jobs } = workflowJobs();
 	const header = jobs.report.slice(0, jobs.report.indexOf("    steps:"));
 	assert.doesNotMatch(header, /GH_TOKEN/);
-	assert.match(jobs.report, /ref: \$\{\{ github\.event\.repository\.default_branch \}\}/);
 	for (const step of jobs.report.split(/\n {6}- /)) {
 		const usesToken = /GH_TOKEN/.test(step);
 		const allowed = /name: (Load rolling issue|Update rolling issue)/.test(step);
 		assert.equal(usesToken, allowed, step.split("\n")[0]);
 	}
+});
+
+const SANDBOX = new URL("./upstream-drift-sandbox.sh", import.meta.url);
+const DOCKERFILE = new URL("./upstream-drift.Dockerfile", import.meta.url);
+
+test("every trial step that executes upstream code goes through the container wrapper", () => {
+	const { jobs } = workflowJobs();
+	const steps = jobs.trial.split(/\n {6}- /);
+	const named = (name) => steps.find((step) => step.startsWith(`name: ${name}`));
+	for (const name of [
+		"Trial install",
+		"Trial restore release model data",
+		"Trial build",
+		"Trial check",
+		"Trial build the pi-env daemon",
+		"Trial tests",
+	]) {
+		const step = named(name);
+		assert.ok(step, name);
+		assert.match(step, /bash scripts\/upstream-drift-sandbox\.sh "\$TRIAL_DIR"/, name);
+		assert.doesNotMatch(step, /working-directory/, `${name} must not run on the host tree`);
+	}
+	// Outside the wrapper the host may only run git/jq/node on trusted scripts, never npm, cargo or the tree's scripts.
+	const host = steps.filter((step) => !/upstream-drift-sandbox\.sh/.test(step)).join("\n");
+	assert.doesNotMatch(host, /npm (ci|install|run|test|pack)|cargo|\.\/test\.sh|working-directory/);
+	assert.match(named("Build sandbox image"), /docker build/);
+});
+
+test("sandbox wrapper is unprivileged, minimal and mounts only the trial tree", () => {
+	const wrapper = readFileSync(SANDBOX, "utf8");
+	assert.match(wrapper, /docker run/);
+	for (const flag of ["--rm", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit"]) {
+		assert.ok(wrapper.includes(flag), flag);
+	}
+	assert.doesNotMatch(
+		wrapper,
+		/--privileged|docker\.sock|--pid[= ]host|--network[= ]host|--ipc|--userns[= ]host|--cap-add|\/proc|sudo/,
+	);
+	assert.equal([...wrapper.matchAll(/(?:-v|--volume|--mount)\b/g)].length, 1, "exactly one mount");
+	assert.match(wrapper, /-v "\$tree:\/work"/);
+	// Env into the container is an explicit short allowlist; nothing is inherited from the runner.
+	const envs = [...wrapper.matchAll(/(?:-e|--env) ([A-Z_]+)=/g)].map((m) => m[1]).sort();
+	assert.deepEqual(envs, ["CARGO_HOME", "CI", "HOME"]);
+	assert.doesNotMatch(wrapper, /--env-file|-e [A-Z_]+ |--env [A-Z_]+ /);
+});
+
+test("sandbox image is pinned by digest and the Dockerfile only copies from pinned stages", () => {
+	const dockerfile = readFileSync(DOCKERFILE, "utf8");
+	const froms = [...dockerfile.matchAll(/^FROM (\S+)/gm)].map((m) => m[1]);
+	assert.ok(froms.length >= 2);
+	for (const from of froms) assert.match(from, /@sha256:[0-9a-f]{64}$/, from);
+	assert.doesNotMatch(dockerfile, /^COPY (?!--from)/m, "no build context is used");
 });

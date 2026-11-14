@@ -55,23 +55,29 @@ jobs:
             --out "$WORK_DIR/report.json"
           echo "clean=$(jq -r '.merge.clean' "$WORK_DIR/report.json")" >> "$GITHUB_OUTPUT"
 
-      - name: Install system dependencies
+      # Everything below that executes upstream code runs in a container (no runner env, token,
+      # processes or sockets, no capabilities, one mount of the merged tree). The host only does git,
+      # jq and trusted scripts from our own checkout. The image comes from a trusted Dockerfile
+      # built from stdin, so no upstream file is in its build context.
+      - name: Build sandbox image
         id: deps
         if: steps.analyze.outputs.clean == 'true'
         continue-on-error: true
-        timeout-minutes: 5
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev fd-find ripgrep
-          sudo ln -s "$(command -v fdfind)" /usr/local/bin/fd
+        timeout-minutes: 15
+        run: docker build --tag upstream-drift-trial - < scripts/upstream-drift.Dockerfile
 
       - name: Trial install
         id: install
         if: steps.deps.outcome == 'success'
         continue-on-error: true
         timeout-minutes: 10
-        working-directory: ${{ env.TRIAL_DIR }}
-        run: npm ci --ignore-scripts
+        run: |
+          bash scripts/upstream-drift-sandbox.sh "$TRIAL_DIR" '
+            rm -rf .git
+            git init -q
+            git add -A
+            git -c user.name=trial -c user.email=trial@example.invalid commit -qm trial
+            npm ci --ignore-scripts'
 
       # Mirrors `ci.yml` (`build-check-test`) minus the dependency audit: frozen release model data,
       # offline build, check, pi-env daemon, isolated tests.
@@ -80,46 +86,41 @@ jobs:
         if: steps.install.outcome == 'success'
         continue-on-error: true
         timeout-minutes: 5
-        working-directory: ${{ env.TRIAL_DIR }}
         run: |
-          set -euo pipefail
-          version=$(node -p "require('./packages/coding-agent/package.json').version")
-          npm pack "@earendil-works/pi-ai@$version" --pack-destination "$RUNNER_TEMP"
-          tar -xzf "$RUNNER_TEMP/earendil-works-pi-ai-$version.tgz" -C "$RUNNER_TEMP"
-          rm -rf packages/ai/src/providers/data
-          cp -R "$RUNNER_TEMP/package/dist/providers/data" packages/ai/src/providers/data
+          bash scripts/upstream-drift-sandbox.sh "$TRIAL_DIR" '
+            version=$(node -p "require(\"./packages/coding-agent/package.json\").version")
+            npm pack "@earendil-works/pi-ai@$version" --pack-destination /tmp
+            tar -xzf "/tmp/earendil-works-pi-ai-$version.tgz" -C /tmp
+            rm -rf packages/ai/src/providers/data
+            cp -R /tmp/package/dist/providers/data packages/ai/src/providers/data'
 
       - name: Trial build
         id: build
         if: steps.models.outcome == 'success'
         continue-on-error: true
         timeout-minutes: 20
-        working-directory: ${{ env.TRIAL_DIR }}
-        run: npm run build:offline
+        run: bash scripts/upstream-drift-sandbox.sh "$TRIAL_DIR" 'npm run build:offline'
 
       - name: Trial check
         id: check
         if: steps.build.outcome == 'success'
         continue-on-error: true
         timeout-minutes: 15
-        working-directory: ${{ env.TRIAL_DIR }}
-        run: npm run check
+        run: bash scripts/upstream-drift-sandbox.sh "$TRIAL_DIR" 'npm run check'
 
       - name: Trial build the pi-env daemon
         id: daemon
         if: steps.check.outcome == 'success'
         continue-on-error: true
         timeout-minutes: 15
-        working-directory: ${{ env.TRIAL_DIR }}
-        run: npm run build:daemon --workspace packages/env
+        run: bash scripts/upstream-drift-sandbox.sh "$TRIAL_DIR" 'npm run build:daemon --workspace packages/env'
 
       - name: Trial tests
         id: test
         if: steps.daemon.outcome == 'success'
         continue-on-error: true
         timeout-minutes: 25
-        working-directory: ${{ env.TRIAL_DIR }}
-        run: ./test.sh
+        run: bash scripts/upstream-drift-sandbox.sh "$TRIAL_DIR" './test.sh'
 
       # Trusted checkout code (not the merged tree) packs the outcomes into the validated artifact.
       - name: Pack artifact
@@ -151,7 +152,8 @@ jobs:
 
   report:
     needs: trial
-    if: always()
+    # Never run the privileged job from a non-default ref: its scripts would not be reviewed main code.
+    if: always() && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -160,11 +162,12 @@ jobs:
     env:
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
-      # Our own main only. No upstream code is checked out, installed, built or executed here.
+      # The exact fork sha the trial tested (the default branch, see the job `if`). No upstream
+      # code is checked out, installed, built or executed here.
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.repository.default_branch }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
@@ -186,20 +189,13 @@ jobs:
           name: upstream-drift-artifact
           path: ${{ env.WORK_DIR }}/artifact
 
-      # Fetch refs only (no checkout, no build). Pin to the sha the trial tested when there is one.
+      # Fetch refs only (no checkout, no build). Always the real upstream main; `finalize` requires
+      # the tested sha to be an ancestor of it, so a bare sha from some other fork cannot be reported.
       - name: Fetch upstream refs (read-only)
         run: |
           git remote add upstream https://github.com/earendil-works/pi.git
           git remote set-url --push upstream DISABLED
-          artifact="$WORK_DIR/artifact/artifact.json"
-          if [ -f "$artifact" ]; then
-            sha="$(jq -r '.upstreamSha // empty' "$artifact")"
-            printf '%s' "$sha" | grep -Eq '^[0-9a-f]{40}$'
-            git fetch --no-tags upstream "$sha"
-          else
-            git fetch --no-tags upstream main
-          fi
-          git update-ref refs/remotes/upstream/main FETCH_HEAD
+          git fetch --no-tags upstream main
 
       - name: Load rolling issue
         id: issue

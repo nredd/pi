@@ -419,9 +419,12 @@ function plainObject(value) {
 export function validateArtifact(raw) {
 	if (!plainObject(raw)) throw new Error("artifact: not an object");
 	const keys = Object.keys(raw).sort().join();
-	if (keys !== "merge,trial,upstreamSha") throw new Error(`artifact: unexpected keys ${keys}`);
+	if (keys !== "localSha,merge,trial,upstreamSha") throw new Error(`artifact: unexpected keys ${keys}`);
 	if (typeof raw.upstreamSha !== "string" || !/^[0-9a-f]{40}$/.test(raw.upstreamSha)) {
 		throw new Error("artifact: upstreamSha must be a 40 hex sha");
+	}
+	if (typeof raw.localSha !== "string" || !/^[0-9a-f]{40}$/.test(raw.localSha)) {
+		throw new Error("artifact: localSha must be a 40 hex sha");
 	}
 	if (!plainObject(raw.merge) || Object.keys(raw.merge).sort().join() !== "clean,conflicts") {
 		throw new Error("artifact: bad merge");
@@ -446,6 +449,7 @@ export function validateArtifact(raw) {
 export function packArtifact(report, trial) {
 	return validateArtifact({
 		upstreamSha: report.upstreamSha,
+		localSha: report.localSha,
 		merge: { clean: report.merge.clean, conflicts: report.merge.conflicts },
 		trial,
 	});
@@ -509,19 +513,26 @@ function main(argv) {
 			throw new Error("--behind-threshold must be a non-negative integer");
 		const artifactText = readOptional(values.artifact);
 		const artifact = artifactText ? validateArtifact(JSON.parse(artifactText)) : undefined;
-		// Facts come from git here, never from the untrusted artifact.
+		// Facts come from git here, never from the untrusted artifact. The tested upstream sha must be
+		// in the history of the real tip (a bare sha can name a commit from any fork in the network).
+		const repo = resolve(values.repo);
+		const upstreamRef = values["upstream-ref"];
+		if (
+			artifact &&
+			git(repo, ["merge-base", "--is-ancestor", artifact.upstreamSha, upstreamRef], { allowFail: true }).status !== 0
+		) {
+			throw new Error(`artifact upstream sha ${artifact.upstreamSha} is not an ancestor of ${upstreamRef}`);
+		}
 		const report = analyze({
-			repo: resolve(values.repo),
+			repo,
 			localRef: values["local-ref"],
-			upstreamRef: values["upstream-ref"],
+			upstreamRef: artifact ? artifact.upstreamSha : upstreamRef,
 			previousBody,
 			behindThreshold: threshold,
 		});
 		if (artifact) {
-			if (artifact.upstreamSha !== report.upstreamSha) {
-				throw new Error(
-					`artifact is for upstream ${artifact.upstreamSha}, but ${report.upstreamRef} is ${report.upstreamSha}`,
-				);
+			if (artifact.localSha !== report.localSha) {
+				throw new Error(`artifact tested ${artifact.localSha}, a different fork commit than ${report.localSha}`);
 			}
 			report.merge = { clean: artifact.merge.clean, conflicts: artifact.merge.conflicts, kept: false };
 		}

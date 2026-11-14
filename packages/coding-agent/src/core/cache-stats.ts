@@ -16,6 +16,8 @@ export interface CacheMiss {
 	missedTokens: number;
 	/** Extra dollars paid vs. a full cache hit; 0 when pricing is unknown. */
 	missedCost: number;
+	/** True when the message's cost is unpriced: the miss cost is unknown, NOT 0 (`missedCost` is 0). */
+	costUnknown?: true;
 	/** Milliseconds since the previous request (which last refreshed the cache). */
 	idleMs: number;
 	/** True when the model changed relative to the previous request. */
@@ -25,6 +27,8 @@ export interface CacheMiss {
 export interface CacheWasteTotals {
 	missedTokens: number;
 	missedCost: number;
+	/** Counted misses whose cost is unknown (unpriced messages); excluded from `missedCost`. */
+	unpricedMisses: number;
 	/** Number of counted misses (turns above the noise floor). */
 	missCount: number;
 }
@@ -75,18 +79,21 @@ function detectMiss(
 	// land in the input or cacheWrite buckets, so the paid rate comes straight
 	// from this message's own cost breakdown.
 	const paidTokens = usage.input + usage.cacheWrite;
+	const base = {
+		missedTokens,
+		idleMs: Math.max(0, message.timestamp - prev.timestamp),
+		modelChanged: `${message.provider}/${message.model}` !== prev.modelKey,
+	};
+	// Unpriced usage carries no paid rate, and the catalogue read rate no longer describes this model's
+	// billing either, so the extra cost is unknown rather than 0.
+	if (usage.cost.unpriced) return { ...base, missedCost: 0, costUnknown: true };
 	const paidPerToken = paidTokens > 0 ? (usage.cost.input + usage.cost.cacheWrite) / paidTokens : 0;
 	const readPerToken =
 		usage.cacheRead > 0
 			? usage.cost.cacheRead / usage.cacheRead
 			: (models.getModel(message.provider, message.model)?.cost.cacheRead ?? 0) / 1_000_000;
 
-	return {
-		missedTokens,
-		missedCost: missedTokens * Math.max(0, paidPerToken - readPerToken),
-		idleMs: Math.max(0, message.timestamp - prev.timestamp),
-		modelChanged: `${message.provider}/${message.model}` !== prev.modelKey,
-	};
+	return { ...base, missedCost: missedTokens * Math.max(0, paidPerToken - readPerToken) };
 }
 
 function asPreviousRequest(message: AssistantMessage, reportedCache: boolean): PreviousRequest | undefined {
@@ -106,7 +113,7 @@ function scan(
 	models: ModelPriceSource,
 ): { prev: PreviousRequest | undefined; totals: CacheWasteTotals; misses: Map<AssistantMessage, CacheMiss> } {
 	let prev: PreviousRequest | undefined;
-	const totals: CacheWasteTotals = { missedTokens: 0, missedCost: 0, missCount: 0 };
+	const totals: CacheWasteTotals = { missedTokens: 0, missedCost: 0, unpricedMisses: 0, missCount: 0 };
 	const misses = new Map<AssistantMessage, CacheMiss>();
 
 	for (const entry of entries) {
@@ -132,6 +139,7 @@ function scan(
 			if (miss) {
 				totals.missedTokens += miss.missedTokens;
 				totals.missedCost += miss.missedCost;
+				if (miss.costUnknown) totals.unpricedMisses += 1;
 				totals.missCount += 1;
 				misses.set(entry.message, miss);
 			}

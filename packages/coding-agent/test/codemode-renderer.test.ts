@@ -58,6 +58,37 @@ describe("codemode renderer", () => {
 		expect(text).toBe('✓ read {"path":"a"} 5ms\n\nhello');
 	});
 
+	// nredd/pi#83
+	it("shows unpriced model calls instead of $0 and counts them in the total", () => {
+		const call = { name: "models.classify", args: "scorer/judge", status: "ok" as const, durationMs: 5 };
+		const details = (calls: CodemodeToolDetails["calls"]) => ({
+			content: [{ type: "text" as const, text: "Script completed\nWall time 0.1 seconds\nOutput:\n" }],
+			details: { calls },
+		});
+		expect(
+			render(
+				details([
+					{ ...call, id: "1", cost: 0.02 },
+					{ ...call, id: "2", unpriced: true },
+				]),
+			),
+		).toBe(
+			[
+				"✓ models.classify scorer/judge 5ms $0.02",
+				"✓ models.classify scorer/judge 5ms unpriced",
+				"Model calls: $0.02 + 1 unpriced",
+			].join("\n"),
+		);
+		expect(
+			render(
+				details([
+					{ ...call, id: "1", unpriced: true },
+					{ ...call, id: "2", unpriced: true },
+				]),
+			),
+		).toContain("Model calls: unknown (2 unpriced)");
+	});
+
 	it("shows the cost of model calls and their total", () => {
 		const call = { name: "models.classify", args: "scorer/judge", status: "ok" as const, durationMs: 5 };
 		const text = render({

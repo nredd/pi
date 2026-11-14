@@ -97,6 +97,8 @@ export interface CodemodeNestedCall {
 	error?: string;
 	/** Cost in USD of a `models.*` call that reported usage. */
 	cost?: number;
+	/** The call's cost is unknown (retired price contract); `cost` is then absent, not 0. */
+	unpriced?: true;
 }
 
 export interface CodemodeToolDetails {

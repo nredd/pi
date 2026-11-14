@@ -165,7 +165,7 @@ return result.answers;
 
 [Codemode](codemode.md#classify) describes the question and answer types.
 
-When the service reports token counts, as all System One services do, `result.usage` carries them with their cost. Pi adds the usage of a script's classifier calls to the `codemode` tool result, so it counts toward the session cost in the footer and `/session`. The recorded cost uses the model's numeric catalog price; models without one, such as TypeSafe's direct `jev-latest`, retain a compatibility zero. That zero does not establish free usage; the strict pricing estimator reports missing verification as unknown.
+When the service reports token counts, as all System One services do, `result.usage` carries them with their cost. Pi adds the usage of a script's classifier calls to the `codemode` tool result, so it counts toward the session cost in the footer and `/session`. The recorded cost uses the model's numeric catalog price, or is marked `unpriced` (fields 0, unknown rather than free) once the price contract is past its `retiredOn` date (see [pricing](pricing.md)); models without one, such as TypeSafe's direct `jev-latest`, retain a compatibility zero. That zero does not establish free usage; the strict pricing estimator reports missing verification as unknown.
 
 Extensions call classifiers through `ctx.modelRegistry.classify()`, without codemode. [Virtual models](virtual-models.md#route-requests) can use them to route requests; see the `jev-router.ts` example.
 

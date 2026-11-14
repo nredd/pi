@@ -366,7 +366,10 @@ export interface SessionStats {
 	};
 	/** Priced spend only; unpriced usage is excluded (see `unpricedCount`), never counted as $0. */
 	cost: number;
-	/** Entries recorded as priced / as unpriced (catalogue contract retired). */
+	/**
+	 * Requests recorded as priced (billable tokens or nonzero cost) / as unpriced (catalogue contract retired).
+	 * Zero-usage requests, e.g. errored or aborted before `message_start`, are in neither count.
+	 */
 	pricedCount: number;
 	unpricedCount: number;
 	contextUsage?: ContextUsage;

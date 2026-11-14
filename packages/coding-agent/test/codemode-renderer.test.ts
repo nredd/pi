@@ -89,6 +89,20 @@ describe("codemode renderer", () => {
 		).toContain("Model calls: unknown (2 unpriced)");
 	});
 
+	it("counts a free priced call as priced next to an unpriced one", () => {
+		const call = { name: "models.classify", args: "scorer/judge", status: "ok" as const, durationMs: 5 };
+		const out = render({
+			content: [{ type: "text" as const, text: "Script completed\nWall time 0.1 seconds\nOutput:\n" }],
+			details: {
+				calls: [
+					{ ...call, id: "1", priced: true, cost: 0 },
+					{ ...call, id: "2", unpriced: true },
+				],
+			},
+		});
+		expect(out).toContain("Model calls: $0.00 + 1 unpriced");
+	});
+
 	it("shows the cost of model calls and their total", () => {
 		const call = { name: "models.classify", args: "scorer/judge", status: "ok" as const, durationMs: 5 };
 		const text = render({

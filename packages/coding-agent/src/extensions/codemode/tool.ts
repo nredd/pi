@@ -99,6 +99,8 @@ export interface CodemodeNestedCall {
 	cost?: number;
 	/** The call's cost is unknown (retired price contract); `cost` is then absent, not 0. */
 	unpriced?: true;
+	/** The call billed tokens or a nonzero cost (`pricedCallsOf`), so a $0 `cost` still counts as priced. */
+	priced?: true;
 }
 
 export interface CodemodeToolDetails {

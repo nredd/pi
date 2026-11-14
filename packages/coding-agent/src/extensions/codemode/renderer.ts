@@ -32,7 +32,7 @@ function formatDuration(ms: number | undefined): string {
 
 /** Cents for larger amounts, two significant digits for the fractions of a cent classifier calls cost. */
 function formatCost(cost: number): string {
-	return `$${cost >= 0.01 ? cost.toFixed(2) : cost.toPrecision(2)}`;
+	return `$${cost >= 0.01 || cost === 0 ? cost.toFixed(2) : cost.toPrecision(2)}`;
 }
 
 function statusIcon(call: CodemodeNestedCall, theme: Theme): string {
@@ -53,7 +53,7 @@ function statusIcon(call: CodemodeNestedCall, theme: Theme): string {
  * unpriced. Undefined when there is nothing worth a summary line.
  */
 export function formatModelCallsCost(calls: readonly CodemodeNestedCall[]): string | undefined {
-	const priced = calls.filter((call) => call.cost && !call.unpriced);
+	const priced = calls.filter((call) => (call.priced || call.cost) && !call.unpriced);
 	const unpriced = calls.filter((call) => call.unpriced).length;
 	if (unpriced > 0 && priced.length === 0) return `unknown (${unpriced} unpriced)`;
 	const total = priced.reduce((sum, call) => sum + (call.cost ?? 0), 0);

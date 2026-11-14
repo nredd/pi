@@ -101,13 +101,11 @@ import {
 
 /** One full availability check, not yet written to the snapshot. */
 interface AvailabilityPass {
-	/** Provider ids listed when the pass began. */
-	listed: ReadonlySet<string>;
+	/** Generation of every provider listed when the pass began (see `providerGeneration`). */
+	generations: ReadonlyMap<string, number>;
 	available: Model<Api>[];
 	checks: [string, AuthCheck | undefined][];
 	storedProviders: Set<string>;
-	/** `providerInvalidations` when the pass began. */
-	invalidations: number;
 }
 
 /** Most newer availability passes one awaited refresh waits for before resolving. */
@@ -251,8 +249,11 @@ export class ModelRuntime implements Models {
 	private availabilityErrorSeq = 0;
 	/** Seq of the last full pass written to the snapshot. */
 	private lastWrittenPassSeq = 0;
-	/** Counts provider-level availability refreshes, which supersede an older full pass for that provider. */
-	private providerInvalidations = 0;
+	/**
+	 * Per-provider change counter, bumped when a provider is registered, unregistered or refreshed on
+	 * its own. A full pass only writes entries for providers whose generation is unchanged since it began.
+	 */
+	private readonly providerGeneration = new Map<string, number>();
 	/** The most recently queued full availability pass; later passes supersede earlier ones. */
 	private latestAvailabilityPass: { seq: number; settled: Promise<void> } | undefined;
 	private readonly providerAvailabilitySeq = new Map<string, number>();
@@ -404,7 +405,7 @@ export class ModelRuntime implements Models {
 	/** Check every provider known now. Pure: the caller decides whether the result may be written. */
 	private async checkAvailability(signal: AbortSignal): Promise<AvailabilityPass> {
 		const providers = this.models.getProviders();
-		const invalidations = this.providerInvalidations;
+		const generations = new Map(providers.map((provider) => [provider.id, this.generationOf(provider.id)]));
 		const [available, checks, credentials] = await Promise.all([
 			this.models.getAvailable(undefined, { signal }),
 			Promise.all(
@@ -418,40 +419,48 @@ export class ModelRuntime implements Models {
 			this.credentials.list({ signal }),
 		]);
 		return {
-			listed: new Set(providers.map((provider) => provider.id)),
+			generations,
 			available: [...available],
 			checks,
 			storedProviders: new Set(credentials.map((entry) => entry.providerId)),
-			invalidations,
 		};
 	}
 
+	private generationOf(providerId: string): number {
+		return this.providerGeneration.get(providerId) ?? 0;
+	}
+
+	private touchProvider(providerId: string): void {
+		this.providerGeneration.set(providerId, this.generationOf(providerId) + 1);
+	}
+
 	/**
-	 * Write a pass. Entries for the providers it listed are replaced; entries for providers
-	 * registered after it began are kept, since the pass never saw them (#101).
+	 * Write a pass. Entries are replaced only for providers the pass listed and that have not changed
+	 * since (no registration, unregistration or provider-level refresh). For any other provider the
+	 * pass's view is stale, so the current snapshot entry stays, or is dropped if the provider is gone (#101).
 	 */
 	private writeAvailability(pass: AvailabilityPass, seq: number): void {
-		const auth = new Map(pass.checks);
+		const all = [...this.models.getModels()];
+		const known = new Set(this.models.getProviders().map((provider) => provider.id));
+		const fresh = (providerId: string) =>
+			known.has(providerId) && pass.generations.get(providerId) === this.generationOf(providerId);
+		const keep = (providerId: string) => known.has(providerId) && !fresh(providerId);
+		const auth = new Map(pass.checks.filter(([providerId]) => fresh(providerId)));
 		const configuredProviders = new Set(
-			pass.checks
+			[...auth]
 				.filter((entry): entry is [string, AuthCheck] => entry[1] !== undefined)
 				.map(([providerId]) => providerId),
 		);
-		// Providers registered after the pass began are unlisted but exist now. Unlisted entries of
-		// providers that are gone (unregistered) are dropped, as a full replace would.
-		const all = [...this.models.getModels()];
-		const known = new Set(this.models.getProviders().map((provider) => provider.id));
-		const isNew = (providerId: string) => !pass.listed.has(providerId) && known.has(providerId);
 		for (const [providerId, check] of this.snapshot.auth) {
-			if (isNew(providerId)) auth.set(providerId, check);
+			if (keep(providerId)) auth.set(providerId, check);
 		}
 		for (const providerId of this.snapshot.configuredProviders) {
-			if (isNew(providerId)) configuredProviders.add(providerId);
+			if (keep(providerId)) configuredProviders.add(providerId);
 		}
 		const modelKey = (model: Model<Api>) => `${model.provider}/${model.id}`;
-		const availableKeys = new Set(pass.available.map(modelKey));
+		const availableKeys = new Set(pass.available.filter((model) => fresh(model.provider)).map(modelKey));
 		for (const model of this.snapshot.available) {
-			if (isNew(model.provider)) availableKeys.add(modelKey(model));
+			if (keep(model.provider)) availableKeys.add(modelKey(model));
 		}
 		this.snapshot = {
 			all,
@@ -518,16 +527,14 @@ export class ModelRuntime implements Models {
 			waitedSeq = latest.seq;
 			await raceWithAbortSignal(latest.settled, signal);
 		}
-		// A provider-level refresh since this pass began owns its provider's entry: do not overwrite it.
-		if (this.lastWrittenPassSeq >= seq || pass.invalidations !== this.providerInvalidations || signal.aborted) return;
+		if (this.lastWrittenPassSeq >= seq || signal.aborted) return;
 		this.writeAvailability(pass, seq);
 		if (errorSeq === this.availabilityErrorSeq) this.availabilityError = undefined;
 	}
 
 	private async refreshProviderAvailability(providerId: string, signal: AbortSignal): Promise<void> {
-		// Invalidate any full availability pass that started before this credential change.
-		++this.availabilityRefreshSeq;
-		++this.providerInvalidations;
+		// A full pass already in flight keeps this provider's entry rather than overwrite it.
+		this.touchProvider(providerId);
 		const providerSeq = (this.providerAvailabilitySeq.get(providerId) ?? 0) + 1;
 		this.providerAvailabilitySeq.set(providerId, providerSeq);
 		const errorSeq = ++this.availabilityErrorSeq;
@@ -1207,6 +1214,7 @@ export class ModelRuntime implements Models {
 		if (!provider.id.trim()) throw new Error("Provider id must not be empty.");
 		this.extensionProviders.delete(provider.id);
 		this.nativeExtensionProviders.set(provider.id, provider);
+		this.touchProvider(provider.id);
 		this.recomposeProvider(provider.id);
 		this.updateModelSnapshot();
 		this.markProvisionallyConfigured(
@@ -1261,6 +1269,7 @@ export class ModelRuntime implements Models {
 			if (value !== undefined) (effective as Record<string, unknown>)[key] = value;
 		}
 		this.extensionProviders.set(providerId, effective);
+		this.touchProvider(providerId);
 		this.recomposeProvider(providerId);
 		this.updateModelSnapshot();
 		this.markProvisionallyConfigured(
@@ -1274,6 +1283,7 @@ export class ModelRuntime implements Models {
 	unregisterProvider(providerId: string): void {
 		this.extensionProviders.delete(providerId);
 		this.nativeExtensionProviders.delete(providerId);
+		this.touchProvider(providerId);
 		this.recomposeProvider(providerId);
 		this.updateModelSnapshot();
 		void this.refresh({ allowNetwork: false });
@@ -1297,6 +1307,7 @@ export class ModelRuntime implements Models {
 			route: (request, ctx) => definition.route(request, ctx),
 		});
 		this.virtualModels.set(providerId, models);
+		this.touchProvider(providerId);
 		if (!this.recomposeProvider(providerId) && !this.snapshot.configuredProviders.has(providerId)) {
 			// A provider of only virtual models needs no credentials. Mark it configured now: session
 			// restore checks auth before the refresh below lands.
@@ -1310,6 +1321,7 @@ export class ModelRuntime implements Models {
 		const models = this.virtualModels.get(providerId);
 		if (!models?.delete(id)) return;
 		if (models.size === 0) this.virtualModels.delete(providerId);
+		this.touchProvider(providerId);
 		this.recomposeProvider(providerId);
 		this.updateModelSnapshot();
 		void this.refresh({ allowNetwork: false });

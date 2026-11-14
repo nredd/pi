@@ -210,4 +210,52 @@ describe("ModelRuntime availability passes", () => {
 		expect(runtime.hasConfiguredAuth("late")).toBe(false);
 		expect(runtime.getModel("late", "m")).toBeUndefined();
 	});
+
+	// #101: a provider re-registered while a pass that listed it is in flight keeps its new mark
+	it("keeps a re-registered provider's configured mark over an in-flight pass that listed it", async () => {
+		const { credentials, runtime } = await createRuntime();
+		runtime.registerProvider("late", {
+			baseUrl: "https://example.test/v1",
+			apiKey: "$PI_TEST_UNSET_AVAILABILITY_KEY",
+			api: "openai-completions",
+			models: [apiModel],
+		});
+		await runtime.refresh({ allowNetwork: false });
+		expect(runtime.hasConfiguredAuth("late")).toBe(false);
+		const pass = holdNextPass(credentials);
+		const stale = runtime.refresh({ allowNetwork: false });
+		await pass.listed;
+		delayNextRefreshUntil(runtime, stale);
+
+		runtime.registerProvider("late", {
+			baseUrl: "https://example.test/v1",
+			apiKey: "literal-key",
+			api: "openai-completions",
+			models: [apiModel],
+		});
+		pass.release();
+		await stale;
+
+		expect(runtime.hasConfiguredAuth("late")).toBe(true);
+	});
+
+	// #101: a provider-level refresh mid-pass must not discard the pass for every other provider
+	it("writes an in-flight pass for other providers when a provider-level refresh lands mid-pass", async () => {
+		const { credentials, runtime } = await createRuntime();
+		const flag = { on: false };
+		const env = envAuthProvider(flag);
+		runtime.registerNativeProvider(env);
+		await runtime.refresh({ allowNetwork: false });
+		expect(runtime.hasConfiguredAuth(env.id)).toBe(false);
+
+		flag.on = true;
+		const pass = holdNextPass(credentials);
+		const stale = runtime.refresh({ allowNetwork: false });
+		await pass.listed;
+		await runtime.setRuntimeApiKey("other", "key");
+		pass.release();
+		await stale;
+
+		expect(runtime.hasConfiguredAuth(env.id)).toBe(true);
+	});
 });

@@ -37,7 +37,7 @@ export default function (pi: ExtensionAPI) {
 									const m = e.message as AssistantMessage;
 									input += m.usage.input;
 									output += m.usage.output;
-									cost += m.usage.cost.total;
+									if (!m.usage.cost.unpriced) cost += m.usage.cost.total;
 								}
 							}
 

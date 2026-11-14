@@ -50,6 +50,8 @@ function formatUsageStats(
 		cacheRead: number;
 		cacheWrite: number;
 		cost: number;
+		/** Assistant messages whose cost is unknown (retired price contract); excluded from `cost`. */
+		unpriced?: number;
 		contextTokens?: number;
 		turns?: number;
 	},
@@ -62,6 +64,7 @@ function formatUsageStats(
 	if (usage.cacheRead) parts.push(`R${formatTokens(usage.cacheRead)}`);
 	if (usage.cacheWrite) parts.push(`W${formatTokens(usage.cacheWrite)}`);
 	if (usage.cost) parts.push(`$${usage.cost.toFixed(4)}`);
+	if (usage.unpriced) parts.push(`${usage.unpriced} unpriced`);
 	if (usage.contextTokens && usage.contextTokens > 0) {
 		parts.push(`ctx:${formatTokens(usage.contextTokens)}`);
 	}
@@ -140,6 +143,7 @@ interface UsageStats {
 	cacheRead: number;
 	cacheWrite: number;
 	cost: number;
+	unpriced?: number;
 	contextTokens: number;
 	turns: number;
 }
@@ -369,7 +373,8 @@ async function runSingleAgent(
 							currentResult.usage.output += usage.output || 0;
 							currentResult.usage.cacheRead += usage.cacheRead || 0;
 							currentResult.usage.cacheWrite += usage.cacheWrite || 0;
-							currentResult.usage.cost += usage.cost?.total || 0;
+							if (usage.cost?.unpriced) currentResult.usage.unpriced = (currentResult.usage.unpriced ?? 0) + 1;
+							else currentResult.usage.cost += usage.cost?.total || 0;
 							currentResult.usage.contextTokens = usage.totalTokens || 0;
 						}
 						if (!currentResult.model && msg.model) currentResult.model = msg.model;
@@ -846,13 +851,14 @@ export default function (pi: ExtensionAPI) {
 			}
 
 			const aggregateUsage = (results: SingleResult[]) => {
-				const total = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, turns: 0 };
+				const total = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0, unpriced: 0, turns: 0 };
 				for (const r of results) {
 					total.input += r.usage.input;
 					total.output += r.usage.output;
 					total.cacheRead += r.usage.cacheRead;
 					total.cacheWrite += r.usage.cacheWrite;
 					total.cost += r.usage.cost;
+					total.unpriced += r.usage.unpriced ?? 0;
 					total.turns += r.usage.turns;
 				}
 				return total;

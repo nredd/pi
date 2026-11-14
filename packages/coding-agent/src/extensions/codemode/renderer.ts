@@ -48,6 +48,19 @@ function statusIcon(call: CodemodeNestedCall, theme: Theme): string {
 	}
 }
 
+/**
+ * Total for the nested model calls: the priced sum plus "N unpriced", or "unknown" when every call is
+ * unpriced. Undefined when there is nothing worth a summary line.
+ */
+export function formatModelCallsCost(calls: readonly CodemodeNestedCall[]): string | undefined {
+	const priced = calls.filter((call) => call.cost && !call.unpriced);
+	const unpriced = calls.filter((call) => call.unpriced).length;
+	if (unpriced > 0 && priced.length === 0) return `unknown (${unpriced} unpriced)`;
+	const total = priced.reduce((sum, call) => sum + (call.cost ?? 0), 0);
+	if (unpriced > 0) return `${formatCost(total)} + ${unpriced} unpriced`;
+	return priced.length > 1 ? formatCost(total) : undefined;
+}
+
 function formatCall(call: CodemodeNestedCall, theme: Theme, expanded: boolean): string {
 	const args =
 		!expanded && call.args.length > COLLAPSED_ARGS_CHARS
@@ -57,7 +70,8 @@ function formatCall(call: CodemodeNestedCall, theme: Theme, expanded: boolean): 
 	let line = `${statusIcon(call, theme)} ${theme.fg("toolTitle", call.name)}`;
 	if (args) line += ` ${theme.fg("muted", args)}`;
 	if (duration) line += ` ${theme.fg("dim", duration)}`;
-	if (call.cost) line += ` ${theme.fg("dim", formatCost(call.cost))}`;
+	if (call.unpriced) line += ` ${theme.fg("dim", "unpriced")}`;
+	else if (call.cost) line += ` ${theme.fg("dim", formatCost(call.cost))}`;
 	if (expanded && call.error) line += `\n    ${theme.fg("error", call.error.split("\n").join("\n    "))}`;
 	return line;
 }
@@ -107,11 +121,8 @@ export const codemodeRenderers: Pick<
 				);
 			}
 			// Collapsed rows hide earlier calls, so the total covers every call.
-			const priced = calls.filter((call) => call.cost);
-			if (priced.length > 1) {
-				const total = priced.reduce((sum, call) => sum + (call.cost ?? 0), 0);
-				lines.push(theme.fg("muted", `Model calls: ${formatCost(total)}`));
-			}
+			const summary = formatModelCallsCost(calls);
+			if (summary) lines.push(theme.fg("muted", `Model calls: ${summary}`));
 			component.addChild(new Spacer(1));
 			component.addChild(new Text(lines.join("\n"), 0, 0));
 		}

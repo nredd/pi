@@ -468,6 +468,17 @@ export interface Usage {
 		cacheRead: number;
 		cacheWrite: number;
 		total: number;
+		/**
+		 * True when the catalogue no longer prices this request (past a contract's `retiredOn`). The numeric
+		 * fields are then 0 and mean "unknown", NOT free: the provider may still bill. Consumers must exclude
+		 * the entry from spend totals and say "unpriced" instead of printing $0. On an aggregate it means
+		 * some summed usage was unpriced and the totals are a priced subtotal. Absent on older records.
+		 */
+		unpriced?: true;
+		/** Why the cost is unpriced, for display. Only set with `unpriced`. */
+		reason?: string;
+		/** Aggregates only (`combineUsage`, durable ledger): how many summed requests were unpriced. Absent means 1. */
+		unpricedCalls?: number;
 	};
 }
 

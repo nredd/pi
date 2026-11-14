@@ -553,6 +553,8 @@ Response:
       "total": 105000
     },
     "cost": 0.45,
+    "pricedCount": 22,
+    "unpricedCount": 0,
     "contextUsage": {
       "tokens": 60000,
       "contextWindow": 200000,
@@ -562,7 +564,7 @@ Response:
 }
 ```
 
-`tokens` and `cost` include assistant messages, usage reported by tools, and compaction/branch-summary generation across the full session. `contextUsage` contains the actual current context-window estimate used for compaction and footer display.
+`tokens` and `cost` include assistant messages, usage reported by tools, and compaction/branch-summary generation across the full session. `cost` sums priced entries only; `unpricedCount` entries (retired price contract, `cost.unpriced: true`) are excluded and unknown, not free. See [pricing](pricing.md). `contextUsage` contains the actual current context-window estimate used for compaction and footer display.
 
 `contextUsage` is omitted when no model or context window is available. `contextUsage.tokens` and `contextUsage.percent` are `null` immediately after compaction until a fresh post-compaction assistant response provides valid usage data.
 

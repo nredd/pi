@@ -4,7 +4,12 @@ import type { AgentSession } from "../../../core/agent-session.ts";
 import { areExperimentalFeaturesEnabled } from "../../../core/experimental.ts";
 import type { ContextUsage } from "../../../core/extensions/types.ts";
 import type { ReadonlyFooterDataProvider } from "../../../core/footer-data-provider.ts";
-import { addUsageToTotals, createUsageTotals, type UsageTotals } from "../../../core/usage-totals.ts";
+import {
+	addUsageToTotals,
+	createUsageTotals,
+	formatUsageTotalsCost,
+	type UsageTotals,
+} from "../../../core/usage-totals.ts";
 import { theme } from "../theme/theme.ts";
 
 /**
@@ -190,10 +195,8 @@ export class FooterComponent implements Component {
 		const usingSubscription = state.model
 			? state.model.provider === "kimi-coding" || this.session.modelRuntime.isUsingSubscription(state.model.provider)
 			: false;
-		if (usageTotals.cost || usingSubscription) {
-			const costStr = `$${usageTotals.cost.toFixed(3)}${usingSubscription ? " (sub)" : ""}`;
-			statsParts.push(costStr);
-		}
+		const costText = formatUsageTotalsCost(usageTotals) ?? (usingSubscription ? "$0.000" : undefined);
+		if (costText) statsParts.push(`${costText}${usingSubscription ? " (sub)" : ""}`);
 
 		// Colorize context percentage based on usage
 		let contextPercentStr: string;

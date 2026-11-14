@@ -2,6 +2,7 @@ import {
 	type Api,
 	type AssistantMessage,
 	type AssistantMessageEventStream,
+	catalogueCost,
 	type Model,
 	type ModelsSimpleStreamOptions,
 	normalizeContext,
@@ -250,6 +251,31 @@ describe("cache warming", () => {
 		});
 		await vi.advanceTimersByTimeAsync(270_000);
 		expect(unavailable.calls).toHaveLength(0);
+	});
+
+	// nredd/pi#83: a retired price contract is unpriced, so economics are unknown and warming stops.
+	it("stops once the model's price contract is retired", async () => {
+		vi.useFakeTimers();
+		// Built-in data is generated from a release; apply the current catalogue contract explicitly.
+		const sonnet = { ...budgetModel, cost: catalogueCost(budgetModel) };
+		expect(sonnet.cost.assessment).toMatchObject({ retiredOn: "2026-11-30" });
+		vi.setSystemTime(new Date("2026-11-29T12:00:00Z"));
+		const priced = fakeRuntime({ branch: branchWithPrompt(100_000) });
+		priced.warmer.start(request(sonnet), current);
+		expect(priced.warmer.status.decision).toMatchObject({ economicsAvailable: true });
+		priced.warmer.cancel();
+
+		vi.setSystemTime(new Date("2026-11-30T12:00:00Z"));
+		const retired = fakeRuntime({ branch: branchWithPrompt(100_000) });
+		retired.warmer.start(request(sonnet), current);
+		// Stops by the explicit unpriced state: the rerouted contract is unassessed, so neither the warm cost nor
+		// the miss cost is known, and the retired rates belong to a different contract.
+		expect(retired.warmer.status).toMatchObject({
+			state: "inactive",
+			reason: "price contract retired (unpriced)",
+		});
+		await vi.advanceTimersByTimeAsync(270_000);
+		expect(retired.calls).toHaveLength(0);
 	});
 
 	it("stops for unsupported requests, context changes, and mode changes", async () => {

@@ -217,7 +217,7 @@ if (toolCalls.length > 0) {
 }
 
 console.log(`Total tokens: ${finalMessage.usage.input} in, ${finalMessage.usage.output} out`);
-console.log(`Cost: $${finalMessage.usage.cost.total.toFixed(4)}`);
+console.log(`Cost: $${finalMessage.usage.cost.unpriced ? "unpriced" : finalMessage.usage.cost.total.toFixed(4)}`);
 
 // Option 2: Get complete response without streaming
 const response = await models.complete(model, context);

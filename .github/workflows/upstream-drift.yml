@@ -18,7 +18,7 @@ concurrency:
 jobs:
   drift:
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    timeout-minutes: 100
     env:
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
@@ -48,6 +48,7 @@ jobs:
         id: issue
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           mkdir -p "$WORK_DIR"
           gh issue list --label upstream-drift --state open --limit 1 --json number,body > "$WORK_DIR/issue.json"
@@ -68,10 +69,11 @@ jobs:
         id: deps
         if: steps.analyze.outputs.clean == 'true'
         continue-on-error: true
+        timeout-minutes: 5
         run: |
           sudo apt-get update
           sudo apt-get install -y libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev fd-find ripgrep
-          sudo ln -s "$(which fdfind)" /usr/local/bin/fd
+          sudo ln -s "$(command -v fdfind)" /usr/local/bin/fd
 
       - name: Trial install
         id: install
@@ -81,13 +83,29 @@ jobs:
         working-directory: ${{ env.TRIAL_DIR }}
         run: npm ci --ignore-scripts
 
+      # Mirrors `ci.yml` (`build-check-test`) minus the dependency audit: frozen release model data,
+      # offline build, check, pi-env daemon, isolated tests.
+      - name: Trial restore release model data
+        id: models
+        if: steps.install.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 5
+        working-directory: ${{ env.TRIAL_DIR }}
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./packages/coding-agent/package.json').version")
+          npm pack "@earendil-works/pi-ai@$version" --pack-destination "$RUNNER_TEMP"
+          tar -xzf "$RUNNER_TEMP/earendil-works-pi-ai-$version.tgz" -C "$RUNNER_TEMP"
+          rm -rf packages/ai/src/providers/data
+          cp -R "$RUNNER_TEMP/package/dist/providers/data" packages/ai/src/providers/data
+
       - name: Trial build
         id: build
-        if: steps.install.outcome == 'success'
+        if: steps.models.outcome == 'success'
         continue-on-error: true
         timeout-minutes: 20
         working-directory: ${{ env.TRIAL_DIR }}
-        run: npm run build
+        run: npm run build:offline
 
       - name: Trial check
         id: check
@@ -97,9 +115,17 @@ jobs:
         working-directory: ${{ env.TRIAL_DIR }}
         run: npm run check
 
+      - name: Trial build the pi-env daemon
+        id: daemon
+        if: steps.check.outcome == 'success'
+        continue-on-error: true
+        timeout-minutes: 15
+        working-directory: ${{ env.TRIAL_DIR }}
+        run: npm run build:daemon --workspace packages/env
+
       - name: Trial tests
         id: test
-        if: steps.check.outcome == 'success'
+        if: steps.daemon.outcome == 'success'
         continue-on-error: true
         timeout-minutes: 25
         working-directory: ${{ env.TRIAL_DIR }}
@@ -108,13 +134,18 @@ jobs:
       - name: Record trial outcomes
         if: steps.analyze.outcome == 'success'
         env:
+          DEPS: ${{ steps.deps.outcome }}
           INSTALL: ${{ steps.install.outcome }}
+          MODELS: ${{ steps.models.outcome }}
           BUILD: ${{ steps.build.outcome }}
           CHECK: ${{ steps.check.outcome }}
+          DAEMON: ${{ steps.daemon.outcome }}
           TEST: ${{ steps.test.outcome }}
         run: |
-          jq -n --arg install "$INSTALL" --arg build "$BUILD" --arg check "$CHECK" --arg test "$TEST" \
-            '{install: $install, build: $build, check: $check, test: $test}' > "$WORK_DIR/trial.json"
+          jq -n --arg deps "$DEPS" --arg install "$INSTALL" --arg models "$MODELS" --arg build "$BUILD" \
+            --arg check "$CHECK" --arg daemon "$DAEMON" --arg test "$TEST" \
+            '{deps: $deps, install: $install, models: $models, build: $build, check: $check, daemon: $daemon, test: $test}' \
+            > "$WORK_DIR/trial.json"
 
       - name: Render summary and decide trips
         if: steps.analyze.outcome == 'success'
@@ -130,10 +161,11 @@ jobs:
         if: steps.analyze.outcome == 'success'
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
           ISSUE_NUMBER: ${{ steps.issue.outputs.number }}
         run: |
           if [ -z "$ISSUE_NUMBER" ]; then
-            gh label create upstream-drift --description "Fork drift from earendil-works/pi" 2>/dev/null || true
+            gh label create upstream-drift --description "Fork drift from earendil-works/pi" || true
             url="$(gh issue create --title "Upstream drift canary" --label upstream-drift --body-file "$WORK_DIR/body.md")"
             ISSUE_NUMBER="${url##*/}"
           else

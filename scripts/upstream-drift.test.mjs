@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import {
 	analyze,
@@ -193,6 +194,8 @@ test("behind threshold edges: equal does not trip, one over does", () => {
 	}
 });
 
+const ALL_GREEN = { deps: "success", install: "success", models: "success", build: "success", check: "success", daemon: "success", test: "success" };
+
 const baseReport = {
 	localRef: "origin/main",
 	upstreamRef: "upstream/main",
@@ -248,11 +251,11 @@ test("parseState tolerates missing or corrupt markers", () => {
 test("rendered body has no unicode dashes and truncates long lists", () => {
 	const touches = Array.from({ length: 40 }, (_, i) => ({ sha: `${i}`.padStart(40, "0"), subject: `Commit ${i}`, files: ["f"] }));
 	const report = { ...baseReport, patchedTouches: touches, patchedFiles: ["f"], newSinceLastRun: 7 };
-	const body = renderBody(report, evaluate(report, {}), { now: "T", trial: { install: "success", build: "success", check: "success", test: "success" } });
+	const body = renderBody(report, evaluate(report, {}), { now: "T", trial: ALL_GREEN });
 	assert.doesNotMatch(body, /[\u2013\u2014]/);
 	assert.match(body, /\.\.\. and 15 more/);
 	assert.match(body, /since last run: 7/);
-	assert.match(body, /install: success, build: success, check: success, test: success/);
+	assert.match(body, /deps: success, install: success, models: success, build: success, check: success, daemon: success, test: success/);
 });
 
 test("many long breaking entries stay under the issue body limit and comment stays short", () => {
@@ -265,4 +268,31 @@ test("many long breaking entries stay under the issue body limit and comment sta
 	const comment = renderComment(decision);
 	assert.ok(comment.length < 3000, `comment is ${comment.length} chars`);
 	assert.match(comment, /80 new breaking change entries/);
+});
+
+test("finalize CLI writes the body, comments only for new trips, and removes a stale comment", () => {
+	const dir = mkdtempSync(join(tmpdir(), "drift-cli-"));
+	try {
+		const script = fileURLToPath(new URL("./upstream-drift.mjs", import.meta.url));
+		const report = { ...baseReport, behind: 250 };
+		writeFileSync(join(dir, "report.json"), JSON.stringify(report));
+		writeFileSync(join(dir, "trial.json"), JSON.stringify({ ...ALL_GREEN, build: "failure" }));
+		const run = (...extra) => {
+			const result = spawnSync(process.execPath, [script, "finalize", "--report", join(dir, "report.json"), "--trial", join(dir, "trial.json"), "--body-out", join(dir, "body.md"), "--comment-out", join(dir, "comment.md"), ...extra], { encoding: "utf8" });
+			assert.equal(result.status, 0, result.stderr);
+			return JSON.parse(result.stdout);
+		};
+		const first = run();
+		assert.deepEqual(first.newTrips, ["behind", "trial"]);
+		assert.match(readFileSync(join(dir, "comment.md"), "utf8"), /trial build red/);
+		writeFileSync(join(dir, "previous.md"), readFileSync(join(dir, "body.md"), "utf8"));
+		const second = run("--previous-body", join(dir, "previous.md"));
+		assert.deepEqual(second.newTrips, []);
+		assert.equal(existsSync(join(dir, "comment.md")), false, "stale comment removed");
+		assert.deepEqual(parseState(readFileSync(join(dir, "body.md"), "utf8")).tripped, ["behind", "trial"]);
+		const bad = spawnSync(process.execPath, [script, "nope"], { encoding: "utf8" });
+		assert.equal(bad.status, 1);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
 });

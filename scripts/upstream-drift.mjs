@@ -23,7 +23,7 @@ const MAX_LISTED = 25;
 const MAX_AREAS = 15;
 const MAX_TEXT = 160;
 const MAX_COMMENT_BREAKING = 5;
-const TRIAL_STEPS = ["install", "build", "check", "test"];
+const TRIAL_STEPS = ["deps", "install", "models", "build", "check", "daemon", "test"];
 const RED_OUTCOMES = new Set(["failure", "cancelled", "timed_out"]);
 
 /**

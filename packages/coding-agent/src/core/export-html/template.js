@@ -1351,7 +1351,7 @@
         let userMessages = 0, assistantMessages = 0, toolResults = 0;
         let customMessages = 0, compactions = 0, branchSummaries = 0, toolCalls = 0;
         const tokens = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
-        const cost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+        const cost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, unpriced: 0, priced: 0 };
         const models = new Set();
 
         for (const entry of entryList) {
@@ -1366,7 +1366,11 @@
                 tokens.output += msg.usage.output || 0;
                 tokens.cacheRead += msg.usage.cacheRead || 0;
                 tokens.cacheWrite += msg.usage.cacheWrite || 0;
-                if (msg.usage.cost) {
+                if (msg.usage.cost && msg.usage.cost.unpriced) {
+                  // Unknown cost (retired price contract), not $0: counted, never summed.
+                  cost.unpriced++;
+                } else if (msg.usage.cost) {
+                  cost.priced++;
                   cost.input += msg.usage.cost.input || 0;
                   cost.output += msg.usage.cost.output || 0;
                   cost.cacheRead += msg.usage.cost.cacheRead || 0;
@@ -1388,10 +1392,17 @@
         return { userMessages, assistantMessages, toolResults, customMessages, compactions, branchSummaries, toolCalls, tokens, cost, models: Array.from(models) };
       }
 
+      // Priced total, plus "N unpriced" for entries the catalogue could not price; "unknown" when none were priced.
+      function formatCostText(cost, total) {
+        if (cost.unpriced > 0 && cost.priced === 0) return 'unknown';
+        return `$${total.toFixed(3)}` + (cost.unpriced > 0 ? ` + ${cost.unpriced} unpriced` : '');
+      }
+
       const globalStats = computeStats(entries);
 
       function renderHeader() {
         const totalCost = globalStats.cost.input + globalStats.cost.output + globalStats.cost.cacheRead + globalStats.cost.cacheWrite;
+        const costText = formatCostText(globalStats.cost, totalCost);
 
         const tokenParts = [];
         if (globalStats.tokens.input) tokenParts.push(`↑${formatTokens(globalStats.tokens.input)}`);
@@ -1425,7 +1436,7 @@
               <div class="info-item"><span class="info-label">Messages:</span><span class="info-value">${msgParts.join(', ') || '0'}</span></div>
               <div class="info-item"><span class="info-label">Tool Calls:</span><span class="info-value">${globalStats.toolCalls}</span></div>
               <div class="info-item"><span class="info-label">Tokens:</span><span class="info-value">${tokenParts.join(' ') || '0'}</span></div>
-              <div class="info-item"><span class="info-label">Cost:</span><span class="info-value">$${totalCost.toFixed(3)}</span></div>
+              <div class="info-item"><span class="info-label">Cost:</span><span class="info-value">${costText}</span></div>
             </div>
           </div>`;
 

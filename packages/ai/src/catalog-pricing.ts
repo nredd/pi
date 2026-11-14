@@ -942,6 +942,32 @@ export function calculateTokenCost(cost: ModelCost, usage: Usage & { cacheWrite1
 	return usage.cost;
 }
 
+function validDate(date: string): boolean {
+	return (
+		/^\d{4}-\d{2}-\d{2}$/.test(date) &&
+		!Number.isNaN(Date.parse(`${date}T00:00:00Z`)) &&
+		new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) === date
+	);
+}
+
+/** Today as a UTC `YYYY-MM-DD` date, the unit `retiredOn` is expressed in. */
+export function pricingToday(): string {
+	return new Date().toISOString().slice(0, 10);
+}
+
+/**
+ * True when the assessed contract is bounded by a `retiredOn` on or before `asOf`. A present but
+ * malformed `retiredOn` (or `asOf`) fails closed as retired, the same answer `estimateTokenCost` gives
+ * ("Invalid pricing metadata"), so the two never disagree. Schema validation rejects such dates at load.
+ */
+export function isPricingRetired(cost: ModelCost, asOf: string = pricingToday()): boolean {
+	const assessment = cost.assessment;
+	const retiredOn = assessment && assessment.status !== "unknown" ? assessment.retiredOn : undefined;
+	if (retiredOn === undefined) return false;
+	if (typeof retiredOn !== "string" || !validDate(retiredOn) || !validDate(asOf)) return true;
+	return asOf >= retiredOn;
+}
+
 export interface PricingTokens {
 	input: number;
 	output: number;
@@ -959,7 +985,7 @@ export type CostEstimate = { cost: Usage["cost"]; reason?: never } | { cost: nul
 export function estimateTokenCost(
 	model: Pick<AnyModel, "type" | "cost"> | undefined,
 	tokens: PricingTokens,
-	asOf = new Date().toISOString().slice(0, 10),
+	asOf = pricingToday(),
 ): CostEstimate {
 	if (!model?.cost) return { cost: null, reason: "Model or exact alias mapping is unavailable." };
 	if (model.type === "image") return { cost: null, reason: "Non-token image accounting is unsupported." };
@@ -1003,10 +1029,6 @@ export function estimateTokenCost(
 		!Number.isSafeInteger(tokens.input + tokens.output + tokens.cacheRead + tokens.cacheWrite)
 	)
 		return { cost: null, reason: "Invalid token counters." };
-	const validDate = (date: string) =>
-		/^\d{4}-\d{2}-\d{2}$/.test(date) &&
-		!Number.isNaN(Date.parse(`${date}T00:00:00Z`)) &&
-		new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) === date;
 	if (!validDate(asOf)) return { cost: null, reason: "Invalid evaluation date." };
 	if (asOf < assessment.checkedAt) return { cost: null, reason: "Evaluation date precedes the verified price check." };
 	for (const limit of [assessment.maxContextTokens, assessment.maxOutputTokens])

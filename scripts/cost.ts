@@ -56,6 +56,8 @@ interface DayCost {
 	cacheRead: number;
 	cacheWrite: number;
 	requests: number;
+	/** Requests with an unknown cost (retired price contract); excluded from the sums, never counted as $0. */
+	unpriced?: number;
 }
 
 interface Stats {
@@ -107,15 +109,20 @@ for (const file of files) {
 					cacheRead: 0,
 					cacheWrite: 0,
 					requests: 0,
+					unpriced: 0,
 				};
 			}
 
+			stats[day][provider].requests += 1;
+			if (cost.unpriced) {
+				stats[day][provider].unpriced = (stats[day][provider].unpriced ?? 0) + 1;
+				continue;
+			}
 			stats[day][provider].total += cost.total || 0;
 			stats[day][provider].input += cost.input || 0;
 			stats[day][provider].output += cost.output || 0;
 			stats[day][provider].cacheRead += cost.cacheRead || 0;
 			stats[day][provider].cacheWrite += cost.cacheWrite || 0;
-			stats[day][provider].requests += 1;
 		} catch {
 			// Skip malformed lines
 		}
@@ -157,9 +164,10 @@ for (const day of sortedDays) {
 		providerTotals[provider].cacheRead += s.cacheRead;
 		providerTotals[provider].cacheWrite += s.cacheWrite;
 		providerTotals[provider].requests += s.requests;
+		providerTotals[provider].unpriced = (providerTotals[provider].unpriced ?? 0) + (s.unpriced ?? 0);
 
 		console.log(
-			`  ${provider.padEnd(15)} $${s.total.toFixed(4).padStart(8)}  (${s.requests} reqs, in: $${s.input.toFixed(4)}, out: $${s.output.toFixed(4)}, cache: $${(s.cacheRead + s.cacheWrite).toFixed(4)})`
+			`  ${provider.padEnd(15)} $${s.total.toFixed(4).padStart(8)}  (${s.requests} reqs${s.unpriced ? `, ${s.unpriced} unpriced` : ""}, in: $${s.input.toFixed(4)}, out: $${s.output.toFixed(4)}, cache: $${(s.cacheRead + s.cacheWrite).toFixed(4)})`
 		);
 	}
 
@@ -174,7 +182,7 @@ console.log("-".repeat(40));
 for (const provider of Object.keys(providerTotals).sort()) {
 	const t = providerTotals[provider];
 	console.log(
-		`  ${provider.padEnd(15)} $${t.total.toFixed(4).padStart(8)}  (${t.requests} reqs, in: $${t.input.toFixed(4)}, out: $${t.output.toFixed(4)}, cache: $${(t.cacheRead + t.cacheWrite).toFixed(4)})`
+		`  ${provider.padEnd(15)} $${t.total.toFixed(4).padStart(8)}  (${t.requests} reqs${t.unpriced ? `, ${t.unpriced} unpriced` : ""}, in: $${t.input.toFixed(4)}, out: $${t.output.toFixed(4)}, cache: $${(t.cacheRead + t.cacheWrite).toFixed(4)})`
 	);
 }
 

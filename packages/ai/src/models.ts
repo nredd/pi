@@ -19,7 +19,7 @@ import type {
 	LoginOptions,
 	ProviderAuth,
 } from "./auth/types.ts";
-import { calculateTokenCost } from "./catalog-pricing.ts";
+import { calculateTokenCost, isPricingRetired } from "./catalog-pricing.ts";
 
 export { estimateTokenCost } from "./catalog-pricing.ts";
 
@@ -1206,7 +1206,29 @@ export function hasApi<TApi extends Api>(model: AnyModel, api: TApi): model is M
 	return isModelType(model, "chat") && model.api === api;
 }
 
-export function calculateCost(model: AnyModel, usage: Usage): Usage["cost"] {
+/**
+ * Request-time cost. Past the contract's `retiredOn` the numeric rates no longer describe what the
+ * provider bills, and the successor contract is not assessed, so the cost is unknown: every field is 0
+ * and `unpriced: true` marks it. A bare 0 would record real spend as free. Matches `estimateTokenCost`,
+ * which returns null. `asOf` is a UTC `YYYY-MM-DD` date, injectable for tests.
+ */
+export function calculateCost(model: AnyModel, usage: Usage, asOf?: string): Usage["cost"] {
+	if (isPricingRetired(model.cost, asOf)) {
+		Object.assign(usage.cost, {
+			input: 0,
+			output: 0,
+			cacheRead: 0,
+			cacheWrite: 0,
+			total: 0,
+			unpriced: true,
+			reason: "Price contract retired; the successor contract is not assessed.",
+		});
+		return usage.cost;
+	}
+	// A reused cost object must not keep a stale marker from an earlier retired call.
+	delete usage.cost.unpriced;
+	delete usage.cost.reason;
+	delete usage.cost.unpricedCalls;
 	return calculateTokenCost(model.cost, usage);
 }
 

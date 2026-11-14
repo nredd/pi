@@ -45,6 +45,8 @@ interface Totals {
 	costCacheRead: number;
 	costCacheWrite: number;
 	costTotal: number;
+	/** Messages whose cost is unknown (retired price contract); excluded from the cost sums. */
+	unpricedMessages: number;
 	assistantMessages: number;
 	sessions: Set<string>;
 }
@@ -71,6 +73,7 @@ function createTotals(): Totals {
 		costCacheRead: 0,
 		costCacheWrite: 0,
 		costTotal: 0,
+		unpricedMessages: 0,
 		assistantMessages: 0,
 		sessions: new Set<string>(),
 	};
@@ -90,11 +93,15 @@ function addUsage(totals: Totals, usage: Usage, sessionFile: string): void {
 	totals.cacheRead += usage.cacheRead ?? 0;
 	totals.cacheWrite += usage.cacheWrite ?? 0;
 	totals.totalTokens += usage.totalTokens ?? 0;
-	totals.costInput += cost.input ?? 0;
-	totals.costOutput += cost.output ?? 0;
-	totals.costCacheRead += cost.cacheRead ?? 0;
-	totals.costCacheWrite += cost.cacheWrite ?? 0;
-	totals.costTotal += cost.total ?? 0;
+	if (cost.unpriced) {
+		totals.unpricedMessages += 1;
+	} else {
+		totals.costInput += cost.input ?? 0;
+		totals.costOutput += cost.output ?? 0;
+		totals.costCacheRead += cost.cacheRead ?? 0;
+		totals.costCacheWrite += cost.cacheWrite ?? 0;
+		totals.costTotal += cost.total ?? 0;
+	}
 	totals.assistantMessages += 1;
 	totals.sessions.add(sessionFile);
 }
@@ -157,7 +164,7 @@ function printTotals(label: string, totals: Totals): void {
 		`${label.padEnd(16)} messages: ${String(totals.assistantMessages).padStart(5)}  sessions: ${String(totals.sessions.size).padStart(3)}  ` +
 			`input: ${formatInt(totals.input).padStart(12)}  output: ${formatInt(totals.output).padStart(10)}  ` +
 			`cache read: ${formatInt(totals.cacheRead).padStart(13)}  cache write: ${formatInt(totals.cacheWrite).padStart(10)}  ` +
-			`total: ${formatInt(totals.totalTokens).padStart(13)}  cost: ${formatCost(totals.costTotal).padStart(10)}`,
+			`total: ${formatInt(totals.totalTokens).padStart(13)}  cost: ${formatCost(totals.costTotal).padStart(10)}${totals.unpricedMessages ? ` + ${totals.unpricedMessages} unpriced` : ""}`,
 	);
 }
 

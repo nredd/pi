@@ -406,7 +406,9 @@ async function runPiCodingAgent<TOutput extends JsonValue>(
 				metadata: {
 					cacheReadTokens: stats.tokens.cacheRead,
 					cacheWriteTokens: stats.tokens.cacheWrite,
-					...(hasPricing ? { estimatedCostUsd: stats.cost } : {}),
+					// Unpriced messages make the sum a lower bound, so report their count and omit the total.
+					...(hasPricing && stats.unpricedCount === 0 ? { estimatedCostUsd: stats.cost } : {}),
+					...(stats.unpricedCount > 0 ? { unpricedMessages: stats.unpricedCount } : {}),
 				},
 			},
 		};

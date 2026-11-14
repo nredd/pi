@@ -1,6 +1,28 @@
 Catalogue pricing:
 
-- `cost` retains numeric request-time arithmetic for existing callers. Recorded transcript
+- `retiredOn` (UTC `YYYY-MM-DD`, a real calendar date; the schema rejects `2026-02-30`) bounds a
+  contract: priced before it, unpriced on and after it. `estimateTokenCost` returns
+  `{cost: null, reason}`. `calculateCost` returns every cost field as 0 plus `unpriced: true` and a
+  `reason` on `Usage["cost"]`. That 0 means UNKNOWN, not free: the provider may still bill (e.g. a
+  rerouted alias), and the successor contract is not assessed here. A malformed `retiredOn` that
+  bypasses the schema fails closed (unpriced) in both functions, so they always agree. Both take an
+  optional `asOf` date for tests, defaulting to today (UTC).
+- Unpriced handling, every consumer distinguishes the marker from a real $0:
+  - Totals (`usage-totals.ts`, codemode, the durable `pi.usage` ledger) exclude unpriced entries
+    from spend and keep a count. Footer, `/session` and the HTML export print the priced total plus
+    `N unpriced`, or `unknown` when nothing was priced. The compaction and branch-summary line prints
+    `cost unknown, unpriced`. `/session` per-model rows follow the same rule.
+  - `cache-stats.ts` treats an unpriced message's miss cost as unknown (`costUnknown`, counted in
+    `unpricedMisses`), never $0, and does not fall back to the catalogue read price.
+  - `cache-warmer.ts` stops warming with reason `price contract retired (unpriced)`. Keeping the
+    last known rates "approximate" was rejected: a warm is a real billed request, the rates belong
+    to the retired contract (e.g. the rerouted `gemini-3.8-flash` bills 0.75/3.75/0.075 against
+    1.25/10/0.125) and so the expected-savings test would compare two wrong numbers.
+  - On an aggregate `Usage` (`combineUsage`, durable ledger) `unpriced` means some summed requests
+    were unpriced and the totals are a priced subtotal; the ledger also counts them in
+    `unpricedCalls`.
+  - Session files and exports serialize the marker as-is. Older records without it are priced.
+- Before `retiredOn`, `cost` retains numeric request-time arithmetic for existing callers. Recorded transcript
   costs are historical observations; updating this catalogue does not rewrite or reprice them.
 - `cost.assessment` distinguishes `verified`, verified `free`, and `unknown`. Missing
   assessment is unknown, even when every numeric field is zero. Unknown does not mean
@@ -55,9 +77,8 @@ Source audit, checked 2026-11-12:
   it (input/output/read). Storage at $4.50 per million tokens/hour is outside token value.
   Google reroutes this alias to `gemini-3.8-flash` billing on 2026-12-01, so its assessment
   carries `retiredOn: 2026-12-01`: priced through 2026-11-30, unpriced from that date. The
-  rerouted price is not applied here and `estimateTokenCost` never prices the old rates past
-  the date. Request-time `cost` arithmetic still uses the numeric rates; tracked in
-  [nredd/pi#83](https://github.com/nredd/pi/issues/83).
+  rerouted price is not applied here, so neither `estimateTokenCost` nor `calculateCost`
+  prices the old rates past the date (see `retiredOn` above).
 - Official AWS pricing [here](https://aws.amazon.com/bedrock/pricing/) supplies a chosen
   published baseline, not an account-specific invoice. AWS has no universal default region.
   This estimate uses the **Global Cross-region Inference**, **US East (N. Virginia)** selector,
@@ -144,8 +165,8 @@ Additional exact contracts, checked 2026-11-13:
   2026-12-31 and Google lists `1.50/7.50/0.15` from 2027-01-01. Argon supports implicit caching only,
   so its cache-write category is unavailable; Flash cache storage ($0.50 per million token-hours,
   $1.00 from 2027-01-01) is a separate meter, not a write price.
-  As for `gemini-2.5-pro`, request-time `cost` arithmetic still uses the numeric rates past these
-  dates; only `estimateTokenCost` stops ([nredd/pi#83](https://github.com/nredd/pi/issues/83)).
+  As for `gemini-2.5-pro`, both `estimateTokenCost` and `calculateCost` stop at the date; a call
+  after it is marked `unpriced`, never $0 or the old rate.
 - `gemini-2.5-flash` routes to `gemini-3.5-flash-lite` and bills at its rates from 2026-12-01. Those
   text, image and video rates (`0.30/2.50/0.03`) equal the alias's own, so the assessment carries
   no end date and shares the same constant as its target. Audio input (`$1.00`, cached `$0.10`)

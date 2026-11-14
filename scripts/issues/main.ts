@@ -88,6 +88,7 @@ async function view() {
 		sync,
 		queue: triage.queueSize(),
 		cost: await triage.usageCost(),
+		unpricedCalls: await triage.usageUnpriced(),
 		items,
 	};
 }

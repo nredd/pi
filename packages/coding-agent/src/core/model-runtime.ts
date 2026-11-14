@@ -99,6 +99,17 @@ import {
 	withVirtualModels,
 } from "./virtual-models.ts";
 
+/** One full availability check, not yet written to the snapshot. */
+interface AvailabilityPass {
+	/** Provider ids listed when the pass began. */
+	listed: ReadonlySet<string>;
+	available: Model<Api>[];
+	checks: [string, AuthCheck | undefined][];
+	storedProviders: Set<string>;
+	/** `providerInvalidations` when the pass began. */
+	invalidations: number;
+}
+
 /** Most newer availability passes one awaited refresh waits for before resolving. */
 const MAX_SUPERSEDING_PASS_WAITS = 4;
 
@@ -238,6 +249,10 @@ export class ModelRuntime implements Models {
 	};
 	private availabilityRefreshSeq = 0;
 	private availabilityErrorSeq = 0;
+	/** Seq of the last full pass written to the snapshot. */
+	private lastWrittenPassSeq = 0;
+	/** Counts provider-level availability refreshes, which supersede an older full pass for that provider. */
+	private providerInvalidations = 0;
 	/** The most recently queued full availability pass; later passes supersede earlier ones. */
 	private latestAvailabilityPass: { seq: number; settled: Promise<void> } | undefined;
 	private readonly providerAvailabilitySeq = new Map<string, number>();
@@ -386,8 +401,10 @@ export class ModelRuntime implements Models {
 		};
 	}
 
-	private async runAvailabilityRefresh(seq: number, errorSeq: number, signal: AbortSignal): Promise<void> {
+	/** Check every provider known now. Pure: the caller decides whether the result may be written. */
+	private async checkAvailability(signal: AbortSignal): Promise<AvailabilityPass> {
 		const providers = this.models.getProviders();
+		const invalidations = this.providerInvalidations;
 		const [available, checks, credentials] = await Promise.all([
 			this.models.getAvailable(undefined, { signal }),
 			Promise.all(
@@ -400,21 +417,41 @@ export class ModelRuntime implements Models {
 			),
 			this.credentials.list({ signal }),
 		]);
-		if (seq !== this.availabilityRefreshSeq) return;
-		const auth = new Map(checks);
+		return {
+			listed: new Set(providers.map((provider) => provider.id)),
+			available: [...available],
+			checks,
+			storedProviders: new Set(credentials.map((entry) => entry.providerId)),
+			invalidations,
+		};
+	}
+
+	/**
+	 * Write a pass. Entries for the providers it listed are replaced; entries for providers
+	 * registered after it began are kept, since the pass never saw them (#101).
+	 */
+	private writeAvailability(pass: AvailabilityPass, seq: number): void {
+		const auth = new Map(pass.checks);
 		const configuredProviders = new Set(
-			checks
+			pass.checks
 				.filter((entry): entry is [string, AuthCheck] => entry[1] !== undefined)
 				.map(([providerId]) => providerId),
 		);
+		for (const [providerId, check] of this.snapshot.auth) {
+			if (!pass.listed.has(providerId)) auth.set(providerId, check);
+		}
+		for (const providerId of this.snapshot.configuredProviders) {
+			if (!pass.listed.has(providerId)) configuredProviders.add(providerId);
+		}
+		const kept = this.snapshot.available.filter((model) => !pass.listed.has(model.provider));
 		this.snapshot = {
 			all: [...this.models.getModels()],
-			available: [...available],
+			available: [...pass.available, ...kept],
 			configuredProviders,
-			storedProviders: new Set(credentials.map((entry) => entry.providerId)),
+			storedProviders: pass.storedProviders,
 			auth,
 		};
-		if (errorSeq === this.availabilityErrorSeq) this.availabilityError = undefined;
+		this.lastWrittenPassSeq = seq;
 	}
 
 	private queueAvailabilityRefresh(signal?: AbortSignal): Promise<void> {
@@ -424,12 +461,22 @@ export class ModelRuntime implements Models {
 		}
 		const errorSeq = ++this.availabilityErrorSeq;
 		const effectiveSignal = operationSignal(signal);
-		const pass = this.runAvailabilityRefresh(seq, errorSeq, effectiveSignal).catch((error) => {
-			if (errorSeq === this.availabilityErrorSeq && !effectiveSignal.aborted) {
-				this.availabilityError = error instanceof Error ? error.message : String(error);
-			}
-			throw error;
-		});
+		const pass = this.checkAvailability(effectiveSignal).then(
+			(result) => {
+				// Only the newest pass writes; an older one waits to see whether a newer one does.
+				if (seq === this.availabilityRefreshSeq) {
+					this.writeAvailability(result, seq);
+					if (errorSeq === this.availabilityErrorSeq) this.availabilityError = undefined;
+				}
+				return result;
+			},
+			(error) => {
+				if (errorSeq === this.availabilityErrorSeq && !effectiveSignal.aborted) {
+					this.availabilityError = error instanceof Error ? error.message : String(error);
+				}
+				throw error;
+			},
+		);
 		this.latestAvailabilityPass = {
 			seq,
 			settled: pass.then(
@@ -437,30 +484,41 @@ export class ModelRuntime implements Models {
 				() => undefined,
 			),
 		};
-		return this.settleSupersedingPasses(pass, seq, effectiveSignal);
+		return this.settleSupersededPass(pass, seq, errorSeq, effectiveSignal);
 	}
 
 	/**
 	 * A pass superseded by a newer one discards its result, so resolving right after it would hand
-	 * the awaiting caller a snapshot that is not yet current. Wait for the passes queued after it
-	 * (their errors are recorded by those passes, not rethrown here). Every wait is on a strictly
-	 * newer pass, and a pass never waits on another, so this cannot deadlock; the loop is capped so
-	 * a steady stream of refreshes cannot hold a caller forever.
+	 * the awaiting caller a snapshot that is not yet current. Wait for the newer passes (their errors
+	 * are recorded by those passes, not rethrown here). If none of them wrote, because they failed or
+	 * were aborted, write this pass's own result rather than resolve without any write. Every wait is
+	 * on a strictly newer pass and a pass never waits on another, so this cannot deadlock; the loop is
+	 * capped so a steady stream of refreshes cannot hold a caller forever.
 	 */
-	private async settleSupersedingPasses(pass: Promise<void>, seq: number, signal: AbortSignal): Promise<void> {
-		await pass;
+	private async settleSupersededPass(
+		passPromise: Promise<AvailabilityPass>,
+		seq: number,
+		errorSeq: number,
+		signal: AbortSignal,
+	): Promise<void> {
+		const pass = await passPromise;
 		let waitedSeq = seq;
 		for (let i = 0; i < MAX_SUPERSEDING_PASS_WAITS && !signal.aborted; i++) {
 			const latest = this.latestAvailabilityPass;
-			if (!latest || latest.seq <= waitedSeq) return;
+			if (!latest || latest.seq <= waitedSeq) break;
 			waitedSeq = latest.seq;
 			await raceWithAbortSignal(latest.settled, signal);
 		}
+		// A provider-level refresh since this pass began owns its provider's entry: do not overwrite it.
+		if (this.lastWrittenPassSeq >= seq || pass.invalidations !== this.providerInvalidations || signal.aborted) return;
+		this.writeAvailability(pass, seq);
+		if (errorSeq === this.availabilityErrorSeq) this.availabilityError = undefined;
 	}
 
 	private async refreshProviderAvailability(providerId: string, signal: AbortSignal): Promise<void> {
 		// Invalidate any full availability pass that started before this credential change.
 		++this.availabilityRefreshSeq;
+		++this.providerInvalidations;
 		const providerSeq = (this.providerAvailabilitySeq.get(providerId) ?? 0) + 1;
 		this.providerAvailabilitySeq.set(providerId, providerSeq);
 		const errorSeq = ++this.availabilityErrorSeq;
@@ -1165,12 +1223,10 @@ export class ModelRuntime implements Models {
 	}
 
 	/**
-	 * Mark a provider configured ahead of its availability check. A full pass already in flight listed
-	 * providers before this one existed and would write a snapshot without it, so it is invalidated;
-	 * the caller's own refresh replaces this entry (#101).
+	 * Mark a provider configured ahead of its availability check. A pass already in flight never
+	 * listed it, so its write keeps this entry; the next pass that lists it replaces it.
 	 */
 	private markConfigured(providerId: string, check: AuthCheck): void {
-		++this.availabilityRefreshSeq;
 		const configuredProviders = new Set(this.snapshot.configuredProviders).add(providerId);
 		const auth = new Map(this.snapshot.auth);
 		// Never clobber a real check result.

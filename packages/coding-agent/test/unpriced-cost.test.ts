@@ -177,6 +177,15 @@ describe("priced versus zero-usage entries", () => {
 		expect(aggregate(...inputs)).toBe("$0.000 + 2 unpriced");
 	});
 
+	it("reads a legacy marked aggregate without pricedCalls by its priced subtotal", () => {
+		const legacy = (total: number): Usage => ({
+			...unpriced(),
+			cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total, unpriced: true, unpricedCalls: 2 },
+		});
+		expect(perEntry(legacy(1.5))).toBe("$1.500 + 2 unpriced");
+		expect(perEntry(legacy(0))).toBe("unknown");
+	});
+
 	it("keeps a free priced request apart from a zero-usage failure in an aggregate", () => {
 		expect(aggregate(zeroUsage(), unpriced())).toBe("unknown");
 		expect(aggregate(freePriced(), zeroUsage(), unpriced())).toBe("$0.000 + 1 unpriced");

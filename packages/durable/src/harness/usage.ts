@@ -1,5 +1,6 @@
 import { copyJson, type Draft, type JsonRepresentation } from "@earendil-works/chord";
 import type { Usage } from "@earendil-works/pi-ai";
+import { pricedCallsOf, unpricedCallsOf } from "@earendil-works/pi-ai/utils/usage-counts";
 import { defineDoc } from "../documents.ts";
 import type { ConversationId, Tx } from "../types.ts";
 
@@ -34,18 +35,23 @@ export async function recordUsage(
 	const total = Object.hasOwn(totals, key) ? totals[key] : undefined;
 	// Providers may leave optional counters `undefined`; drafts take strict JSON.
 	if (total === undefined)
-		totals[key] = copyJson(withUnpricedCount(usage), { omitUndefinedProperties: true }) as JsonRepresentation<Usage>;
+		totals[key] = copyJson(withCallCounts(usage), { omitUndefinedProperties: true }) as JsonRepresentation<Usage>;
 	else addUsage(total, usage);
 }
 
-/** A first-recorded unpriced usage starts the ledger's count at 1. */
-function withUnpricedCount(usage: Usage): Usage {
+/** A first-recorded unpriced usage starts the ledger's counts at its own request. */
+function withCallCounts(usage: Usage): Usage {
 	if (!usage.cost.unpriced) return usage;
-	return { ...usage, cost: { ...usage.cost, unpricedCalls: usage.cost.unpricedCalls ?? 1 } };
+	return {
+		...usage,
+		cost: { ...usage.cost, unpricedCalls: unpricedCallsOf(usage), pricedCalls: pricedCallsOf(usage) },
+	};
 }
 
 /** Add every counter of `usage` to `total`; optional counters are added once either side reports them. */
 export function addUsage(total: Draft<Usage> | Usage, usage: Usage): void {
+	// Read before the sum: a total that was unmarked counts as one request when it had billable tokens or cost.
+	const pricedBefore = pricedCallsOf(total);
 	total.input += usage.input;
 	total.output += usage.output;
 	total.cacheRead += usage.cacheRead;
@@ -58,13 +64,14 @@ export function addUsage(total: Draft<Usage> | Usage, usage: Usage): void {
 	total.cost.cacheRead += usage.cost.cacheRead;
 	total.cost.cacheWrite += usage.cost.cacheWrite;
 	total.cost.total += usage.cost.total;
-	// Unpriced usage adds 0 to the totals, which are then a priced subtotal; keep the marker and a count
+	// Unpriced usage adds 0 to the totals, which are then a priced subtotal; keep the marker and both counts
 	// so a reader never mistakes the sum for the full spend.
 	if (usage.cost.unpriced) {
 		total.cost.unpriced = true;
-		total.cost.unpricedCalls = (total.cost.unpricedCalls ?? 0) + (usage.cost.unpricedCalls ?? 1);
+		total.cost.unpricedCalls = (total.cost.unpricedCalls ?? 0) + unpricedCallsOf(usage);
 		total.cost.reason ??= usage.cost.reason;
 	}
+	if (total.cost.unpriced) total.cost.pricedCalls = pricedBefore + pricedCallsOf(usage);
 }
 
 /** Add every bucket of `state` into `sum`. */

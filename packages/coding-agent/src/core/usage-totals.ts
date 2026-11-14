@@ -1,4 +1,5 @@
 import type { Usage } from "@earendil-works/pi-ai/compat";
+import { pricedCallsOf, unpricedCallsOf } from "@earendil-works/pi-ai/utils/usage-counts";
 import type { SessionEntry } from "./session-manager.ts";
 
 export interface UsageTotals {
@@ -26,31 +27,11 @@ export function createUsageTotals(): UsageTotals {
 	};
 }
 
-/** A request was priced when it has billable tokens or a nonzero cost; a zero-usage failure was not. */
-function isPricedRequest(usage: Usage): boolean {
-	return usage.input + usage.output + usage.cacheRead + usage.cacheWrite > 0 || usage.cost.total > 0;
-}
-
-/**
- * Priced requests in one usage. An aggregate with unpriced calls carries its priced count; any other usage
- * is one request, priced or not. Legacy aggregates without the count fall back to their priced subtotal.
- */
-function pricedCallsOf(usage: Usage): number {
-	if (usage.cost.unpriced) return usage.cost.pricedCalls ?? (usage.cost.total > 0 ? 1 : 0);
-	return isPricedRequest(usage) ? 1 : 0;
-}
-
-/** Unpriced requests in one usage: a marked aggregate counts its summed calls, a single marked request counts once. */
-function unpricedCallsOf(usage: Usage): number {
-	return usage.cost.unpriced ? (usage.cost.unpricedCalls ?? 1) : 0;
-}
-
 export function addUsageToTotals(totals: UsageTotals, usage: Usage): void {
 	totals.input += usage.input;
 	totals.output += usage.output;
 	totals.cacheRead += usage.cacheRead;
 	totals.cacheWrite += usage.cacheWrite;
-	// Unpriced spend is 0 for a single request and the priced subtotal for an aggregate, so it always adds.
 	totals.cost += usage.cost.total;
 	totals.unpricedCount += unpricedCallsOf(usage);
 	totals.pricedCount += pricedCallsOf(usage);

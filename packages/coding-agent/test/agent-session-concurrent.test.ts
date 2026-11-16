@@ -182,6 +182,14 @@ describe("AgentSession concurrent prompt guard", () => {
 		const model = getModel("anthropic", "claude-sonnet-4-5")!;
 		let abortSignal: AbortSignal | undefined;
 		let sawSteeringMessage = false;
+		let markStreamStarted = () => {};
+		const streamStarted = new Promise<void>((resolve) => {
+			markStreamStarted = resolve;
+		});
+		let markSteeringQueued = () => {};
+		const steeringQueued = new Promise<void>((resolve) => {
+			markSteeringQueued = resolve;
+		});
 		let lastInputSource: string | undefined;
 		const queueEvents: Array<{ steering: readonly string[]; followUp: readonly string[] }> = [];
 
@@ -217,6 +225,7 @@ describe("AgentSession concurrent prompt guard", () => {
 					}
 
 					stream.push({ type: "start", partial: createAssistantMessage("") });
+					markStreamStarted();
 					const checkAbort = () => {
 						if (abortSignal?.aborted) {
 							stream.push({ type: "error", reason: "aborted", error: createAssistantMessage("Aborted") });
@@ -258,11 +267,13 @@ describe("AgentSession concurrent prompt guard", () => {
 		session.subscribe((event) => {
 			if (event.type === "queue_update") {
 				queueEvents.push({ steering: event.steering, followUp: event.followUp });
+				if (event.steering.includes("Steer from extension")) markSteeringQueued();
 			}
 		});
 
 		const firstPrompt = session.prompt("First message");
-		await waitForStreaming();
+		// #110: high-level busy includes preparation. This case needs a real stream before abort.
+		await streamStarted;
 		expect(session.isStreaming).toBe(true);
 
 		const pi = (
@@ -275,7 +286,7 @@ describe("AgentSession concurrent prompt guard", () => {
 		expect(pi).toBeDefined();
 
 		pi!.sendUserMessage("Steer from extension", { deliverAs: "steer" });
-		await new Promise((resolve) => setTimeout(resolve, 25));
+		await steeringQueued;
 
 		expect(session.pendingMessageCount).toBe(1);
 		expect(session.getSteeringMessages()).toContain("Steer from extension");

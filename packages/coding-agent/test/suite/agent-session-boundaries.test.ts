@@ -702,17 +702,35 @@ describe("AgentSession actionable boundaries", () => {
 		expect(harness.session.pendingMessageCount).toBe(1);
 	});
 
-	it("commits pre-settlement drafts but suppresses continuation when aborted during the hook", async () => {
+	// #110: cancellation rejects the whole proposal, not just its continuation.
+	it("discards pre-settlement drafts and suppresses continuation when aborted during the hook", async () => {
 		const started = deferred();
 		const release = deferred();
+		let streamingSignal: AbortSignal | undefined;
+		let settleSignal: AbortSignal | undefined;
 		const harness = await createHarness({
 			extensionFactories: [
 				(pi) => {
-					pi.on("agent_before_settle", async () => {
+					pi.on("agent_start", (_event, ctx) => {
+						streamingSignal = ctx.signal;
+					});
+					pi.on("agent_before_settle", async (event, ctx) => {
+						settleSignal = ctx.signal;
 						started.resolve();
 						await release.promise;
+						const response = event.context.contextEntries.at(-1);
+						if (!response) throw new Error("missing response");
 						return {
-							entries: [{ type: "custom", customType: "committed-after-abort", data: true }],
+							entries: [
+								{ type: "custom", customType: "committed-after-abort", data: true },
+								{ type: "context_edit", targetId: response.sourceEntry.id, replacement: null },
+								{
+									type: "custom_message",
+									customType: "canceled-context",
+									content: "must not commit",
+									display: false,
+								},
+							],
 							continue: true,
 						};
 					});
@@ -729,9 +747,17 @@ describe("AgentSession actionable boundaries", () => {
 		await Promise.all([prompt, abort]);
 
 		expect(harness.faux.state.callCount).toBe(1);
-		expect(harness.sessionManager.getEntries()).toContainEqual(
+		expect(streamingSignal).toBeDefined();
+		expect(settleSignal).toBe(streamingSignal);
+		expect(settleSignal?.aborted).toBe(true);
+		expect(harness.sessionManager.getEntries()).not.toContainEqual(
 			expect.objectContaining({ type: "custom", customType: "committed-after-abort", data: true }),
 		);
+		expect(
+			harness.sessionManager
+				.getEntries()
+				.some((entry) => entry.type === "context_edit" || entry.type === "custom_message"),
+		).toBe(false);
 		// #10607: settlement reports the abort although the last response succeeded.
 		expect(harness.eventsOfType("agent_settled")).toEqual([{ type: "agent_settled", aborted: true }]);
 	});

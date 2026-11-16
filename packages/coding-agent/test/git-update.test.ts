@@ -8,7 +8,7 @@
 
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { DefaultPackageManager } from "../src/core/package-manager.ts";
@@ -20,6 +20,14 @@ function git(args: string[], cwd: string): string {
 	const result = spawnSync("git", args, {
 		cwd,
 		encoding: "utf-8",
+		// #108: Fixture commits and tags must not inherit signing or editor settings.
+		env: {
+			...process.env,
+			GIT_CONFIG_GLOBAL: devNull,
+			GIT_CONFIG_NOSYSTEM: "1",
+			GIT_TERMINAL_PROMPT: "0",
+			GIT_EDITOR: "true",
+		},
 	});
 	if (result.status !== 0) {
 		throw new Error(`Command failed: git ${args.join(" ")}\n${result.stderr}`);
@@ -144,6 +152,13 @@ describe("DefaultPackageManager git update", () => {
 				const result = spawnSync(command, args, {
 					cwd: options?.cwd,
 					encoding: "utf-8",
+					env: {
+						...process.env,
+						GIT_CONFIG_GLOBAL: devNull,
+						GIT_CONFIG_NOSYSTEM: "1",
+						GIT_TERMINAL_PROMPT: "0",
+						GIT_EDITOR: "true",
+					},
 				});
 				if (result.status !== 0) {
 					throw new Error(`Command failed: ${command} ${args.join(" ")}\n${result.stderr}`);

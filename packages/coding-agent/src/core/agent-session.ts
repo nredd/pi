@@ -435,6 +435,8 @@ export class AgentSession {
 	private _eventListeners: AgentSessionEventListener[] = [];
 	private _isAgentRunActive = false;
 	private _agentRunAbortRequested = false;
+	/** One cancellation owner from run admission through recovery and pre-settlement. */
+	private _agentRunAbortController: AbortController | undefined;
 	private _idleWaitPromise: Promise<void> | undefined;
 	private _resolveIdleWait: (() => void) | undefined;
 
@@ -490,8 +492,6 @@ export class AgentSession {
 	private _lastAssistantMessage: AssistantMessage | undefined;
 	private _lastAssistantToolResults: AgentMessage[] = [];
 	private _lastActivityOutcome: AgentActivityOutcome = "completed";
-	private _isBeforeSettle = false;
-	private _abortDuringBeforeSettle = false;
 	private _isEmittingAgentSettled = false;
 	/** Settles when the current agent_settled emission finishes; replayed startup actions wait on it. */
 	private _agentSettledEmission: Promise<void> | undefined;
@@ -1353,7 +1353,11 @@ export class AgentSession {
 	private _handleAgentEvent = async (event: AgentEvent): Promise<void> => {
 		// An abort requested while the run was starting, e.g. during before_agent_start, stops it
 		// here. agent_start is awaited before the first request.
-		if (event.type === "agent_start" && this._agentRunAbortRequested) this.agent.abort();
+		if (event.type === "agent_start" && this._agentRunAbortRequested) {
+			this.agent.abort();
+			// Keep the low-level aborted response lifecycle, but never dispatch a canceled preparation.
+			throw new Error("Agent run canceled before start");
+		}
 		// Record the calls a tool made through ctx.executeTool() and their usage on its result message.
 		if (this._nestedToolCalls) {
 			if (event.type === "message_start" && event.message.role === "toolResult") {
@@ -1661,6 +1665,9 @@ export class AgentSession {
 	 * Call this when completely done with the session.
 	 */
 	dispose(): void {
+		this._disposed = true;
+		this._abortAgentRun();
+		this._agentRunAbortController = undefined;
 		try {
 			this.abortRetry();
 			this.abortCompaction();
@@ -1671,7 +1678,6 @@ export class AgentSession {
 			// Dispose must succeed even if an abort hook throws.
 		}
 
-		this._disposed = true;
 		this._pendingCompactionMessages = [];
 
 		this._extensionRunner.invalidate(
@@ -2127,6 +2133,8 @@ export class AgentSession {
 		this._assertExtensionsStarted();
 		this._isAgentRunActive = true;
 		this._agentRunAbortRequested = false;
+		const runController = new AbortController();
+		this._agentRunAbortController = runController;
 		let messages: AgentMessage[];
 		const toolRuntimeGeneration = this._toolRuntimeGeneration;
 		try {
@@ -2139,40 +2147,38 @@ export class AgentSession {
 				this._assertExtensionsStarted();
 			}
 		} catch (error) {
+			if (this._agentRunAbortController === runController) this._agentRunAbortController = undefined;
 			this._isAgentRunActive = false;
 			this._flushPendingBashMessages();
 			this._flushPendingCustomMessages();
 			this._resolveIdleWaitIfIdle();
 			throw error;
 		}
-		// Disposal can race an async pre-prompt compaction. Do not admit this batch after it.
-		if (this._disposed) {
-			this._isAgentRunActive = false;
-			return;
-		}
-		// Messages held while the run was starting go before its starting messages, as they would
-		// have while idle. No run exists yet, so they cannot split a tool call from its result.
-		this._flushPendingBashMessages();
-		// A compaction batch is already an ordered run input. Its messages must reach
-		// Agent.prompt() before older passive messages can be persisted.
-		if (!startingMessages) this._flushPendingCustomMessages();
-		onStarted?.();
-
-		// Compaction before the prompt may have scheduled a retry; the new prompt replaces it.
-		this._failedResponse = undefined;
-		this._recordSelection();
-		// The run records the loadout in the transcript; restored tools that did not register by now
-		// are dropped, so a tool that never registers does not stay pending.
-		if (toolRuntimeGeneration === this._toolRuntimeGeneration) {
-			this._pendingToolNames.clear();
-			this._isFirstRunSinceRebuild = false;
-			this._heldBackMcpToolNames = this._stagedHeldBackMcpToolNames;
-		} else {
-			// A reload during preparation owns the next grace run and its pending loadout.
-			for (const name of this._stagedHeldBackMcpToolNames) this._heldBackMcpToolNames.add(name);
-		}
-		for (const name of this._stagedReportedToolNames) this._heldBackMcpToolNames.delete(name);
 		try {
+			// Disposal can race an async pre-prompt compaction. Do not admit this batch after it.
+			if (this._disposed) return;
+			// Messages held while the run was starting go before its starting messages, as they would
+			// have while idle. No run exists yet, so they cannot split a tool call from its result.
+			this._flushPendingBashMessages();
+			// A compaction batch is already an ordered run input. Its messages must reach
+			// Agent.prompt() before older passive messages can be persisted.
+			if (!startingMessages) this._flushPendingCustomMessages();
+			onStarted?.();
+
+			// Compaction before the prompt may have scheduled a retry; the new prompt replaces it.
+			this._failedResponse = undefined;
+			this._recordSelection();
+			// The run records the loadout in the transcript; restored tools that did not register by now
+			// are dropped, so a tool that never registers does not stay pending.
+			if (toolRuntimeGeneration === this._toolRuntimeGeneration) {
+				this._pendingToolNames.clear();
+				this._isFirstRunSinceRebuild = false;
+				this._heldBackMcpToolNames = this._stagedHeldBackMcpToolNames;
+			} else {
+				// A reload during preparation owns the next grace run and its pending loadout.
+				for (const name of this._stagedHeldBackMcpToolNames) this._heldBackMcpToolNames.add(name);
+			}
+			for (const name of this._stagedReportedToolNames) this._heldBackMcpToolNames.delete(name);
 			await this.agent.prompt(messages);
 			while (!this._agentRunAbortRequested) {
 				if (await this._handlePostAgentRun()) {
@@ -2190,7 +2196,14 @@ export class AgentSession {
 			this._runSystemPromptOptions = undefined;
 			this._flushPendingBashMessages();
 			this._flushPendingCustomMessages();
-			await this._emitAgentSettled();
+			// Settled handlers may start a new run. Retire only this owner before invoking them.
+			if (this._agentRunAbortController === runController) this._agentRunAbortController = undefined;
+			if (this._disposed) {
+				this._isAgentRunActive = false;
+				this._resolveIdleWaitIfIdle();
+			} else {
+				await this._emitAgentSettled();
+			}
 		}
 	}
 
@@ -2329,26 +2342,36 @@ export class AgentSession {
 
 	private async _runBeforeSettleBoundary(): Promise<boolean> {
 		if (!this._extensionRunner.hasHandlers("agent_before_settle")) return this.agent.hasQueuedMessages();
-		this._isBeforeSettle = true;
-		this._abortDuringBeforeSettle = false;
-		try {
-			const result = await this._extensionRunner.emitBoundary(
-				{ type: "agent_before_settle", outcome: this._lastActivityOutcome },
-				(entries) => this._buildBoundaryContext(entries, "agent_before_settle"),
-			);
-			this._commitBoundaryDrafts(result.entries);
-			this._flushPendingCustomMessages();
-			const finalContext = this._buildBoundaryContext([], "agent_before_settle");
-			if (this._abortDuringBeforeSettle) return false;
-			const shouldContinue = result.continue || this.agent.hasQueuedMessages();
-			if (shouldContinue && !finalContext.canContinue) {
-				if (result.continue) this._reportInvalidBoundaryContinuation("agent_before_settle");
-				return false;
-			}
-			return shouldContinue;
-		} finally {
-			this._isBeforeSettle = false;
+		const owner = this._agentRunAbortController;
+		const runner = this._extensionRunner;
+		const generation = this._startupGeneration;
+		const result = await runner.emitBoundary(
+			{ type: "agent_before_settle", outcome: this._lastActivityOutcome },
+			(entries) => this._buildBoundaryContext(entries, "agent_before_settle"),
+		);
+		// No await between this validation and commit: canceled or replaced handlers own no drafts.
+		if (
+			!owner ||
+			owner !== this._agentRunAbortController ||
+			owner.signal.aborted ||
+			this._agentRunAbortRequested ||
+			this._disposed ||
+			runner !== this._extensionRunner ||
+			generation !== this._startupGeneration ||
+			!result.valid
+		)
+			return false;
+		this._commitBoundaryDrafts(result.entries);
+		// Queued passive messages are independent of the discarded/committed proposal.
+		this._flushPendingCustomMessages();
+		const finalContext = this._buildBoundaryContext([], "agent_before_settle");
+		if (owner.signal.aborted) return false;
+		const shouldContinue = result.continue || this.agent.hasQueuedMessages();
+		if (shouldContinue && !finalContext.canContinue) {
+			if (result.continue) this._reportInvalidBoundaryContinuation("agent_before_settle");
+			return false;
 		}
+		return shouldContinue;
 	}
 
 	private async _runInputHandlers(
@@ -2943,17 +2966,18 @@ export class AgentSession {
 		return this._resourceLoader;
 	}
 
-	/**
-	 * Abort current operation and wait for agent to become idle.
-	 */
+	/** Mark cancellation before invoking any abort listeners or awaiting idle. */
+	private _abortAgentRun(): void {
+		if (this._isAgentRunActive) this._agentRunAbortRequested = true;
+		this._agentRunAbortController?.abort();
+	}
+
+	/** Abort current operation and wait for agent to become idle. */
 	async abort(): Promise<void> {
-		if (this._isAgentRunActive) {
-			this._agentRunAbortRequested = true;
-		}
+		this._abortAgentRun();
 		this.abortRetry();
 		this.abortCompaction();
 		this.abortBranchSummary();
-		if (this._isBeforeSettle) this._abortDuringBeforeSettle = true;
 		this.agent.abort();
 		await this.waitForIdle();
 	}
@@ -3902,7 +3926,7 @@ export class AgentSession {
 				this._discardDeferredStartupActions(failure);
 				// Nothing in flight may finish its provider call: the run, a compaction or a branch
 				// summary paused in auth or a transform all observe their abort signal.
-				this._agentRunAbortRequested = this._isAgentRunActive;
+				this._abortAgentRun();
 				this.agent.abort();
 				this.abortRetry();
 				this.abortCompaction();
@@ -4217,7 +4241,7 @@ export class AgentSession {
 				getScopedModels: () => this._scopedModels,
 				isIdle: () => this.isIdle,
 				isProjectTrusted: () => this.settingsManager.isProjectTrusted(),
-				getSignal: () => this.agent.signal,
+				getSignal: () => this._agentRunAbortController?.signal,
 				abort: () => {
 					if (this._extensionAbortHandler) {
 						this._extensionAbortHandler();

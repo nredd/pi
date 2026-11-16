@@ -348,7 +348,12 @@ export interface ExtensionContext {
 	isIdle(): boolean;
 	/** Whether project-local trust is active for this context. */
 	isProjectTrusted(): boolean;
-	/** The current abort signal, or undefined when the agent is not streaming. */
+	/**
+	 * Session-local run cancellation, from preparation through tools, retries, automatic compaction
+	 * and agent_before_settle. Undefined outside the run, including agent_settled. Retain this signal
+	 * and check it after awaits before notices or mutations. Normal completion does not abort it.
+	 * Tool execution and explicit compaction/tree event signals retain their own operation scope.
+	 */
 	signal: AbortSignal | undefined;
 	/** Abort the current agent operation */
 	abort(): void;
@@ -1034,7 +1039,11 @@ export interface BoundaryResult {
 	continue?: boolean;
 }
 
-/** Fired before final settlement. May append entries and ensure one next provider request. */
+/**
+ * Fired before final settlement. May append entries and ensure one next provider request.
+ * Cancellation or runtime replacement before commit discards the whole proposed batch and
+ * continuation, even if a handler ignores ctx.signal. Already committed work is not rolled back.
+ */
 export interface AgentBeforeSettleEvent extends BoundaryState {
 	type: "agent_before_settle";
 }

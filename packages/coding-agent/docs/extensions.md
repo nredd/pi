@@ -125,7 +125,22 @@ Handlers are awaited in stream order, so slow handlers delay stream consumption.
 
 Tool calls from one assistant message can run in parallel.
 Do not assume a sibling call or result exists when another tool event runs.
-Use `ctx.signal` for nested work owned by an active turn; commands and idle session events often have no operation signal.
+`ctx.signal` belongs to the active high-level session run. The same signal is available during preparation (`before_agent_start`), tools and continuations, retry waits, automatic compaction, and `agent_before_settle`. `session.abort()` marks and aborts it synchronously, before waiting for idle. Disposal and fatal startup cancellation abort it too. It is session-local even when sessions share a model runtime. Outside that run, including `agent_settled`, it is `undefined`; the next independent run gets a fresh signal. Normal completion retires the signal without aborting it.
+
+Retain the signal before awaiting extension-owned work, and check it afterward before emitting notices or mutating state:
+
+```typescript
+pi.on("agent_before_settle", async (_event, ctx) => {
+  const signal = ctx.signal;
+  const confirmed = await ctx.ui.confirm("Continue?", "Attempt recovery?", { signal });
+  if (signal?.aborted || !confirmed) return;
+  // Propose recovery entries here, without replaying completed tools.
+});
+```
+
+As a host-side backstop, cancellation or runtime replacement before a pre-settlement proposal commits discards its entire draft batch and continuation, even if the handler ignores cancellation. This corrects the former commit-after-abort behavior: stopping continuation alone still allowed canceled recovery edits into context. Pending messages have separate queue/cleanup semantics and are not boundary drafts. Cancellation after commit does not roll back committed entries, but still prevents continuation. Core cannot retract notices or direct side effects a handler already emitted. Reload/replacement also invalidates captured contexts; retain plain data and the signal, not a stale context.
+
+The low-level `Agent.signal`, provider request signals, tool `execute()` signal parameter, nested-tool default signal, and explicit `session_before_compact` / `session_before_tree` event signals retain their existing scopes. Manual compaction and tree summarization do not create a high-level agent run signal.
 
 A `user_bash` handler that returns `undefined` passes the command to the next handler and then to local execution if no handler handles it. Returning `operations` or `result` stops propagation. A handler failure blocks the command rather than falling through to local execution.
 

@@ -1,0 +1,27 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`interactive summary rendering > paints adjacent summaries at 80/120 columns, resizes, and preserves recorded content > summary-80 1`] = `
+"▾  Summary
+   Inspecting inputs
+   Checking boundaries
+   Preparing results
+   A longer visible summary explains why the result remains complete when the
+   terminal is resized to a narrow width."
+`;
+
+exports[`interactive summary rendering > paints adjacent summaries at 80/120 columns, resizes, and preserves recorded content > summary-80 2`] = `
+"▾  Summary
+   Inspecting inputs
+   Checking boundaries
+   Preparing results
+   A longer visible summary explains why the result remains complete when the
+   terminal is resized to a narrow width."
+`;
+
+exports[`interactive summary rendering > paints adjacent summaries at 80/120 columns, resizes, and preserves recorded content > summary-120 1`] = `
+"▾  Summary
+   Inspecting inputs
+   Checking boundaries
+   Preparing results
+   A longer visible summary explains why the result remains complete when the terminal is resized to a narrow width."
+`;

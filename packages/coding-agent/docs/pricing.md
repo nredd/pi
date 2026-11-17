@@ -61,7 +61,7 @@ Cache and context:
   not a one-time token-write charge, and is excluded. Image/time/storage charges are not
   converted to tokens. Classifier entries need their own verified token-unit assessment.
 
-GPT-6.2 additions, checked 2026-11-17:
+GPT-6.2 model-card check, 2026-11-17 (outside the pricing-table audit):
 
 - `openai` and `openai-codex` include `gpt-6.2-sol` and `gpt-6.2-astra` from their public
   [Sol](https://developers.openai.com/api/docs/models/gpt-6.2-sol) and
@@ -77,13 +77,16 @@ GPT-6.2 additions, checked 2026-11-17:
   window of 1,050,000 tokens through model overrides; the verified 922,000 maximum input
   ceiling is retained, with 128,000 maximum output. Codex account-specific availability and
   limits are unverified.
-  Both cards reject reasoning effort `none`, so `off` is unsupported. Direct OpenAI tool search
+  Both cards reject reasoning effort `none`, so `off` is not offered. Direct OpenAI tool search
   and additional tools are enabled from the cards; Codex tool extensions are not inferred.
   API and Codex mid-conversation effort and system-message updates are also not inferred.
   Existing GPT-6 effort-level mapping is retained.
   Batch, Fast and Ultrafast service tiers are not modeled.
 
-Source audit, checked 2026-11-12:
+Pricing-table source audit, checked 2026-11-12:
+
+- This audit covers only the contracts listed below. It does not include the later GPT-6.2
+  model-card check above; those numeric rates remain `unknown`/unpriced until audited.
 
 - The complete public provider/operation inventory and remaining unknown coverage are
   [here](pricing-coverage.md). The audit does not certify unaudited rates as free.

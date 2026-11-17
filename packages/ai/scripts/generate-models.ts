@@ -379,6 +379,18 @@ const ANT_LING_RING_THINKING_LEVEL_MAP = {
 
 const BEDROCK_INFERENCE_PROFILE_ONLY_MODEL_IDS = new Set(["anthropic.claude-opus-5"]);
 const MODELS_DEV_OPENAI_UNSUPPORTED_MODEL_IDS = new Set(["gpt-5.6"]);
+// Public model cards checked 2026-11-17:
+// https://developers.openai.com/api/docs/models/gpt-6.2-sol
+// https://developers.openai.com/api/docs/models/gpt-6.2-astra
+const GPT_62_MODELS = [
+	{ id: "gpt-6.2-sol", name: "GPT-6.2 Sol" },
+	{ id: "gpt-6.2-astra", name: "GPT-6.2 Astra" },
+] as const;
+const OPENAI_NO_NONE_EFFORT_MODEL_IDS = new Set([
+	"gpt-6-astra", "gpt-6.1-sol", ...GPT_62_MODELS.map(({ id }) => id),
+]);
+// Direct OpenAI model cards do not establish Azure availability or capabilities.
+const AZURE_EXCLUDED_MODEL_IDS = new Set<string>(GPT_62_MODELS.map(({ id }) => id));
 const OPENAI_TOOL_SEARCH_MODEL_IDS = new Set([
 	"gpt-5.4",
 	"gpt-5.4-mini",
@@ -416,8 +428,7 @@ const OPENAI_SHORT_CONTEXT_CAPPED_MODEL_IDS = new Set([
 	"gpt-6-sol",
 	"gpt-6-luna",
 	"gpt-6.1-sol",
-	"gpt-6.2-sol",
-	"gpt-6.2-astra",
+	...GPT_62_MODELS.map(({ id }) => id),
 ]);
 
 // Keep the generated default no less restrictive than coding-agent's historical
@@ -1052,16 +1063,14 @@ function applyThinkingLevelMetadata(model: Model<any>): void {
 		(model.id === "gpt-6-astra" ||
 			model.id === "gpt-6-sol" ||
 			model.id === "gpt-6-luna" ||
-			model.id === "gpt-6.1-sol" ||
-			model.id === "gpt-6.2-sol" ||
-			model.id === "gpt-6.2-astra") &&
+			OPENAI_NO_NONE_EFFORT_MODEL_IDS.has(model.id)) &&
 		(model.api === "openai-responses" ||
 			model.api === "azure-openai-responses" ||
 			model.api === "openai-codex-responses")
 	) {
 		mergeThinkingLevelMap(model, {
 			// GPT-6 Astra, GPT-6.1 Sol and both GPT-6.2 cards reject reasoning.effort "none".
-			off: ["gpt-6-astra", "gpt-6.1-sol", "gpt-6.2-sol", "gpt-6.2-astra"].includes(model.id) ? null : "none",
+			off: OPENAI_NO_NONE_EFFORT_MODEL_IDS.has(model.id) ? null : "none",
 			minimal: null,
 			low: "low",
 			medium: "medium",
@@ -2770,40 +2779,21 @@ async function generateModels() {
 		}
 	}
 
-	// Public API model cards checked 2026-11-17:
-	// https://developers.openai.com/api/docs/models/gpt-6.2-sol
-	// https://developers.openai.com/api/docs/models/gpt-6.2-astra
-	// Explicit entries avoid waiting for feeds; the shared short-context policy caps their defaults.
-	const gpt62Models: Model<"openai-responses">[] = [
-		{
-			id: "gpt-6.2-sol",
-			name: "GPT-6.2 Sol",
-			api: "openai-responses",
-			provider: "openai",
-			baseUrl: "https://api.openai.com/v1",
-			reasoning: true,
-			input: ["text", "image"],
-			cost: withOpenAiLongContextPricing(OPENAI_STANDARD_COSTS["gpt-6.2-sol"]),
-			inputLimits: { maxInputTokens: 922000 },
-			contextWindow: 1050000,
-			maxTokens: 128000,
-			compat: { supportsToolSearch: true, supportsAdditionalTools: true },
-		},
-		{
-			id: "gpt-6.2-astra",
-			name: "GPT-6.2 Astra",
-			api: "openai-responses",
-			provider: "openai",
-			baseUrl: "https://api.openai.com/v1",
-			reasoning: true,
-			input: ["text", "image"],
-			cost: withOpenAiLongContextPricing(OPENAI_STANDARD_COSTS["gpt-6.2-astra"]),
-			inputLimits: { maxInputTokens: 922000 },
-			contextWindow: 1050000,
-			maxTokens: 128000,
-			compat: { supportsToolSearch: true, supportsAdditionalTools: true },
-		},
-	];
+	// The documented 1.05M API window is opt-in through overrides; default to the short pricing tier.
+	const gpt62Models = GPT_62_MODELS.map(({ id, name }): Model<"openai-responses"> => ({
+		id,
+		name,
+		api: "openai-responses",
+		provider: "openai",
+		baseUrl: "https://api.openai.com/v1",
+		reasoning: true,
+		input: ["text", "image"],
+		cost: withOpenAiLongContextPricing(OPENAI_STANDARD_COSTS[id]),
+		inputLimits: { maxInputTokens: 922000 },
+		contextWindow: OPENAI_LONG_CONTEXT_INPUT_THRESHOLD,
+		maxTokens: 128000,
+		compat: { supportsToolSearch: true, supportsAdditionalTools: true },
+	}));
 	for (const model of gpt62Models) {
 		const index = allModels.findIndex((candidate) => candidate.provider === model.provider && candidate.id === model.id);
 		if (index === -1) allModels.push(model);
@@ -3159,34 +3149,19 @@ async function generateModels() {
 	const CODEX_SPARK_CONTEXT = 128000;
 	const CODEX_MAX_TOKENS = 128000;
 	const codexModels: Model<"openai-codex-responses">[] = [
-		{
-			// https://developers.openai.com/api/docs/models/gpt-6.2-sol (checked 2026-11-17).
-			// Account-specific Codex availability and context limits are unverified; retain 272k.
-			id: "gpt-6.2-sol",
-			name: "GPT-6.2 Sol",
+		// Public cards above; account-specific Codex availability and limits are unverified.
+		...GPT_62_MODELS.map(({ id, name }): Model<"openai-codex-responses"> => ({
+			id,
+			name,
 			api: "openai-codex-responses",
 			provider: "openai-codex",
 			baseUrl: CODEX_BASE_URL,
 			reasoning: true,
 			input: ["text", "image"],
-			cost: withOpenAiLongContextPricing(OPENAI_STANDARD_COSTS["gpt-6.2-sol"]),
+			cost: withOpenAiLongContextPricing(OPENAI_STANDARD_COSTS[id]),
 			contextWindow: CODEX_CONTEXT,
 			maxTokens: CODEX_MAX_TOKENS,
-		},
-		{
-			// https://developers.openai.com/api/docs/models/gpt-6.2-astra (checked 2026-11-17).
-			// Account-specific Codex availability and context limits are unverified; retain 272k.
-			id: "gpt-6.2-astra",
-			name: "GPT-6.2 Astra",
-			api: "openai-codex-responses",
-			provider: "openai-codex",
-			baseUrl: CODEX_BASE_URL,
-			reasoning: true,
-			input: ["text", "image"],
-			cost: withOpenAiLongContextPricing(OPENAI_STANDARD_COSTS["gpt-6.2-astra"]),
-			contextWindow: CODEX_CONTEXT,
-			maxTokens: CODEX_MAX_TOKENS,
-		},
+		})),
 		{
 			// Public selector/model card checked 2026-11-13. Keep the conservative 272k default,
 			// not a claim about account-specific Codex availability or backend context limits.
@@ -3399,8 +3374,7 @@ async function generateModels() {
 			(model) =>
 				model.provider === "openai" &&
 				model.api === "openai-responses" &&
-				model.id !== "gpt-6.2-sol" &&
-				model.id !== "gpt-6.2-astra",
+				!AZURE_EXCLUDED_MODEL_IDS.has(model.id),
 		)
 		.map((model) => ({
 			...model,

@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- The `pi.usage` ledger excludes unpriced request costs from spend and retains `Usage.cost.unpriced`, `unpricedCalls` and `pricedCalls` on aggregates. Totals are priced subtotals, not complete bills; `pricedCalls` is reliable as zero versus nonzero, and legacy aggregates fall back to their subtotal. Zero-usage failed or aborted calls count as neither priced nor unpriced, while free calls with billable tokens still count as priced ([#93](https://github.com/nredd/pi/pull/93), [#99](https://github.com/nredd/pi/pull/99)).
+
 ## [1.3.0] - 2026-10-15
 
 ### Added

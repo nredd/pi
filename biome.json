@@ -26,6 +26,9 @@
 	"files": {
 		"includes": [
 			"scripts/fork-release-signers.test.mjs",
+			"scripts/fork-dependency-audit.mjs",
+			"scripts/fork-dependency-audit.test.mjs",
+			"scripts/fork-audit-exceptions.json",
 			"scripts/upstream-drift.mjs",
 			"scripts/upstream-drift.test.mjs",
 			"scripts/worktree.mjs",

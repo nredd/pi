@@ -17,6 +17,33 @@ export const OPENAI_STANDARD_COSTS: Record<string, ModelCost> = {
 	"gpt-6-sol": { input: 2, output: 10, cacheRead: 0.2, cacheWrite: 2.5 },
 	"gpt-6.1-sol": { input: 2, output: 10, cacheRead: 0.1, cacheWrite: 2.5 },
 	"gpt-6.1-terra": { input: 1, output: 5, cacheRead: 0.05, cacheWrite: 1.25 },
+	// Public model cards checked 2026-11-17, outside the 2026-11-12 pricing-table audit.
+	// https://developers.openai.com/api/docs/models/gpt-6.2-sol
+	"gpt-6.2-sol": {
+		input: 2,
+		output: 10,
+		cacheRead: 0.1,
+		cacheWrite: 2.5,
+		cacheWrite12h: 5,
+		assessment: {
+			status: "unknown",
+			reason:
+				"GPT-6.2 model-card rates checked 2026-11-17; pricing-table and Codex API-equivalence contracts remain unaudited.",
+		},
+	},
+	// https://developers.openai.com/api/docs/models/gpt-6.2-astra (checked 2026-11-17).
+	"gpt-6.2-astra": {
+		input: 8,
+		output: 40,
+		cacheRead: 0.4,
+		cacheWrite: 10,
+		cacheWrite12h: 20,
+		assessment: {
+			status: "unknown",
+			reason:
+				"GPT-6.2 model-card rates checked 2026-11-17; pricing-table and Codex API-equivalence contracts remain unaudited.",
+		},
+	},
 	"gpt-5.5": { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
 	"gpt-5.5-pro": { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 },
 	"gpt-5.4": { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 },
@@ -52,6 +79,8 @@ export const OPENAI_LONG_CONTEXT_PRICING_MODEL_IDS = new Set([
 	"gpt-6-luna",
 	"gpt-6.1-sol",
 	"gpt-6.1-terra",
+	"gpt-6.2-sol",
+	"gpt-6.2-astra",
 ]);
 // Only exact mappings already declared by the generator's subscription catalogue.
 const CODEX_API_EQUIVALENT_IDS = new Set([
@@ -64,6 +93,8 @@ const CODEX_API_EQUIVALENT_IDS = new Set([
 	"gpt-6-luna",
 	"gpt-6.1-sol",
 	"gpt-6.1-terra",
+	"gpt-6.2-sol",
+	"gpt-6.2-astra",
 ]);
 
 /** Published OpenAI Standard long-context policy, shared by generation and runtime correction. */
@@ -690,6 +721,10 @@ function catalogueCostUnbounded(model: Pick<AnyModel, "provider" | "id" | "type"
 	) {
 		const base = Object.hasOwn(OPENAI_STANDARD_COSTS, model.id) ? OPENAI_STANDARD_COSTS[model.id] : undefined;
 		if (base) {
+			// Explicitly unassessed additions must not inherit the older audit date.
+			if (base.assessment?.status === "unknown") {
+				return OPENAI_LONG_CONTEXT_PRICING_MODEL_IDS.has(model.id) ? withOpenAiLongContextPricing(base) : base;
+			}
 			const cost = { ...base, ...(base.cacheWrite > 0 ? { cacheWrite12h: base.cacheWrite * 2 } : {}) };
 			return verified(
 				OPENAI_LONG_CONTEXT_PRICING_MODEL_IDS.has(model.id) ? withOpenAiLongContextPricing(cost) : cost,

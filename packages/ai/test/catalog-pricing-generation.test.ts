@@ -53,6 +53,53 @@ it("carries official corrections and explicit unknowns into bundled shards and p
 			const data = JSON.parse(readFileSync(join(isolated, "src/providers/data/amazon-bedrock.json"), "utf8"));
 			expect(data["bedrock-converse-stream"][`chat:${id}`].cost).toEqual(bedrock[id].cost);
 		}
+		// nredd/pi#116: exact new IDs exist without feed support and never inherit an older audit.
+		for (const [id, input, output, read, write, write12h] of [
+			["gpt-6.2-sol", 2, 10, 0.1, 2.5, 5],
+			["gpt-6.2-astra", 8, 40, 0.4, 10, 20],
+		] as const) {
+			for (const provider of ["openai", "openai-codex"] as const) {
+				const model = legacy[provider][id];
+				expect(model).toMatchObject({
+					id,
+					reasoning: true,
+					input: ["text", "image"],
+					maxTokens: 128000,
+					api: provider === "openai" ? "openai-responses" : "openai-codex-responses",
+					contextWindow: provider === "openai" ? 1050000 : 272000,
+					thinkingLevelMap: { off: null, low: "low", medium: "medium", high: "high" },
+					cost: {
+						input,
+						output,
+						cacheRead: read,
+						cacheWrite: write,
+						cacheWrite12h: write12h,
+						assessment: { status: "unknown", reason: expect.stringContaining("2026-11-17") },
+						tiers: [
+							{
+								inputTokensAbove: 272000,
+								input: input * 2,
+								output: output * 1.5,
+								cacheRead: read * 2,
+								cacheWrite: write * 2,
+								cacheWrite12h: write12h * 2,
+							},
+						],
+					},
+				});
+				expect(model.cost.assessment.checkedAt).toBeUndefined();
+				expect(model.compat?.supportsMidConvoEffort).not.toBe(true);
+				expect(model.compat?.supportsMidConvoSystemMessages).not.toBe(true);
+				if (provider === "openai") {
+					expect(model.compat).toMatchObject({ supportsToolSearch: true, supportsAdditionalTools: true });
+				} else {
+					expect(model.compat?.supportsToolSearch).not.toBe(true);
+					expect(model.compat?.supportsAdditionalTools).not.toBe(true);
+				}
+				const data = JSON.parse(readFileSync(join(isolated, `src/providers/data/${provider}.json`), "utf8"));
+				expect(data[model.api][`chat:${id}`].cost).toEqual(model.cost);
+			}
+		}
 		const cost = legacy.openai["gpt-6.1-sol"].cost;
 		expect(cost).toMatchObject({
 			input: 2,
@@ -123,6 +170,10 @@ it("carries official corrections and explicit unknowns into bundled shards and p
 			expect(hydratedBedrock["bedrock-converse-stream"][`chat:${id}`].cost).toEqual(bedrock[id].cost);
 		const hydratedCodex = JSON.parse(readFileSync(join(isolated, "src/providers/data/openai-codex.json"), "utf8"));
 		expect(hydratedCodex["openai-codex-responses"]["chat:gpt-6.1-terra"].cost).toEqual(terra.cost);
+		for (const id of ["gpt-6.2-sol", "gpt-6.2-astra"]) {
+			expect(hydratedShard["openai-responses"][`chat:${id}`].cost).toEqual(legacy.openai[id].cost);
+			expect(hydratedCodex["openai-codex-responses"][`chat:${id}`].cost).toEqual(legacy["openai-codex"][id].cost);
+		}
 		expect(JSON.parse(readFileSync(join(root, "catalog/models.json"), "utf8"))).toEqual(legacy);
 	} finally {
 		rmSync(root, { recursive: true, force: true });

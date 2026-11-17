@@ -71,11 +71,16 @@ GPT-6.2 additions, checked 2026-11-17:
   is 1.5x for the whole request. These additions remain explicitly `unknown` because the
   existing pricing-table and Codex API-equivalence audit does not cover them; the strict
   estimator returns unpriced rather than inheriting an older verification date.
-- The API window is 1,050,000 tokens (922,000 maximum input, 128,000 output). Codex keeps
-  a conservative 272000 context window; account-specific availability and limits are unverified.
-  Both cards reject reasoning effort `none`, so `off` is unsupported. API tool search and
-  additional tools are enabled from the cards; Codex tool extensions and mid-conversation
-  configuration updates are not inferred. Existing GPT-6 effort-level mapping is retained.
+- Only `openai` and `openai-codex` get these models; Azure clones are excluded because the
+  cards do not establish Azure deployment support. Both providers default to a 272000 context
+  window to stay in the short-context pricing tier. Direct OpenAI users can opt into the API
+  window of 1,050,000 tokens through model overrides; the verified 922,000 maximum input
+  ceiling is retained, with 128,000 maximum output. Codex account-specific availability and
+  limits are unverified.
+  Both cards reject reasoning effort `none`, so `off` is unsupported. Direct OpenAI tool search
+  and additional tools are enabled from the cards; Codex tool extensions are not inferred.
+  API and Codex mid-conversation effort and system-message updates are also not inferred.
+  Existing GPT-6 effort-level mapping is retained.
   Batch, Fast and Ultrafast service tiers are not modeled.
 
 Source audit, checked 2026-11-12:

@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added `gpt-6.2-sol` and `gpt-6.2-astra` for `openai` and `openai-codex`, with documented API prices, unsupported `off` reasoning, and conservative 272K Codex context limits ([#116](https://github.com/nredd/pi/issues/116)).
+- Added `gpt-6.2-sol` and `gpt-6.2-astra` only for `openai` and `openai-codex`, not Azure, with documented API prices and 272K default context limits. Direct OpenAI supports an opt-in 1.05M API window with a 922K hard input ceiling. `off` reasoning and API/Codex mid-conversation effort or system-message updates are unsupported ([#116](https://github.com/nredd/pi/issues/116)).
 - Added the `tool_not_found` extension event to customize unavailable-tool errors for model and nested `ctx.executeTool()` calls, including MCP and codemode paths; the first non-empty message wins and missing or failing hooks retain the default error ([#88](https://github.com/nredd/pi/pull/88)).
 - Added opt-in bounded startup phase diagnostics via `PI_STARTUP_TRACE`, including extension/resource loading and first logical frame commit; see [startup tracing](docs/startup-trace.md) ([#59](https://github.com/nredd/pi/pull/59)).
 - Optional `showTimestamps` setting and `/settings` toggle for recorded, viewer-local transcript entry times. Defaults off; timestamps are core framing rather than message content.

@@ -416,6 +416,8 @@ const OPENAI_SHORT_CONTEXT_CAPPED_MODEL_IDS = new Set([
 	"gpt-6-sol",
 	"gpt-6-luna",
 	"gpt-6.1-sol",
+	"gpt-6.2-sol",
+	"gpt-6.2-astra",
 ]);
 
 // Keep the generated default no less restrictive than coding-agent's historical
@@ -2771,7 +2773,7 @@ async function generateModels() {
 	// Public API model cards checked 2026-11-17:
 	// https://developers.openai.com/api/docs/models/gpt-6.2-sol
 	// https://developers.openai.com/api/docs/models/gpt-6.2-astra
-	// Explicit entries avoid waiting for feeds and retain the documented 1,050,000 API window.
+	// Explicit entries avoid waiting for feeds; the shared short-context policy caps their defaults.
 	const gpt62Models: Model<"openai-responses">[] = [
 		{
 			id: "gpt-6.2-sol",
@@ -3392,7 +3394,14 @@ async function generateModels() {
 		"gpt-5.6-terra": 1050000,
 	};
 	const azureOpenAiModels: Model<Api>[] = allModels
-		.filter((model) => model.provider === "openai" && model.api === "openai-responses")
+		// The GPT-6.2 cards verify direct OpenAI only, not Azure deployments or capabilities.
+		.filter(
+			(model) =>
+				model.provider === "openai" &&
+				model.api === "openai-responses" &&
+				model.id !== "gpt-6.2-sol" &&
+				model.id !== "gpt-6.2-astra",
+		)
 		.map((model) => ({
 			...model,
 			api: "azure-openai-responses",

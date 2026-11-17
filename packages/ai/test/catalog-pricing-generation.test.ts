@@ -58,6 +58,10 @@ it("carries official corrections and explicit unknowns into bundled shards and p
 			["gpt-6.2-sol", 2, 10, 0.1, 2.5, 5],
 			["gpt-6.2-astra", 8, 40, 0.4, 10, 20],
 		] as const) {
+			// Direct OpenAI evidence must not advertise unverified Azure deployments.
+			expect(legacy.azure[id]).toBeUndefined();
+			const azure = JSON.parse(readFileSync(join(isolated, "src/providers/data/azure.json"), "utf8"));
+			expect(azure["azure-openai-responses"][`chat:${id}`]).toBeUndefined();
 			for (const provider of ["openai", "openai-codex"] as const) {
 				const model = legacy[provider][id];
 				expect(model).toMatchObject({
@@ -66,7 +70,7 @@ it("carries official corrections and explicit unknowns into bundled shards and p
 					input: ["text", "image"],
 					maxTokens: 128000,
 					api: provider === "openai" ? "openai-responses" : "openai-codex-responses",
-					contextWindow: provider === "openai" ? 1050000 : 272000,
+					contextWindow: 272000,
 					thinkingLevelMap: { off: null, low: "low", medium: "medium", high: "high" },
 					cost: {
 						input,
@@ -171,7 +175,9 @@ it("carries official corrections and explicit unknowns into bundled shards and p
 			expect(hydratedBedrock["bedrock-converse-stream"][`chat:${id}`].cost).toEqual(bedrock[id].cost);
 		const hydratedCodex = JSON.parse(readFileSync(join(isolated, "src/providers/data/openai-codex.json"), "utf8"));
 		expect(hydratedCodex["openai-codex-responses"]["chat:gpt-6.1-terra"].cost).toEqual(terra.cost);
+		const hydratedAzure = JSON.parse(readFileSync(join(isolated, "src/providers/data/azure.json"), "utf8"));
 		for (const id of ["gpt-6.2-sol", "gpt-6.2-astra"]) {
+			expect(hydratedAzure["azure-openai-responses"][`chat:${id}`]).toBeUndefined();
 			expect(hydratedShard["openai-responses"][`chat:${id}`].cost).toEqual(legacy.openai[id].cost);
 			expect(hydratedCodex["openai-codex-responses"][`chat:${id}`].cost).toEqual(legacy["openai-codex"][id].cost);
 		}

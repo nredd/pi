@@ -91,6 +91,7 @@ it("carries official corrections and explicit unknowns into bundled shards and p
 				expect(model.compat?.supportsMidConvoEffort).not.toBe(true);
 				expect(model.compat?.supportsMidConvoSystemMessages).not.toBe(true);
 				if (provider === "openai") {
+					expect(model.inputLimits).toMatchObject({ maxInputTokens: 922000 });
 					expect(model.compat).toMatchObject({ supportsToolSearch: true, supportsAdditionalTools: true });
 				} else {
 					expect(model.compat?.supportsToolSearch).not.toBe(true);

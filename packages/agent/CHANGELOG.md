@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- Added optional `getToolNotFoundMessage` to `AgentLoopConfig`, `Agent` and `runToolCall()`, with `ToolNotFoundContext`, to customize unavailable-tool errors before `beforeToolCall`. Empty, undefined or throwing hooks retain the default error; nested runners must forward the hook ([#88](https://github.com/nredd/pi/pull/88)).
+
 ## [1.3.0] - 2026-10-15
 
 ## [1.2.0] - 2026-10-12

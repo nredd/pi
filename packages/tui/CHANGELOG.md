@@ -10,6 +10,7 @@
 
 - `@earendil-works/pi-tui/testing` exports `VirtualTerminal` with raw input, resize, viewport/scrollback and styled-cell inspection. `@xterm/headless` is an optional peer used only by this testing entry.
 - `TUI.flushRender()` synchronously paints a requested frame without waiting for the render throttle.
+- Added optional `TUI.onFirstCommit`, called after the first complete nonblank logical frame is written successfully in either screen mode; it is not physical display acknowledgement ([#59](https://github.com/nredd/pi/pull/59)).
 
 ### Fixed
 

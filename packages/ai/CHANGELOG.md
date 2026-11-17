@@ -4,11 +4,14 @@
 
 ### Added
 
-- Preserve visible Responses summary-part provenance as display-only `ThinkingContent.summaryRanges`, without changing reasoning text or replay signatures ([#111](https://github.com/nredd/pi/issues/111)).
+- Added `estimateTokenCost()` and catalogue `cost.assessment` metadata to distinguish verified, verified-free and unknown rates. Exact audited contracts cover supported OpenAI, Anthropic, Bedrock, Cerebras, xAI, Gemini, OpenRouter and AI Gateway slices, with explicit cache lifetimes, prompt tiers and validity bounds; unassessed identities and unsupported conditions remain unknown. OpenRouter key-specific live prices are preserved but not certified. See [pricing](../coding-agent/docs/pricing.md) and [feed coverage](../coding-agent/docs/pricing-feeds.md) ([#48](https://github.com/nredd/pi/pull/48), [#68](https://github.com/nredd/pi/pull/68), [#71](https://github.com/nredd/pi/pull/71), [#76](https://github.com/nredd/pi/pull/76), [#72](https://github.com/nredd/pi/pull/72), [#81](https://github.com/nredd/pi/pull/81), [#75](https://github.com/nredd/pi/pull/75), [#92](https://github.com/nredd/pi/pull/92), [#91](https://github.com/nredd/pi/pull/91)).
+- Preserve visible Responses summary-part provenance as display-only `ThinkingContent.summaryRanges`, without changing reasoning text or replay signatures ([#111](https://github.com/nredd/pi/issues/111), [#113](https://github.com/nredd/pi/pull/113)).
 - Optional `inputLimits.maxInputTokens` metadata records a verified hard input-token ceiling separately from context and output capacity. No inferred catalog limits are added.
 
 ### Changed
 
+- `calculateCost()` returns zero numeric fields with `Usage.cost.unpriced: true` and `reason` once a contract reaches `retiredOn` (UTC), or its date is malformed. This zero means unknown, NOT free: downstream consumers must exclude it from spend and display unpriced usage. `estimateTokenCost()` returns `{cost: null, reason}`. Historical recorded costs are not repriced ([#93](https://github.com/nredd/pi/pull/93)).
+- Aggregate `Usage.cost` from `combineUsage()` carries a priced subtotal plus `unpriced`, `unpricedCalls` (absent means one when unpriced) and `pricedCalls` (reliable as zero versus nonzero). Consumers must not discard the subtotal when some calls are unpriced. Zero-usage failed/aborted calls count as neither priced nor unpriced, while free calls with billable tokens count as priced; legacy aggregates without `pricedCalls` fall back to their subtotal and cannot identify a free priced call mixed with unpriced calls ([#93](https://github.com/nredd/pi/pull/93), [#99](https://github.com/nredd/pi/pull/99)).
 - Changed the OpenAI-family Responses requests (OpenAI, Azure OpenAI, Codex) to default `reasoning.summary` to `detailed`. `auto` often returned only a bold headline. An explicit `reasoningSummary` still wins. A model or organization that rejects `detailed` needs `reasoningSummary: "auto"`.
 
 ### Fixed

@@ -420,6 +420,10 @@ export interface TextContent {
 export interface ThinkingContent {
 	type: "thinking";
 	thinking: string;
+	/** Display-only UTF-16 ranges of visible structured summary parts in `thinking`.
+	 * Parts retain their internal Markdown and paragraphs. Absent means unknown/full thinking.
+	 * Never derive these from opaque signatures or infer them from provider names or text. */
+	summaryRanges?: { start: number; end: number }[];
 	thinkingSignature?: string; // Provider-specific opaque or serialized reasoning replay data
 	/** When true, the thinking content was redacted by safety filters. The opaque
 	 *  encrypted payload is stored in `thinkingSignature` so it can be passed back

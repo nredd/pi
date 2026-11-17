@@ -455,7 +455,7 @@ function appendCustomToolCallInput(block: StreamingToolCall, nextInput: string, 
 }
 
 type ResponsesOutputSlot =
-	| { type: "thinking"; block: ThinkingContent; contentIndex: number }
+	| { type: "thinking"; block: ThinkingContent; contentIndex: number; summaryIndex?: number }
 	| { type: "text"; block: TextContent; contentIndex: number }
 	| { type: "toolCall"; block: StreamingToolCall; contentIndex: number };
 
@@ -651,7 +651,16 @@ export async function processResponsesStream<TApi extends Api>(
 		} else if (event.type === "response.reasoning_summary_text.delta") {
 			const slot = getSlot(event.output_index, "thinking");
 			if (!slot) continue;
+			slot.block.summaryRanges ??= [];
+			const ranges = slot.block.summaryRanges;
+			let range = ranges[ranges.length - 1];
+			if (slot.summaryIndex !== event.summary_index || !range || range.end !== slot.block.thinking.length) {
+				range = { start: slot.block.thinking.length, end: slot.block.thinking.length };
+				ranges.push(range);
+			}
+			slot.summaryIndex = event.summary_index;
 			slot.block.thinking += event.delta;
+			range.end = slot.block.thinking.length;
 			stream.push({
 				type: "thinking_delta",
 				contentIndex: slot.contentIndex,
@@ -735,6 +744,16 @@ export async function processResponsesStream<TApi extends Api>(
 				const summaryText = item.summary?.map((s) => s.text).join("\n\n") || "";
 				const contentText = item.content?.map((c) => c.text).join("\n\n") || "";
 				slot.block.thinking = summaryText || contentText || slot.block.thinking;
+				if (summaryText) {
+					let offset = 0;
+					slot.block.summaryRanges = item.summary.map(({ text }) => {
+						const range = { start: offset, end: offset + text.length };
+						offset = range.end + 2;
+						return range;
+					});
+				} else if (contentText) {
+					delete slot.block.summaryRanges;
+				}
 				slot.block.thinkingSignature = JSON.stringify(item);
 				reasoningBlocksById.set(item.id, slot.block);
 				stream.push({

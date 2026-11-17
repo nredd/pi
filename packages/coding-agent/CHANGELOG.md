@@ -17,6 +17,7 @@
 
 ### Changed
 
+- Expanded structured reasoning summaries use a compact `Summary` group without blank rows between parts; Markdown indentation, hard-break spaces, code blocks and paragraphs retain their formatting, including full-thinking segments between summaries. Empty and redacted thinking blocks consume no rows ([#111](https://github.com/nredd/pi/issues/111)).
 - Automatic compaction defaults to a conservative `targetTokens: "auto"` operating target, independently of reserve and summary budgets. Exact selected/physical overrides and `"contextWindow"` legacy mode are supported; see `docs/compaction.md`.
 - Settled tool blocks and all thinking blocks show a `▸`/`▾` disclosure marker in both TUI modes, and clicking anywhere in the block toggles it in fullscreen mode. Modified clicks, drag selection, and links keep their behavior.
 - Collapsed built-in `bash`, `edit`, `write`, `grep`, `find`, and `ls` results show a one-line summary instead of an output preview.

@@ -4,6 +4,7 @@
 
 ### Added
 
+- Preserve visible Responses summary-part provenance as display-only `ThinkingContent.summaryRanges`, without changing reasoning text or replay signatures ([#111](https://github.com/nredd/pi/issues/111)).
 - Optional `inputLimits.maxInputTokens` metadata records a verified hard input-token ceiling separately from context and output capacity. No inferred catalog limits are added.
 
 ### Changed

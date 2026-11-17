@@ -1,4 +1,4 @@
-import type { AssistantMessage } from "@earendil-works/pi-ai";
+import type { AssistantMessage, ThinkingContent } from "@earendil-works/pi-ai";
 import { Container, Markdown, type MarkdownTheme, Spacer, Text } from "@earendil-works/pi-tui";
 import type { MarkdownTransformer } from "../../../core/extensions/types.ts";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
@@ -8,6 +8,7 @@ import { EntryTimestamp } from "./entry-timestamp.ts";
 import { createMarkdownTransform } from "./markdown-transform.ts";
 import { firstSentence, firstTextLine, OneLineRow, renderedContentLines } from "./one-line.ts";
 import { RuledBlock } from "./ruled-block.ts";
+import { renderThinkingSummary } from "./thinking-summary.ts";
 
 /**
  * The collapsed thinking summary: the first sentence, or the whole first line when the sentence
@@ -119,7 +120,7 @@ export class AssistantMessageComponent extends Container {
 		this.leadingRule = undefined;
 
 		const hasVisibleContent = message.content.some(
-			(c) => (c.type === "text" && c.text.trim()) || (c.type === "thinking" && c.thinking.trim()),
+			(c) => (c.type === "text" && c.text.trim()) || (c.type === "thinking" && !c.redacted && c.thinking.trim()),
 		);
 
 		if (hasVisibleContent) {
@@ -144,14 +145,23 @@ export class AssistantMessageComponent extends Container {
 				);
 			} else if (content.type === "thinking") {
 				const thinkingBlocks: string[] = [];
+				const summaryRanges: NonNullable<ThinkingContent["summaryRanges"]> = [];
+				let thinkingOffset = 0;
+				let validSummaryRanges = true;
 				for (; i < message.content.length; i++) {
 					const thinkingContent = message.content[i];
 					if (thinkingContent.type !== "thinking") {
 						break;
 					}
-					const thinking = thinkingContent.thinking.trim();
-					if (thinking) {
+					const thinking = thinkingContent.thinking;
+					if (!thinkingContent.redacted && thinking.trim()) {
+						for (const range of thinkingContent.summaryRanges ?? []) {
+							// Validate block-local bounds before translating into the joined run.
+							validSummaryRanges &&= range.start >= 0 && range.end <= thinking.length;
+							summaryRanges.push({ start: range.start + thinkingOffset, end: range.end + thinkingOffset });
+						}
 						thinkingBlocks.push(thinking);
+						thinkingOffset += thinking.length + 2;
 					}
 				}
 				i--;
@@ -164,7 +174,11 @@ export class AssistantMessageComponent extends Container {
 				// This avoids a superfluous blank line before separately-rendered tool execution blocks.
 				const hasVisibleContentAfter = message.content
 					.slice(i + 1)
-					.some((c) => (c.type === "text" && c.text.trim()) || (c.type === "thinking" && c.thinking.trim()));
+					.some(
+						(c) =>
+							(c.type === "text" && c.text.trim()) ||
+							(c.type === "thinking" && !c.redacted && c.thinking.trim()),
+					);
 
 				const runIndex = thinkingRunIndex++;
 				const hidden = this.thinkingVisibilityOverrides.get(runIndex) ?? this.hideThinkingBlock;
@@ -191,7 +205,7 @@ export class AssistantMessageComponent extends Container {
 							true,
 						)
 					: new Markdown(
-							thinkingText,
+							thinkingBlocks.map((block) => block.trim()).join("\n\n"),
 							this.outputPad,
 							0,
 							this.markdownTheme,
@@ -209,7 +223,21 @@ export class AssistantMessageComponent extends Container {
 						);
 				this.contentContainer.addChild(
 					new DisclosureGutter(
-						thinkingComponent,
+						hidden
+							? thinkingComponent
+							: (renderThinkingSummary(
+									thinkingText,
+									validSummaryRanges ? summaryRanges : [],
+									this.outputPad,
+									this.markdownTheme,
+									{
+										transform: createMarkdownTransform(
+											"assistant-thinking",
+											this.isStreaming,
+											this.markdownTransformers,
+										),
+									},
+								) ?? thinkingComponent),
 						() => !hidden,
 						() => {
 							this.thinkingVisibilityOverrides.set(runIndex, !hidden);

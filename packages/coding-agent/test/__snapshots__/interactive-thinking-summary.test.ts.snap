@@ -25,3 +25,83 @@ exports[`interactive summary rendering > paints adjacent summaries at 80/120 col
    Preparing results
    A longer visible summary explains why the result remains complete when the terminal is resized to a narrow width."
 `;
+
+exports[`interactive summary rendering > preserves Markdown whitespace in later summaries and mixed full thinking > markdown-whitespace-28 1`] = `
+"▾  Summary
+   First
+   \`\`\`
+     **literal**
+   \`\`\`
+
+   \`\`\`
+     **full literal**
+   \`\`\`
+
+   Full line
+   Next line
+
+   Summary
+   \`\`\`text
+       **fenced literal**
+   \`\`\`"
+`;
+
+exports[`interactive summary rendering > preserves Markdown whitespace in later summaries and mixed full thinking > markdown-whitespace-80 1`] = `
+"▾  Summary
+   First
+   \`\`\`
+     **literal**
+   \`\`\`
+
+   \`\`\`
+     **full literal**
+   \`\`\`
+
+   Full line
+   Next line
+
+   Summary
+   \`\`\`text
+       **fenced literal**
+   \`\`\`"
+`;
+
+exports[`interactive summary rendering > preserves Markdown whitespace in later summaries and mixed full thinking > markdown-whitespace-80 2`] = `
+"▾  Summary
+   First
+   \`\`\`
+     **literal**
+   \`\`\`
+
+   \`\`\`
+     **full literal**
+   \`\`\`
+
+   Full line
+   Next line
+
+   Summary
+   \`\`\`text
+       **fenced literal**
+   \`\`\`"
+`;
+
+exports[`interactive summary rendering > preserves Markdown whitespace in later summaries and mixed full thinking > markdown-whitespace-120 1`] = `
+"▾  Summary
+   First
+   \`\`\`
+     **literal**
+   \`\`\`
+
+   \`\`\`
+     **full literal**
+   \`\`\`
+
+   Full line
+   Next line
+
+   Summary
+   \`\`\`text
+       **fenced literal**
+   \`\`\`"
+`;

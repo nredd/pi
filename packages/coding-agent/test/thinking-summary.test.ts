@@ -45,6 +45,30 @@ describe("structured thinking summaries", () => {
 		}
 	});
 
+	it("preserves indentation and terminal hard-break spaces for Markdown transformers", () => {
+		const summary = " \r\n\r\n    **literal**  \r\n \r\n";
+		const full = "\n\n    **full literal**  \n\t\n";
+		const message = fauxAssistantMessage([
+			{ type: "thinking", thinking: summary + full, summaryRanges: [{ start: 0, end: summary.length }] },
+		]);
+		const before = JSON.stringify(message);
+		const seen: string[] = [];
+		const component = new AssistantMessageComponent(message, false, undefined, undefined, undefined, [
+			(text) => {
+				seen.push(text);
+				return text;
+			},
+		]);
+		for (const width of [80, 120, 28]) {
+			seen.length = 0;
+			const rendered = component.render(width).map(stripAnsi).join("\n");
+			expect(rendered).toContain("**literal**");
+			expect(rendered).toContain("**full literal**");
+			expect(seen).toEqual(["    **literal**  ", "    **full literal**  "]);
+		}
+		expect(JSON.stringify(message)).toBe(before);
+	});
+
 	it("leaves unknown thinking unchanged and ignores stale ranges", () => {
 		const thinking = "**Brief heading**\n\nFull paragraph.";
 		const legacy = fauxAssistantMessage([{ type: "thinking", thinking }]);

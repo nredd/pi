@@ -2,6 +2,11 @@ import type { ThinkingContent } from "@earendil-works/pi-ai";
 import { Container, Markdown, type MarkdownOptions, type MarkdownTheme, Spacer, Text } from "@earendil-works/pi-tui";
 import { theme } from "../theme/theme.ts";
 
+/** Remove boundary blank lines, never Markdown indentation or hard-break spaces. */
+function trimBoundaryBlankLines(text: string): string {
+	return text.replace(/^(?:[\t ]*\r?\n)+|(?:\r?\n[\t ]*)+$/g, "");
+}
+
 /** Render provider-marked summary parts without inventing paragraphs between them.
  * Invalid/stale metadata falls back to the original thinking renderer without losing text. */
 export function renderThinkingSummary(
@@ -31,8 +36,8 @@ export function renderThinkingSummary(
 	let offset = 0;
 	let summaryGroup: Container | undefined;
 	for (const { start, end } of [...ranges, { start: text.length, end: text.length }]) {
-		const full = text.slice(offset, start).trim();
-		if (full) {
+		const full = trimBoundaryBlankLines(text.slice(offset, start));
+		if (full.trim()) {
 			if (result.children.length) result.addChild(new Spacer(1));
 			result.addChild(
 				new Markdown(
@@ -49,8 +54,8 @@ export function renderThinkingSummary(
 			);
 			summaryGroup = undefined;
 		}
-		const summary = text.slice(start, end).trim();
-		if (summary) {
+		const summary = trimBoundaryBlankLines(text.slice(start, end));
+		if (summary.trim()) {
 			if (!summaryGroup) {
 				if (result.children.length) result.addChild(new Spacer(1));
 				const group = new Container();

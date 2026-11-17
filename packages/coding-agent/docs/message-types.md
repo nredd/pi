@@ -48,7 +48,7 @@ interface ThinkingContent {
 }
 ```
 
-`summaryRanges` marks visible structured summary parts using ordered, non-overlapping UTF-16 offsets into the unchanged `thinking` string. The Responses adapter records these from summary events, not provider names or text length. Expanded thinking renders these parts under a muted `Summary` label without blank rows between parts; Markdown and legitimate paragraphs inside each part remain intact. Full thinking and legacy blocks without this metadata keep their existing appearance. Empty and redacted blocks take no rows. Existing disclosure controls still apply.
+`summaryRanges` marks visible structured summary parts using ordered, non-overlapping UTF-16 offsets into the unchanged `thinking` string. The Responses adapter records these from summary events, not provider names or text length. Expanded thinking renders these parts under a muted `Summary` label without blank rows between parts; Only boundary blank lines are removed: Markdown indentation, hard-break spaces, code blocks and legitimate paragraphs remain intact, including in full-thinking segments between summaries. Full thinking and legacy blocks without this metadata keep their existing appearance. Empty and redacted blocks take no rows. Existing disclosure controls still apply.
 
 The ranges are display metadata, preserved in session JSONL and exports. They do not change replay content, compaction input, or the thinking string, and the UI label is never stored in the conversation. Custom providers may supply ranges only for visible structured summaries; do not infer them from signatures. Renderers fall back to ordinary thinking when ranges are invalid.
 

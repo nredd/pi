@@ -71,10 +71,12 @@ function inspectAudit(result, exceptions, seen, log) {
 
 	const checked = new Set();
 	const visiting = new Set();
+	const anchored = new Set();
 	/** @param {string} name */
 	function visit(name) {
 		if (checked.has(name)) return;
-		if (visiting.has(name)) throw new Error(`Cyclic npm audit dependency: ${name}`);
+		// A cycle member's own pass still validates every advisory object.
+		if (visiting.has(name)) return;
 		const entry = Object.hasOwn(vulnerabilities, name) ? vulnerabilities[name] : undefined;
 		if (
 			!entry ||
@@ -103,6 +105,7 @@ function inspectAudit(result, exceptions, seen, log) {
 			const exception = id && Object.hasOwn(exceptions, id) ? exceptions[id] : undefined;
 			if (!id || !exception || exception.package !== name || via.name !== name)
 				throw new Error(`Unexcepted advisory ${id ?? JSON.stringify(via)} on ${name}`);
+			anchored.add(name);
 			seen.add(id);
 			log(
 				`Excepted ${id} (${name}; ${entry.nodes.join(", ")}) until ${exception.expires}: ${exception.reason}; ${exception.tracking}`,
@@ -112,6 +115,27 @@ function inspectAudit(result, exceptions, seen, log) {
 		checked.add(name);
 	}
 	for (const name of Object.keys(vulnerabilities)) visit(name);
+	// Propagate accepted advisory anchors through the graph, including mutual dependencies.
+	// A separate unanchored cycle must not be excused by an unrelated accepted advisory.
+	let changed;
+	do {
+		changed = false;
+		for (const name of checked) {
+			if (
+				!anchored.has(name) &&
+				vulnerabilities[name].via.some(
+					/** @param {unknown} via */
+					(via) => typeof via === "string" && anchored.has(via),
+				)
+			) {
+				anchored.add(name);
+				changed = true;
+			}
+		}
+	} while (changed);
+	const unanchored = [...checked].filter((name) => !anchored.has(name));
+	if (unanchored.length)
+		throw new Error(`Cyclic npm audit dependencies without an advisory: ${unanchored.join(", ")}`);
 }
 
 /**

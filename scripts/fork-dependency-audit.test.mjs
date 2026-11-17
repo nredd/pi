@@ -24,9 +24,9 @@ const report = (vulnerabilities) =>
 const result = (stdout, status = 1) => ({ stdout, stderr: "", status });
 
 // #118: only the explicitly reviewed advisory/package pair can unblock the full CI gate.
-/** @type {[string, { stdout: string, stderr: string, status: number | null, error?: Error }, { now?: Date }, boolean][]} */
+/** @type {[string, { stdout: string, stderr: string, status: number | null, error?: Error }, { now?: Date }, RegExp | null][]} */
 const cases = [
-	["excepted advisory", result(report({ picomatch: finding })), {}, true],
+	["excepted advisory", result(report({ picomatch: finding })), {}, null],
 	[
 		"another advisory",
 		result(
@@ -38,33 +38,111 @@ const cases = [
 			}),
 		),
 		{},
-		false,
+		/Unexcepted advisory GHSA-aaaa-bbbb-cccc on picomatch/,
+	],
+	[
+		"picomatch advisory object on another entry",
+		result(report({ other: { ...finding, name: "other", nodes: ["node_modules/other"] } })),
+		{},
+		/Unexcepted advisory .* on other/,
 	],
 	[
 		"same id on another package",
-		result(report({ other: { ...finding, name: "other", nodes: ["node_modules/other"] } })),
+		result(
+			report({ other: { name: "other", via: [{ ...advisory, name: "other" }], nodes: ["node_modules/other"] } }),
+		),
 		{},
-		false,
+		/Unexcepted advisory .* on other/,
 	],
-	["expired exception", result(report({ picomatch: finding })), { now: new Date("2026-12-18T00:00:00Z") }, false],
-	["malformed JSON", result("{"), {}, false],
-	["empty JSON", result(""), {}, false],
-	["missing report fields", result("{}", 0), {}, false],
-	["npm network error", result(JSON.stringify({ error: { code: "ENETUNREACH" } })), {}, false],
-	["unexpected npm exit", result(report({ picomatch: finding }), 2), {}, false],
-	["npm spawn failure", { ...result("", null), error: new Error("spawn failed") }, {}, false],
-	["stale exception", result(report({}), 0), {}, false],
+	[
+		"advisory name disagrees with excepted entry",
+		result(report({ picomatch: { ...finding, via: [{ ...advisory, name: "other" }] } })),
+		{},
+		/Unexcepted advisory .* on picomatch/,
+	],
+	[
+		"mismatched entry name",
+		result(report({ picomatch: { ...finding, name: "other" } })),
+		{},
+		/Invalid npm audit finding: picomatch/,
+	],
+	[
+		"bad nodes",
+		result(report({ picomatch: { ...finding, nodes: ["node_modules/other"] } })),
+		{},
+		/Invalid npm audit finding: picomatch/,
+	],
+	[
+		"missing nodes",
+		result(report({ picomatch: { name: "picomatch", via: [advisory] } })),
+		{},
+		/Invalid npm audit finding: picomatch/,
+	],
+	[
+		"empty nodes",
+		result(report({ picomatch: { ...finding, nodes: [] } })),
+		{},
+		/Invalid npm audit finding: picomatch/,
+	],
+	["status 1 with empty report", result(report({})), {}, /Invalid npm audit report or exit status/],
+	["status 0 with findings", result(report({ picomatch: finding }), 0), {}, /Invalid npm audit report or exit status/],
+	[
+		"expired exception",
+		result(report({ picomatch: finding })),
+		{ now: new Date("2026-12-18T00:00:00Z") },
+		/Expired exception/,
+	],
+	["malformed JSON", result("{"), {}, /npm audit did not produce JSON/],
+	["empty JSON", result(""), {}, /npm audit did not produce JSON/],
+	["missing report fields", result("{}", 0), {}, /Invalid npm audit report/],
+	[
+		"npm network error",
+		result(JSON.stringify({ error: { code: "ENETUNREACH" } })),
+		{},
+		/npm audit failed:.*ENETUNREACH/,
+	],
+	["unexpected npm exit", result(report({ picomatch: finding }), 2), {}, /npm audit execution failed: 2/],
+	[
+		"npm spawn failure",
+		{ ...result("", null), error: new Error("spawn failed") },
+		{},
+		/npm audit execution failed: Error: spawn failed/,
+	],
+	["stale exception", result(report({}), 0), {}, /Stale exception.*GHSA-fc5q-39xc-vjpf/],
 	[
 		"unresolved transitive finding",
 		result(report({ tool: { name: "tool", via: ["missing"], nodes: ["node_modules/tool"] } })),
 		{},
-		false,
+		/Invalid npm audit finding: missing/,
 	],
 	[
 		"transitive-only cycle",
 		result(report({ tool: { name: "tool", via: ["tool"], nodes: ["node_modules/tool"] } })),
 		{},
-		false,
+		/Cyclic/,
+	],
+	[
+		"excepted mutual cycle",
+		result(
+			report({
+				picomatch: { ...finding, via: ["tool", advisory] },
+				tool: { name: "tool", via: ["picomatch"], nodes: ["node_modules/tool"] },
+			}),
+		),
+		{},
+		null,
+	],
+	[
+		"unanchored mutual cycle alongside an excepted finding",
+		result(
+			report({
+				picomatch: finding,
+				one: { name: "one", via: ["two"], nodes: ["node_modules/one"] },
+				two: { name: "two", via: ["one"], nodes: ["node_modules/two"] },
+			}),
+		),
+		{},
+		/Cyclic/,
 	],
 ];
 for (const [name, response, options, expected] of cases) {
@@ -82,11 +160,11 @@ for (const [name, response, options, expected] of cases) {
 				log: (line) => logs.push(line),
 				...options,
 			});
-		if (expected) {
+		if (expected === null) {
 			invoke();
 			assert.match(logs.join("\n"), /Excepted GHSA-fc5q-39xc-vjpf.*picomatch.*node_modules\/picomatch/);
 		} else {
-			assert.throws(invoke);
+			assert.throws(invoke, expected);
 			if (name === "stale exception") assert.match(logs.join("\n"), /Stale exception.*GHSA-fc5q-39xc-vjpf/);
 		}
 	});

@@ -44,7 +44,7 @@ including development tools and the private examples' own lockfiles, then restor
 `@earendil-works/pi-ai@<packages/coding-agent version>` release (the same frozen input as
 `Fork release`), then runs `npm run build:offline`, `npm run check`, the daemon build and
 `./test.sh`. `mcp-conformance` runs alongside. No new jobs or matrix are added.
-`scripts/fork-dependency-audit.mjs` accepts only exact advisory/package pairs in `scripts/fork-audit-exceptions.json`; expired, stale, malformed and failed audits block CI.
+`scripts/fork-dependency-audit.mjs` accepts only exact advisory/package pairs in `scripts/fork-audit-exceptions.json`; expired, stale, malformed and failed audits block CI. Mutual dependency cycles must reach an accepted advisory; unanchored cycles fail.
 `GHSA-fc5q-39xc-vjpf` is temporarily excepted only on `picomatch` through 2026-12-17 UTC; [#118](https://github.com/nredd/pi/issues/118) stays open until a patch is installed and the exception is deleted.
 
 ## Prove a workflow change

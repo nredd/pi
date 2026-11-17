@@ -1,0 +1,8 @@
+{
+	"GHSA-fc5q-39xc-vjpf": {
+		"package": "picomatch",
+		"reason": "Development-only tooling chain (Vitest/tinyglobby/fdir and micromatch/fast-glob/shelljs/shx); no patched version exists; exploitation requires hostile extglob input.",
+		"tracking": "nredd/pi#118",
+		"expires": "2026-12-17"
+	}
+}

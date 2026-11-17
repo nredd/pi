@@ -33,17 +33,7 @@ jobs:
         run: npm ci --ignore-scripts
 
       - name: Audit every fork dependency lock including development tools
-        run: |
-          set -euo pipefail
-          git ls-files -z -- package-lock.json '**/package-lock.json' >"$RUNNER_TEMP/npm-lockfiles"
-          test -s "$RUNNER_TEMP/npm-lockfiles"
-          while IFS= read -r -d '' lockfile; do
-            opts=(--package-lock-only --audit-level=info --prefix "$(dirname "$lockfile")")
-            if [[ "$lockfile" != package-lock.json ]]; then
-              opts+=(--workspaces=false)
-            fi
-            npm audit "${opts[@]}"
-          done <"$RUNNER_TEMP/npm-lockfiles"
+        run: node scripts/fork-dependency-audit.mjs
 
       # This repo is the fork: freeze model data to the published pi-ai release instead of fetching it live.
       - name: Restore the release model data

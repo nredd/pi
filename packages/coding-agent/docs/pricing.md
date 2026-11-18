@@ -61,7 +61,32 @@ Cache and context:
   not a one-time token-write charge, and is excluded. Image/time/storage charges are not
   converted to tokens. Classifier entries need their own verified token-unit assessment.
 
-Source audit, checked 2026-11-12:
+GPT-6.2 model-card check, 2026-11-17 (outside the pricing-table audit):
+
+- `openai` and `openai-codex` include `gpt-6.2-sol` and `gpt-6.2-astra` from their public
+  [Sol](https://developers.openai.com/api/docs/models/gpt-6.2-sol) and
+  [Astra](https://developers.openai.com/api/docs/models/gpt-6.2-astra) cards. Standard
+  input/read/30m-write/12h-write/output rates are `2/0.1/2.5/5/10` and `8/0.4/10/20/40`
+  USD per million tokens. Above 272000 input tokens, input and cache rates double and output
+  is 1.5x for the whole request. These additions remain explicitly `unknown` because the
+  existing pricing-table and Codex API-equivalence audit does not cover them; the strict
+  estimator returns unpriced rather than inheriting an older verification date.
+- Only `openai` and `openai-codex` get these models; Azure clones are excluded because the
+  cards do not establish Azure deployment support. Both providers default to a 272000 context
+  window to stay in the short-context pricing tier. Direct OpenAI users can opt into the API
+  window of 1,050,000 tokens through model overrides; the verified 922,000 maximum input
+  ceiling is retained, with 128,000 maximum output. Codex account-specific availability and
+  limits are unverified.
+  Both cards reject reasoning effort `none`, so `off` is not offered. Direct OpenAI tool search
+  and additional tools are enabled from the cards; Codex tool extensions are not inferred.
+  API and Codex mid-conversation effort and system-message updates are also not inferred.
+  Existing GPT-6 effort-level mapping is retained.
+  Batch, Fast and Ultrafast service tiers are not modeled.
+
+Pricing-table source audit, checked 2026-11-12:
+
+- This audit covers only the contracts listed below. It does not include the later GPT-6.2
+  model-card check above; those numeric rates remain `unknown`/unpriced until audited.
 
 - The complete public provider/operation inventory and remaining unknown coverage are
   [here](pricing-coverage.md). The audit does not certify unaudited rates as free.

@@ -60,6 +60,20 @@ describe("catalogue assessment", () => {
 			reason: expect.stringContaining("Non-token"),
 		});
 	});
+	// nredd/pi#116: new model-card rates are not an extension of the old pricing audit.
+	it("keeps GPT-6.2 estimates unknown despite retaining numeric compatibility rates", () => {
+		for (const provider of ["openai", "openai-codex"]) {
+			for (const id of ["gpt-6.2-sol", "gpt-6.2-astra"]) {
+				const model = entry(provider, id);
+				model.cost = catalogueCost(model);
+				expect(model.cost.assessment).toMatchObject({
+					status: "unknown",
+					reason: expect.stringContaining("2026-11-17"),
+				});
+				expect(estimateTokenCost(model, usage()).cost).toBeNull();
+			}
+		}
+	});
 	it("does not infer pricing from an unmapped name or similar alias", () => {
 		for (const model of [
 			entry("example-provider", "gpt-6.1-sol"),
@@ -83,7 +97,9 @@ describe("catalogue assessment", () => {
 			expect(catalogueCost(entry("openai-codex", id))).toEqual(catalogueCost(entry("openai", id)));
 		}
 		for (const id of Object.keys(OPENAI_STANDARD_COSTS))
-			expect(catalogueCost(entry("openai", id)).assessment?.status).toBe("verified");
+			expect(catalogueCost(entry("openai", id)).assessment?.status).toBe(
+				id === "gpt-6.2-sol" || id === "gpt-6.2-astra" ? "unknown" : "verified",
+			);
 		expect(catalogueCost(entry("openai-codex", "gpt-4.1")).assessment?.status).toBe("unknown");
 		expect(catalogueCost(entry("openai", "gpt-4.1")).tiers).toBeUndefined();
 		for (const provider of ["openai", "anthropic"])

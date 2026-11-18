@@ -104,7 +104,7 @@ function checkModels(getModel) {
 			assert.deepEqual(model.input, ["text", "image"]);
 			assert.deepEqual(model.thinkingLevelMap, {
 				off: null,
-				minimal: null,
+				minimal: provider === "openai-codex" ? "low" : null,
 				low: "low",
 				medium: "medium",
 				high: "high",

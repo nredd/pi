@@ -1,4 +1,8 @@
-import { OPENAI_STANDARD_COSTS, withOpenAiLongContextPricing } from "../src/catalog-pricing.ts";
+import {
+	OPENAI_LONG_CONTEXT_INPUT_THRESHOLD,
+	OPENAI_STANDARD_COSTS,
+	withOpenAiLongContextPricing,
+} from "../src/catalog-pricing.ts";
 import type { Api, Model } from "../src/types.ts";
 
 // Public cards checked 2026-11-17, not evidence of Azure deployments or account availability:
@@ -21,7 +25,7 @@ export function forkModels(provider: "openai" | "openai-codex"): Model<Api>[] {
 		reasoning: true,
 		thinkingLevelMap: {
 			off: null,
-			minimal: null,
+			minimal: provider === "openai-codex" ? "low" : null,
 			low: "low",
 			medium: "medium",
 			high: "high",
@@ -32,7 +36,7 @@ export function forkModels(provider: "openai" | "openai-codex"): Model<Api>[] {
 		// Keep #117's unknown assessment. Numeric compatibility rates are not an audited estimate.
 		cost: withOpenAiLongContextPricing(OPENAI_STANDARD_COSTS[id]),
 		// The documented 1.05M API window is opt-in, not the default or a Codex limit claim.
-		contextWindow: 272000,
+		contextWindow: OPENAI_LONG_CONTEXT_INPUT_THRESHOLD,
 		maxTokens: 128000,
 		inputLimits: {
 			...(provider === "openai" ? { maxInputTokens: 922000, maxRequestBytes: 512 * 1024 * 1024 } : {}),

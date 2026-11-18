@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { expect, it } from "vitest";
+import { forkModels } from "../scripts/fork-models.ts";
 
 // nredd/pi#46: both release output paths carry assessments without contacting a real catalog.
 it("carries official corrections and explicit unknowns into bundled shards and public catalogs", () => {
@@ -103,6 +104,8 @@ it("carries official corrections and explicit unknowns into bundled shards and p
 				}
 				const data = JSON.parse(readFileSync(join(isolated, `src/providers/data/${provider}.json`), "utf8"));
 				expect(data[model.api][`chat:${id}`].cost).toEqual(model.cost);
+				// nredd/pi#122: the frozen overlay must match complete post-processed generator entries.
+				expect(data[model.api][`chat:${id}`]).toEqual(forkModels(provider).find((entry) => entry.id === id));
 			}
 		}
 		const cost = legacy.openai["gpt-6.1-sol"].cost;

@@ -17,7 +17,6 @@
 
 ### Fixed
 
-- Apply fork GPT-6.2 additions to frozen offline builds, including packed provider data and coding-agent bundles, without refreshing live feeds ([#122](https://github.com/nredd/pi/issues/122)).
 - Reject completed OpenAI-family Responses snapshots containing assistant output without a matching finalized stream item, instead of silently returning an empty or partial successful message ([#45](https://github.com/nredd/pi/issues/45)).
 
 ## [1.3.0] - 2026-10-15

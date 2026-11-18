@@ -106,11 +106,18 @@ npm run worktree:setup # Fresh checkout or worktree: deps, husky shim, release m
 npm run worktree:check # Read-only: also fails if model data is invalid vs src (`node scripts/worktree.mjs setup --force` reinstalls the release data, `npm run hydrate:model-data` when src is ahead)
 npm install --ignore-scripts  # Install all dependencies without running lifecycle scripts
 npm run build         # Refresh model data, then build all packages
-npm run build:offline # Rebuild using existing model data without network access
+npm run build:offline # Apply fork catalog additions to existing model data, then rebuild without network access
 npm run check         # Lint, format, and type check
 ./test.sh            # Run tests (skips LLM-dependent tests without API keys)
 ./pi-test.sh         # Run pi from sources (can be run from any directory)
 ```
+
+`build:offline` validates the frozen model data before applying the explicit additions in
+`packages/ai/scripts/fork-models.ts`, shared with live generation. Only the affected
+OpenAI/Codex entries and manifest change; unrelated provider data and the original
+generation timestamp stay frozen. GPT-6.2 pricing remains unknown and Azure remains excluded.
+After building, `node --test scripts/fork-catalog.test.mjs` checks actual `npm pack` output
+for `pi-ai` and the coding-agent bundle's offline `ModelRuntime`.
 
 ### Using local packages outside the monorepo
 

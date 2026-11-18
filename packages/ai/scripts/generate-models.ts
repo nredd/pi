@@ -10,6 +10,7 @@ import {
 	OPENAI_STANDARD_COSTS,
 	withOpenAiLongContextPricing,
 } from "../src/catalog-pricing.ts";
+import { forkModels, GPT_62_MODELS } from "./fork-models.ts";
 import { getEffortThinkingLevelMap, type ModelsDevReasoningOption } from "./models-dev-reasoning-options.ts";
 import { type AiGatewayPricing, getAiGatewayCost, getAiGatewayEvaluationCost } from "./ai-gateway-pricing.ts";
 import { buildOpenRouterCatalog, type OpenRouterCatalog, type OpenRouterModelListItem } from "./openrouter-catalog.ts";
@@ -379,13 +380,6 @@ const ANT_LING_RING_THINKING_LEVEL_MAP = {
 
 const BEDROCK_INFERENCE_PROFILE_ONLY_MODEL_IDS = new Set(["anthropic.claude-opus-5"]);
 const MODELS_DEV_OPENAI_UNSUPPORTED_MODEL_IDS = new Set(["gpt-5.6"]);
-// Public model cards checked 2026-11-17:
-// https://developers.openai.com/api/docs/models/gpt-6.2-sol
-// https://developers.openai.com/api/docs/models/gpt-6.2-astra
-const GPT_62_MODELS = [
-	{ id: "gpt-6.2-sol", name: "GPT-6.2 Sol" },
-	{ id: "gpt-6.2-astra", name: "GPT-6.2 Astra" },
-] as const;
 const OPENAI_NO_NONE_EFFORT_MODEL_IDS = new Set([
 	"gpt-6-astra", "gpt-6.1-sol", ...GPT_62_MODELS.map(({ id }) => id),
 ]);
@@ -2780,21 +2774,7 @@ async function generateModels() {
 	}
 
 	// The documented 1.05M API window is opt-in through overrides; default to the short pricing tier.
-	const gpt62Models = GPT_62_MODELS.map(({ id, name }): Model<"openai-responses"> => ({
-		id,
-		name,
-		api: "openai-responses",
-		provider: "openai",
-		baseUrl: "https://api.openai.com/v1",
-		reasoning: true,
-		input: ["text", "image"],
-		cost: withOpenAiLongContextPricing(OPENAI_STANDARD_COSTS[id]),
-		inputLimits: { maxInputTokens: 922000 },
-		contextWindow: OPENAI_LONG_CONTEXT_INPUT_THRESHOLD,
-		maxTokens: 128000,
-		compat: { supportsToolSearch: true, supportsAdditionalTools: true },
-	}));
-	for (const model of gpt62Models) {
+	for (const model of forkModels("openai")) {
 		const index = allModels.findIndex((candidate) => candidate.provider === model.provider && candidate.id === model.id);
 		if (index === -1) allModels.push(model);
 		else allModels[index] = model;
@@ -3148,20 +3128,9 @@ async function generateModels() {
 	const CODEX_GPT_56_CONTEXT = 272000;
 	const CODEX_SPARK_CONTEXT = 128000;
 	const CODEX_MAX_TOKENS = 128000;
-	const codexModels: Model<"openai-codex-responses">[] = [
+	const codexModels: Model<Api>[] = [
 		// Public cards above; account-specific Codex availability and limits are unverified.
-		...GPT_62_MODELS.map(({ id, name }): Model<"openai-codex-responses"> => ({
-			id,
-			name,
-			api: "openai-codex-responses",
-			provider: "openai-codex",
-			baseUrl: CODEX_BASE_URL,
-			reasoning: true,
-			input: ["text", "image"],
-			cost: withOpenAiLongContextPricing(OPENAI_STANDARD_COSTS[id]),
-			contextWindow: CODEX_CONTEXT,
-			maxTokens: CODEX_MAX_TOKENS,
-		})),
+		...forkModels("openai-codex"),
 		{
 			// Public selector/model card checked 2026-11-13. Keep the conservative 272k default,
 			// not a claim about account-specific Codex availability or backend context limits.

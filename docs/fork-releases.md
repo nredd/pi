@@ -11,24 +11,20 @@ rename packages or publish core packages to npm. Naming/publication work in [#12
 1. Obtain green PR and pi-harness stack evidence for the exact release commit.
 2. Create and push an owner-signed annotated `vX.Y.Z-nredd.N` tag on a commit reachable from `main`. CI verifies the SSH signature against the owner's two pinned signing keys and rejects branches or tag names outside that contract. This is *not* the trust boundary: the workflow executes from the tagged commit, so a writer could tag a commit whose edited workflow skips that check. The creation control is the tag ruleset `Fork release tags` (id `25519508`, [here](https://github.com/nredd/pi/rules/25519508)), which blocks creating, moving or deleting `refs/tags/v*-nredd.*` for everyone except the repository admin role (the owner, the only admin). Inspect with `gh api repos/nredd/pi/rulesets/25519508`; never weaken it from CI.
 3. The `Fork release` workflow restores `@earendil-works/pi-ai@X.Y.Z` model data, runs `npm ci --ignore-scripts`, `npm run build:offline`, `npm run check`, builds `packages/env`'s daemon, runs `./test.sh`, then packs `packages/coding-agent`, `packages/tui`, `packages/agent` and `packages/ai`.
+   `build:offline` applies the fork-only additions shared with the generator in `packages/ai/scripts/fork-models.ts` after validating the restored data. It preserves unrelated frozen entries and the generation timestamp, updates the manifest hashes, and does not query live feeds. `./test.sh` packs `pi-ai` and coding-agent and checks both the JSON catalog and the bundle's offline runtime for the new IDs, conservative limits, unknown pricing and Azure exclusion (`scripts/fork-catalog.test.mjs`).
 4. CI extracts the packed coding-agent bundle and requires `DEFAULT_REASONING_SUMMARY="detailed"` in at least one bundled chunk (the shared default is hoisted into a generic chunk, so this is stronger than grepping only `*responses*.js` for `"detailed"`, but it does not prove every chunk). It writes `SHA256SUMS`, attests all four tarballs with GitHub build provenance, and creates a new GitHub release. Existing releases are never overwritten.
 5. Verify the release bytes before changing the tap or dotfiles. `pi-harness` requires the release `SHA256SUMS` and provenance for all post-automation tags. Releases are authenticated by provenance of CI-built bytes, not reproducible rebuilding: dry-run [39502658787](https://github.com/nredd/pi/actions/runs/39502658787) rebuilt `v1.3.0-nredd.7` with different SHA-256 values. Rebuilds will differ; reproducibility is tracked in [nredd/pi-harness#84](https://github.com/nredd/pi-harness/issues/84).
 
 ## `v1.3.0-nredd.13` preparation
 
-Audited `v1.3.0-nredd.12..f4d493d17` (two commits):
+Audited `v1.3.0-nredd.12..c17754d3e` (three commits):
 
-- [#117](https://github.com/nredd/pi/pull/117) changes `pi-ai` generation/pricing and coding-agent pricing documentation. Both packages already have matching `[Unreleased]` entries for GPT-6.2 Sol/Astra: OpenAI/Codex only, conservative 272K defaults, direct API opt-in context/input limits, unsupported reasoning/tool capabilities and explicitly unknown pricing assessments. No additional changelog gap was found.
-- [#119](https://github.com/nredd/pi/pull/119) changes repository audit tooling, CI and formatting configuration, not package runtime behavior. Release preparation removes its now-stale exception after GitHub withdrew `GHSA-fc5q-39xc-vjpf` on 2026-11-18 and all five lockfiles audited clean. This is not a dependency patch; [#118](https://github.com/nredd/pi/issues/118) records the original advisory. No package changelog entry is needed.
-- No other package changed. Preserve existing `[Unreleased]` notes and all released sections; the four packed package versions remain `1.3.0`.
+- [#117](https://github.com/nredd/pi/pull/117) adds GPT-6.2 Sol/Astra; [#124](https://github.com/nredd/pi/pull/124) makes the frozen offline catalog ship them. The existing `pi-ai` and coding-agent `[Unreleased]` entries already cover the user-visible contract (OpenAI/Codex only, 272K default, direct API opt-in limits, unknown pricing, no Azure). No changelog gap was found.
+- [#119](https://github.com/nredd/pi/pull/119) is repository audit tooling and CI, not package runtime behavior; #124 also removed its withdrawn advisory exception. No package changelog entry is needed.
+- No other package changed. Released sections are untouched and the four packed package versions remain `1.3.0`.
 
-Publication is blocked by [#122](https://github.com/nredd/pi/issues/122): the offline path restores
-upstream `pi-ai@1.3.0` provider data, so generator-only GPT-6.2 additions do not reach packed
-OpenAI/Codex shards. Passing tests do not prove those IDs ship. Resolve the shared frozen-data
-path and verify the actual packed catalog and coding-agent bundle before tagging.
-
-This is release preparation only, not a tag or evidence of published bytes. Before tagging,
-require the exact candidate's fork checks and matching pi-harness stack evidence as above.
+Before tagging, verify the actual packed `pi-ai` catalog and coding-agent runtime for both GPT-6.2 IDs
+(`scripts/fork-catalog.test.mjs`), plus the exact candidate's fork checks and matching pi-harness stack evidence.
 After publication, download all four tarballs plus `SHA256SUMS`, verify every checksum and
 `fork-release.yml` GitHub attestation, and inspect the coding-agent tarball for valid settings,
 models, keybindings and theme schemas before opening downstream pin PRs.
@@ -68,7 +64,7 @@ including development tools and the private examples' own lockfiles, then restor
 `Fork release`), then runs `npm run build:offline`, `npm run check`, the daemon build and
 `./test.sh`. `mcp-conformance` runs alongside. No new jobs or matrix are added.
 `scripts/fork-dependency-audit.mjs` accepts only exact advisory/package pairs in `scripts/fork-audit-exceptions.json`; expired, stale, malformed and failed audits block CI. Mutual dependency cycles must reach an accepted advisory; unanchored cycles fail.
-The exception map is empty. GitHub withdrew `GHSA-fc5q-39xc-vjpf` on 2026-11-18 ([advisory](https://github.com/advisories/GHSA-fc5q-39xc-vjpf)); release preparation removed its stale `picomatch` exception after all five lockfiles audited clean, without changing dependencies, lockfiles, audit severity or validation.
+There are no active exceptions. GitHub withdrew `GHSA-fc5q-39xc-vjpf` on 2026-11-18; its stale `picomatch` exception was removed without changing dependencies or relaxing the audit policy ([#118](https://github.com/nredd/pi/issues/118)).
 
 ## Prove a workflow change
 

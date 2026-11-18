@@ -25,6 +25,9 @@
 	},
 	"files": {
 		"includes": [
+			"scripts/fork-catalog.test.mjs",
+			"packages/ai/scripts/apply-fork-models.ts",
+			"packages/ai/scripts/fork-models.ts",
 			"scripts/fork-release-signers.test.mjs",
 			"scripts/fork-dependency-audit.mjs",
 			"scripts/fork-dependency-audit.test.mjs",
